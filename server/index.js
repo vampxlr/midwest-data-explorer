@@ -830,7 +830,7 @@ app.get('/api/store/events', async (req, res) => {
 // ── Legacy SSE stream (local dev only — Vercel uses client-driven fetch-event) ─
 
 app.get('/api/aggregate/stream', async (req, res) => {
-  if (blobStorage.IS_VERCEL || !aggregator) {
+  if (process.env.VERCEL === '1' || !aggregator) {
     // On Vercel: no persistent SSE — client-driven mode, no stream needed
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -851,7 +851,7 @@ app.get('/api/aggregate/stream', async (req, res) => {
 // ── Legacy SSE start (local dev only) ─────────────────────────────────────────
 
 app.post('/api/aggregate/start', async (req, res) => {
-  if (blobStorage.IS_VERCEL || !aggregator) {
+  if (process.env.VERCEL === '1' || !aggregator) {
     return res.json({ started: false, message: 'Use /api/aggregate/plan + /api/aggregate/fetch-event on Vercel' });
   }
   const { orgId = '8008', delayMs = 1200, events = [], purgeFirst = false } = req.body || {};
@@ -1632,7 +1632,7 @@ app.get('/api/export/league-csv-download', async (req, res) => {
     const meta     = (await loadExportsMeta()).find(e => e.id === token);
     const filename = meta?.filename || `fb_export_${token}.csv`;
 
-    if (blobStorage.IS_VERCEL) {
+    if (process.env.VERCEL === '1') {
       // On Vercel: redirect to the signed Blob URL
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.redirect(302, downloadUrl);

@@ -17,6 +17,8 @@ const fs = require('fs');
 
 // ── Environment detection ─────────────────────────────────────────────────────
 
+// Use Blob storage when actually on Vercel OR when token is explicitly set locally for testing.
+// Aggregation flow detection (SSE vs client-driven) uses process.env.VERCEL === '1' separately.
 const IS_VERCEL = !!process.env.BLOB_READ_WRITE_TOKEN;
 const DATA_DIR = path.join(__dirname, 'data');
 
