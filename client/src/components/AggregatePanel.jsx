@@ -60,36 +60,20 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
   const cdAbort = useRef(false);
   const logRef  = useRef(null);
 
-  // Detect Vercel vs local
-  const [isVercel, setIsVercel] = useState(false);
+  // Detect Vercel vs local via explicit API endpoint — reliable, no guessing
+  const [isVercel, setIsVercel] = useState(null); // null = still detecting
 
   useEffect(() => {
     loadStoredMap();
-    // Test SSE to detect environment
-    const es = new EventSource('/api/aggregate/stream');
-    let detected = false;
-    es.addEventListener('state', e => {
-      const s = JSON.parse(e.data);
-      if (!detected) {
-        detected = true;
-        // On Vercel the SSE immediately sends idle state and closes
-        // On local it stays open and the aggregator is alive
-        setSseState(s);
-        setSseLog(s.log ? s.log.slice().reverse() : []);
-      }
-    });
-    esRef.current = es;
-    // If SSE gives us nothing useful, check response headers or just connect
-    es.onerror = () => {
-      // SSE errored quickly — likely Vercel (no persistent connection)
-      if (!detected) setIsVercel(true);
-    };
-    return () => es.close();
+    fetch('/api/runtime')
+      .then(r => r.json())
+      .then(d => setIsVercel(!!d.vercel))
+      .catch(() => setIsVercel(false)); // if endpoint missing, assume local
   }, []);
 
+  // Connect SSE once we know we're NOT on Vercel
   useEffect(() => {
-    // Re-attach SSE listeners after initial detection
-    if (isVercel) return; // Vercel uses client-driven
+    if (isVercel !== false) return; // wait until detection done; skip if Vercel
     const es = new EventSource('/api/aggregate/stream');
     esRef.current = es;
     es.addEventListener('state', e => { const s=JSON.parse(e.data); setSseState(s); if(s.log) setSseLog(s.log.slice().reverse()); });
@@ -221,7 +205,7 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
   }
 
   async function startAgg() {
-    if (isVercel) { startClientDriven(); return; }
+    if (isVercel === true) { startClientDriven(); return; }
 
     // Local dev: use SSE aggregator
     const pack = r => ({ id:r.id, name:r.name, status:r.status, open:r.open, close:r.close, sport:r.sport, resultsCompleted:r.resultsCompleted });
@@ -247,13 +231,13 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
   const years = [...new Set(recentRegs.map(eventYear).filter(y=>/^20\d{2}$/.test(y)))].sort().reverse();
   const smartNeeds    = smartInfo?.needs?.length    || 0;
   const smartUpToDate = smartInfo?.upToDate?.length || 0;
-  const running = isVercel ? cdRunning : !!sseState?.running;
-  const phase   = isVercel ? cdPhase   : (sseState?.phase||'idle');
+  const running = isVercel === true ? cdRunning : !!sseState?.running;
+  const phase   = isVercel === true ? cdPhase   : (sseState?.phase||'idle');
   const barColor = BAR_COLOR[phase]||'#334155';
   const cdPct = cdProgress.total > 0 ? Math.round(cdProgress.current/cdProgress.total*100) : 0;
   const ssePct = sseState?.total > 0 ? Math.round((sseState.current||0)/sseState.total*100) : 0;
-  const pct = isVercel ? cdPct : ssePct;
-  const log = isVercel ? cdLog : sseLog;
+  const pct = isVercel === true ? cdPct : ssePct;
+  const log = isVercel === true ? cdLog : sseLog;
 
   function btnLabel() {
     if (running) return '⏳ Running…';

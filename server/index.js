@@ -1947,6 +1947,11 @@ app.post('/api/cache/clear', async (req, res) => {
 
 // Export for Vercel (api/index.js imports this)
 // Also start the server when run directly (local dev)
+// ── Runtime info — lets the client know if it's talking to Vercel ────────────
+app.get('/api/runtime', (req, res) => {
+  res.json({ vercel: process.env.VERCEL === '1' });
+});
+
 module.exports = app;
 
 if (require.main === module) {
