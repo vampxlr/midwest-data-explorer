@@ -943,31 +943,40 @@ app.get('/api/aggregate/plan', async (req, res) => {
   }
 });
 
+// Fetches ONE page per call. Client loops until hasMore === false.
 app.post('/api/aggregate/fetch-event', async (req, res) => {
-  const { orgId = '8008', eventId, eventName, eventStatus, resultsCompleted: currentCompleted = 0, purgeFirst = false } = req.body || {};
+  const {
+    orgId = '8008', eventId, eventName, eventStatus,
+    resultsCompleted: currentCompleted = 0,
+    purgeFirst = false,
+    page: requestedPage,   // undefined/null = first call; number = continuation
+  } = req.body || {};
   if (!eventId) return res.status(400).json({ error: 'eventId required' });
+
+  const isFirstCall = requestedPage == null;
 
   try {
     const db = await store.load();
 
-    if (purgeFirst) store.purgeEvent(db, String(eventId));
+    if (isFirstCall && purgeFirst) store.purgeEvent(db, String(eventId));
 
     const storedEvent     = db.events[String(eventId)];
     const storedCompleted = storedEvent?.resultsCompleted ?? null;
     const storedCount     = storedEvent?.resultCount     || 0;
 
-    // Skip if count unchanged (and not forcing a purge)
-    if (!purgeFirst && storedCompleted !== null && currentCompleted === storedCompleted) {
+    // Skip only on the first call when count hasn't changed
+    if (isFirstCall && !purgeFirst && storedCompleted !== null && currentCompleted === storedCompleted) {
       return res.json({ added: 0, skipped: true, reason: 'count_unchanged', eventId });
     }
 
-    // Incremental: start from the page where new records appear
-    const PER_PAGE  = 25;
-    const startPage = (!purgeFirst && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
-      ? Math.max(1, Math.floor(storedCount / PER_PAGE))
-      : 1;
+    const PER_PAGE = 25;
+    // First call: incremental start page; continuation: use the caller's page number
+    const fetchPage = isFirstCall
+      ? ((!purgeFirst && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
+          ? Math.max(1, Math.floor(storedCount / PER_PAGE))
+          : 1)
+      : requestedPage;
 
-    // Fetch registration results (paginated)
     const ANSWERS_Q = `query($regId:ID!,$orgId:Int!,$page:Int,$perPage:Int!){
       registration(id:$regId,organizationId:$orgId){
         id name resultsCompleted
@@ -983,35 +992,33 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
       }
     }`;
 
-    let allResults = [], regMeta = null, page = startPage;
-    do {
-      const d = await graphql(ANSWERS_Q, { regId: String(eventId), orgId: parseInt(orgId), page, perPage: PER_PAGE });
-      const r = d?.data?.registration;
-      if (!r) break;
-      regMeta = r;
-      const batch = r.registrationResults || [];
-      allResults = allResults.concat(batch);
-      if (batch.length < PER_PAGE) break;
-      page++;
-      await new Promise(r => setTimeout(r, 300));
-    } while (true);
+    const d = await graphql(ANSWERS_Q, { regId: String(eventId), orgId: parseInt(orgId), page: fetchPage, perPage: PER_PAGE });
+    const r = d?.data?.registration;
+    if (!r) return res.json({ added: 0, fetched: 0, hasMore: false, page: fetchPage, skipped: false, eventId });
 
-    const evObj = { id: String(eventId), name: eventName || regMeta?.name || String(eventId), status: eventStatus ?? 2 };
-    const compact = allResults.map(r => {
-      const parsed = extractAnswers(r.answers || []);
-      return { id: r.id, eventId: String(eventId), eventName: evObj.name, created: r.created || null, completed: r.completed, ...parsed };
+    const batch   = r.registrationResults || [];
+    const hasMore = batch.length >= PER_PAGE;
+
+    const evObj   = { id: String(eventId), name: eventName || r.name || String(eventId), status: eventStatus ?? 2 };
+    const compact = batch.map(row => {
+      const parsed = extractAnswers(row.answers || []);
+      return { id: row.id, eventId: String(eventId), eventName: evObj.name, created: row.created || null, completed: row.completed, ...parsed };
     });
 
     const added = store.upsertResults(db, String(eventId), evObj.name, compact);
     store.upsertEventMeta(db, evObj, {
       fetchedAt:        new Date().toISOString(),
       resultCount:      storedCount + added,
-      resultsCompleted: regMeta?.resultsCompleted ?? currentCompleted,
+      resultsCompleted: r.resultsCompleted ?? currentCompleted,
     });
     await store.save(db);
     cache.del('analytics_agg');
 
-    res.json({ added, fetched: allResults.length, skipped: false, eventId, eventName: evObj.name });
+    res.json({
+      added, fetched: batch.length, skipped: false,
+      hasMore, nextPage: hasMore ? fetchPage + 1 : null,
+      page: fetchPage, eventId, eventName: evObj.name,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message, eventId });
   }

@@ -167,22 +167,42 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
       const ev = eventsToFetch[i];
       cdAddLog(`[${i+1}/${eventsToFetch.length}] "${ev.name}"`, 'info');
 
+      let evAdded=0, evFetched=0, nextPage=undefined, pageNum=0, wasSkipped=false;
       try {
-        const res = await api.aggregateFetchEvent({
-          orgId,
-          eventId:          String(ev.id),
-          eventName:        ev.name,
-          eventStatus:      ev.status,
-          resultsCompleted: ev.resultsCompleted || 0,
-          purgeFirst:       purgeFirst && mode === 'selected',
-        });
+        // Loop through pages — each call fetches one page (no server timeout risk)
+        do {
+          if (cdAbort.current) break;
+          const res = await api.aggregateFetchEvent({
+            orgId,
+            eventId:          String(ev.id),
+            eventName:        ev.name,
+            eventStatus:      ev.status,
+            resultsCompleted: ev.resultsCompleted || 0,
+            purgeFirst:       purgeFirst && mode === 'selected',
+            ...(nextPage != null ? { page: nextPage } : {}),
+          });
 
-        if (res.data.skipped) {
-          skipped++;
-          cdAddLog(`  ↷ SKIP — count unchanged (${ev.resultsCompleted})`, 'skip');
-        } else {
-          added += res.data.added || 0;
-          cdAddLog(`  ✓ +${res.data.added} new results (${res.data.fetched} fetched)`, res.data.added>0?'ok':'skip');
+          if (res.data.skipped) {
+            wasSkipped = true;
+            skipped++;
+            cdAddLog(`  ↷ SKIP — count unchanged (${ev.resultsCompleted})`, 'skip');
+            break;
+          }
+
+          evAdded   += res.data.added   || 0;
+          evFetched += res.data.fetched  || 0;
+          pageNum++;
+          nextPage = res.data.hasMore ? res.data.nextPage : null;
+
+          if (res.data.hasMore) {
+            cdAddLog(`  ↓ page ${pageNum} (p${res.data.page}): +${res.data.added} — more pages…`, 'info');
+            await new Promise(r => setTimeout(r, 400));
+          }
+        } while (nextPage != null);
+
+        if (!wasSkipped) {
+          added += evAdded;
+          cdAddLog(`  ✓ +${evAdded} new results (${evFetched} fetched${pageNum>1?`, ${pageNum} pages`:''})`, evAdded>0?'ok':'skip');
         }
       } catch (err) {
         errors++;
