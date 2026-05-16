@@ -58,7 +58,7 @@ async function readJSON(filename, defaultVal = null) {
     try {
       const blob = await latestBlob(filename);
       if (!blob) return defaultVal;
-      const res = await fetch(blob.downloadUrl);
+      const res = await fetch(blob.url);
       if (!res.ok) return defaultVal;
       return await res.json();
     } catch (err) {
@@ -86,7 +86,7 @@ async function writeJSON(filename, data) {
     // Delete stale versions first to avoid accumulation
     await deleteAllBlobs(filename);
     await put(filename, JSON.stringify(data, null, 2), {
-      access: 'private',
+      access: 'public',
       addRandomSuffix: false,
       contentType: 'application/json',
       token: process.env.BLOB_READ_WRITE_TOKEN,
@@ -110,7 +110,7 @@ async function readFile(filename) {
     try {
       const blob = await latestBlob(filename);
       if (!blob) return null;
-      const res = await fetch(blob.downloadUrl);
+      const res = await fetch(blob.url);
       if (!res.ok) return null;
       return Buffer.from(await res.arrayBuffer());
     } catch { return null; }
@@ -129,7 +129,7 @@ async function writeFile(filename, content, contentType = 'text/plain; charset=u
     const { put } = getSDK();
     await deleteAllBlobs(filename);
     await put(filename, content, {
-      access: 'private',
+      access: 'public',
       addRandomSuffix: false,
       contentType,
       token: process.env.BLOB_READ_WRITE_TOKEN,
@@ -172,7 +172,7 @@ async function fileExists(filename) {
 async function getDownloadUrl(filename) {
   if (IS_VERCEL) {
     const blob = await latestBlob(filename);
-    return blob ? blob.downloadUrl : null;
+    return blob ? blob.url : null;
   }
   const filePath = path.join(DATA_DIR, filename);
   return fs.existsSync(filePath) ? path.resolve(filePath) : null;
