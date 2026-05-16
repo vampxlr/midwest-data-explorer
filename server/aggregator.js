@@ -442,4 +442,4 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
   });
 }
 
-module.exports = { run, addClient, removeClient, getState, broadcast, log };
+module.exports = { run, addClient, removeClient, getState, broadcast, log, extractAnswers };

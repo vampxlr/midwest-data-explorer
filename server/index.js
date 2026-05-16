@@ -161,6 +161,32 @@ function pickAnswerAll(answers, ...keys) {
     .filter(Boolean);
 }
 
+// Used by the client-driven fetch-event endpoint to parse form answers into
+// the same shape that the aggregator stores: { gradYears, gender, city, state, zip }
+function extractAnswers(answers) {
+  const ans = answers || [];
+  const gradYears = pickAnswerAll(ans, 'graduation year', 'grad year')
+    .filter(v => /^\d{4}$/.test(String(v).trim()))
+    .map(v => String(v).trim());
+
+  if (!gradYears.length) {
+    const div = pickAnswer(ans, 'desired division', 'division of play');
+    if (div) { const y = String(div).replace(/\D/g, ''); if (y.length === 4) gradYears.push(y); }
+  }
+
+  const city  = pickAnswer(ans, 'city');
+  const state = pickAnswer(ans, 'state/province', 'state');
+  const zipRaw = pickAnswer(ans, 'zip', 'postal');
+
+  return {
+    gradYears,
+    gender: pickAnswer(ans, 'gender of team', 'gender') || null,
+    city:   city  ? city.trim()  : null,
+    state:  state ? state.trim() : null,
+    zip:    zipRaw ? String(zipRaw).trim().slice(0, 5) : null,
+  };
+}
+
 function aggregateAnswers(results) {
   const gradYearMap = {}, genderMap = {}, stateMap = {}, cityMap = {}, zipMap = {}, divisionMap = {};
   let teams = 0;
