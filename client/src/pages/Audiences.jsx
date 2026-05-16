@@ -1,0 +1,622 @@
+/**
+ * FB Audiences page — two-panel layout:
+ *   Left:  Contact Store (fetch contacts from SE, event-by-event status)
+ *   Right: Audience Builder (filter by leagues/year/gender → instant CSV export)
+ */
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  PieChart, Pie,
+} from 'recharts';
+import { api } from '../api.jsx';
+import { toast } from 'react-hot-toast';
+import SearchableSelect from '../components/SearchableSelect.jsx';
+
+const PIE_COLORS  = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6'];
+const LOG_COLOR   = { info:'#64748b', ok:'#22c55e', error:'#ef4444', warn:'#f97316', response:'#a78bfa', skip:'#94a3b8' };
+const curYear     = new Date().getFullYear().toString();
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const Tip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background:'#0e1018', border:'1px solid #252838', borderRadius:8, padding:'8px 12px' }}>
+      {label && <p style={{ color:'#94a3b8', fontSize:11, marginBottom:3 }}>{label}</p>}
+      {payload.map((p,i)=><p key={i} style={{color:p.color||'#60a5fa',fontSize:13,fontWeight:700,margin:'2px 0'}}>{p.name}: {p.value}</p>)}
+    </div>
+  );
+};
+
+function StatCard({ label, value, sub, color='#60a5fa' }) {
+  return (
+    <div className="stat-card">
+      <div className="stat-label">{label}</div>
+      <div className="stat-value" style={{ color, fontSize:28 }}>{value ?? '—'}</div>
+      {sub && <div className="stat-sub">{sub}</div>}
+    </div>
+  );
+}
+
+// ── SSE Log Terminal ──────────────────────────────────────────────────────────
+function ContactTerminal({ logs, status, onClose }) {
+  const bottomRef = useRef(null);
+  useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [logs]);
+
+  const statusColor = status==='done'?'#22c55e':status==='error'?'#ef4444':status==='idle'?'#334155':'#3b82f6';
+  return (
+    <div style={{ background:'#080a0f', border:'1px solid #1e2235', borderRadius:10, overflow:'hidden', fontFamily:'monospace', marginTop:12 }}>
+      <div style={{ background:'#0f1117', borderBottom:'1px solid #1e2235', padding:'7px 14px', display:'flex', alignItems:'center', gap:10 }}>
+        <div style={{ display:'flex', gap:4 }}>
+          {['#ef4444','#f97316','#22c55e'].map(c=><div key={c} style={{width:10,height:10,borderRadius:'50%',background:c}}/>)}
+        </div>
+        <span style={{ color:'#475569', fontSize:11, flex:1 }}>Contact Fetch — SportsEngine</span>
+        <span style={{ color:statusColor, fontSize:11, fontWeight:700 }}>
+          {status==='done'?'DONE':status==='error'?'ERROR':status==='idle'?'IDLE':'RUNNING'}
+        </span>
+        {status!=='running'&&onClose&&(
+          <button onClick={onClose} style={{background:'none',border:'none',color:'#475569',cursor:'pointer',fontSize:14}}>✕</button>
+        )}
+      </div>
+      <div style={{ padding:'10px 14px', maxHeight:240, overflowY:'auto', fontSize:11, lineHeight:1.7 }}>
+        {logs.length===0 && <span style={{color:'#334155'}}>Waiting to start…</span>}
+        {logs.map((l,i)=>(
+          <div key={i} style={{display:'flex',gap:8}}>
+            <span style={{color:'#1e3a5f',flexShrink:0,minWidth:52}}>{l.ts}</span>
+            <span style={{color:LOG_COLOR[l.level]||'#64748b',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>{l.msg}</span>
+          </div>
+        ))}
+        {status==='running'&&<div style={{color:'#22c55e',animation:'blink 1s step-end infinite'}}>█</div>}
+        <div ref={bottomRef}/>
+      </div>
+      <style>{`@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}`}</style>
+    </div>
+  );
+}
+
+// ── Left panel: Contact Store ─────────────────────────────────────────────────
+function ContactStorePanel({ recentRegs, onStoreUpdated }) {
+  const [cStatus,    setCStatus]    = useState(null);
+  const [fetching,   setFetching]   = useState(false);
+  const [logs,       setLogs]       = useState([]);
+  const [termStatus, setTermStatus] = useState('idle');
+  const [showTerm,   setShowTerm]   = useState(false);
+  const [progress,   setProgress]   = useState({ current:0, total:0 });
+  const esRef = useRef(null);
+
+  useEffect(()=>{ loadStatus(); }, []);
+
+  async function loadStatus() {
+    try { const r = await api.contactsStatus(); setCStatus(r.data); } catch {}
+  }
+
+  function connectSSE() {
+    if (esRef.current) esRef.current.close();
+    const es = new EventSource('/api/contacts/stream');
+    esRef.current = es;
+    es.addEventListener('state', e => {
+      const s = JSON.parse(e.data);
+      setProgress({ current:s.current||0, total:s.total||0 });
+      setFetching(s.running||false);
+    });
+    es.addEventListener('log', e => {
+      setLogs(prev=>[...prev,JSON.parse(e.data)].slice(-100));
+    });
+    es.addEventListener('complete', e => {
+      setFetching(false);
+      setTermStatus('done');
+      loadStatus();
+      if (onStoreUpdated) onStoreUpdated();
+    });
+    es.onerror = ()=>{};
+    return es;
+  }
+
+  useEffect(()=>{
+    const es = connectSSE();
+    return ()=>es.close();
+  }, []);
+
+  async function startFetch(which, events) {
+    setLogs([]); setTermStatus('running'); setShowTerm(true);
+    try {
+      // Send full event objects so server can skip discovery
+      const eventObjs = events ? events.map(r => ({
+        id: r.id, name: r.name, status: r.status,
+        open: r.open, close: r.close, sport: r.sport,
+        resultsCompleted: r.resultsCompleted,
+      })) : null;
+      const payload = { orgId:'8008', purgeFirst: false };
+      if (eventObjs) payload.eventIds = eventObjs;
+      const r = await api.contactsFetch(payload);
+      if (!r.data.started) toast.error(r.data.message);
+    } catch (err) { toast.error('Failed: '+err.message); setTermStatus('error'); }
+  }
+
+  const pct = progress.total>0 ? Math.round(progress.current/progress.total*100) : 0;
+  const openEvents   = recentRegs.filter(r=>r.status===1);
+  const closedEvents = recentRegs.filter(r=>r.status!==1);
+
+  // Events not yet in contact store
+  const fetchedIds   = new Set(Object.keys(cStatus?.events||{}));
+  const notFetched   = recentRegs.filter(r=>!fetchedIds.has(String(r.id)));
+  const needsRefresh = openEvents.filter(r=>fetchedIds.has(String(r.id)));
+
+  return (
+    <div>
+      <h2 style={{marginBottom:16}}>Contact Store</h2>
+      <p style={{color:'#64748b',fontSize:12,marginBottom:16,lineHeight:1.6}}>
+        Stores registrant contact details (email, name, phone) locally.
+        <br/><strong style={{color:'#94a3b8'}}>Closed events</strong> are fetched once and never re-fetched.
+        <strong style={{color:'#94a3b8'}}> Open events</strong> can be refreshed to pick up new registrations.
+      </p>
+
+      {/* Stats */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16}}>
+        <StatCard label="Total Contacts" value={cStatus?.totalContacts??0} color="#60a5fa" sub="emails + location"/>
+        <StatCard label="Events Covered" value={cStatus?.totalEvents??0}   color="#22c55e" sub={`of ${recentRegs.length} total`}/>
+        <StatCard label="Closed (cached)" value={cStatus?.closedFetched??0} color="#94a3b8" sub="won't change"/>
+        <StatCard label="Open (live)"     value={cStatus?.openFetched??0}   color="#f97316" sub="refresh anytime"/>
+      </div>
+
+      {/* Progress bar (shown when running) */}
+      {fetching && (
+        <div style={{marginBottom:12}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'#64748b',marginBottom:4}}>
+            <span>Fetching contacts…</span>
+            <span>{progress.current}/{progress.total} events ({pct}%)</span>
+          </div>
+          <div style={{background:'#1e2235',borderRadius:8,height:10,overflow:'hidden'}}>
+            <div style={{width:`${pct}%`,height:'100%',background:'#3b82f6',borderRadius:8,transition:'width 0.3s'}}/>
+          </div>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:12}}>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <button disabled={fetching}
+            onClick={()=>startFetch('all-closed', closedEvents)}
+            style={{flex:1,padding:'10px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid #14532d',
+              cursor:fetching?'not-allowed':'pointer',background:'rgba(34,197,94,0.08)',color:'#22c55e',opacity:fetching?0.4:1}}>
+            ↺ Fetch All Closed ({closedEvents.length})
+            <div style={{fontSize:10,color:'#14532d',fontWeight:400,marginTop:2}}>fetch once, cached permanently</div>
+          </button>
+          <button disabled={fetching}
+            onClick={()=>startFetch('all-open', openEvents)}
+            style={{flex:1,padding:'10px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid #431407',
+              cursor:fetching?'not-allowed':'pointer',background:'rgba(249,115,22,0.08)',color:'#f97316',opacity:fetching?0.4:1}}>
+            ↺ Refresh Open ({openEvents.length})
+            <div style={{fontSize:10,color:'#431407',fontWeight:400,marginTop:2}}>pick up new registrations</div>
+          </button>
+        </div>
+
+        {notFetched.length > 0 && (
+          <button disabled={fetching}
+            onClick={()=>startFetch('not-fetched', notFetched)}
+            style={{padding:'8px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid #2a2d3e',
+              cursor:fetching?'not-allowed':'pointer',background:'#1e2235',color:'#94a3b8',opacity:fetching?0.4:1}}>
+            ↺ Fetch {notFetched.length} not-yet-fetched events
+          </button>
+        )}
+      </div>
+
+      {/* Terminal */}
+      {(showTerm || logs.length>0) && (
+        <ContactTerminal logs={logs} status={fetching?'running':termStatus} onClose={()=>setShowTerm(false)}/>
+      )}
+
+      {/* Event list */}
+      {cStatus?.events?.length > 0 && (
+        <div style={{marginTop:16}}>
+          <p style={{margin:'0 0 8px',fontSize:10,color:'#64748b',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px'}}>
+            Fetched Events
+          </p>
+          <div style={{maxHeight:280,overflowY:'auto'}}>
+            {cStatus.events.map(ev=>(
+              <div key={ev.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',
+                background:'#13161f',border:'1px solid #252838',borderRadius:8,marginBottom:4}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:11,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.name}</div>
+                  <div style={{fontSize:10,color:'#475569'}}>
+                    {ev.status===1
+                      ? <span style={{color:'#22c55e'}}>Open</span>
+                      : <span style={{color:'#64748b'}}>Closed</span>}
+                    {' · '}fetched {new Date(ev.fetchedAt).toLocaleString()}
+                  </div>
+                </div>
+                <span style={{color:'#60a5fa',fontWeight:700,fontSize:13,flexShrink:0}}>{ev.contactCount}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Right panel: Audience Builder ─────────────────────────────────────────────
+function AudienceBuilder({ recentRegs, contactStatus }) {
+  const [step,          setStep]          = useState(1);
+  // Step 1: league selection mode
+  const [leagueMode,    setLeagueMode]    = useState('all');  // 'all' | 'year' | 'custom'
+  const [selectedYear,  setSelectedYear]  = useState(curYear); // for 'year' mode
+  const [customLeagues, setCustomLeagues] = useState([]);       // for 'custom' mode
+  // Step 2: grad year range
+  const [yearFrom,      setYearFrom]      = useState('');
+  const [yearTo,        setYearTo]        = useState('');
+  // Step 3: gender
+  const [selGenders,    setSelGenders]    = useState(new Set()); // empty = all
+  // Preview
+  const [preview,       setPreview]       = useState(null);
+  const [previewing,    setPreviewing]    = useState(false);
+  // Export label
+  const [label,         setLabel]         = useState('');
+
+  // All years from recentRegs
+  const availableYears = [...new Set(
+    recentRegs.map(r=>(r.close||r.open||'').slice(0,4)).filter(y=>/^20\d{2}$/.test(y))
+  )].sort().reverse();
+
+  // All unique grad years from contact store
+  const allGradYears = contactStatus
+    ? [...new Set(
+        (contactStatus.events||[]).flatMap(()=>[]) // we'd need aggregate data
+      )]
+    : [];
+
+  // Compute selected eventIds based on league mode
+  function getEventIds() {
+    if (leagueMode==='all') return null; // null = all
+    if (leagueMode==='year') {
+      return recentRegs
+        .filter(r=>(r.close||r.open||'').slice(0,4)===selectedYear)
+        .map(r=>String(r.id));
+    }
+    return customLeagues.map(l=>String(l.id));
+  }
+
+  function getGenders() {
+    return selGenders.size>0 ? [...selGenders] : null;
+  }
+
+  async function refreshPreview() {
+    const params = new URLSearchParams();
+    const ids = getEventIds();
+    if (ids) params.set('eventIds', ids.join(','));
+    if (yearFrom) params.set('gradYearFrom', yearFrom);
+    if (yearTo)   params.set('gradYearTo',   yearTo);
+    const genders = getGenders();
+    if (genders) params.set('genders', genders.join(','));
+    setPreviewing(true);
+    try {
+      const r = await api.contactsPreview(Object.fromEntries(params));
+      setPreview(r.data);
+    } catch {}
+    finally { setPreviewing(false); }
+  }
+
+  useEffect(()=>{ if (step>=2) refreshPreview(); }, [step, leagueMode, selectedYear, customLeagues, yearFrom, yearTo, selGenders]);
+
+  function downloadCSV() {
+    const url = api.contactsExportUrl({
+      eventIds:     getEventIds(),
+      gradYearFrom: yearFrom || undefined,
+      gradYearTo:   yearTo   || undefined,
+      genders:      getGenders(),
+      label:        label || buildLabel(),
+    });
+    window.location.href = url;
+    toast.success(`Downloading ${preview?.total||'?'} contacts as CSV`);
+  }
+
+  function buildLabel() {
+    const parts = [];
+    if (leagueMode==='year') parts.push(selectedYear);
+    else if (leagueMode==='custom') parts.push(`${customLeagues.length}leagues`);
+    else parts.push('all');
+    if (yearFrom||yearTo) parts.push(`${yearFrom||'*'}-${yearTo||'*'}`);
+    const g = getGenders();
+    if (g) parts.push(g.join('-'));
+    return parts.join('_');
+  }
+
+  // Known genders from events (simplify: standard options)
+  const genderOptions = ['Boys','Girls','Mixed'];
+
+  const StepBar = () => (
+    <div style={{display:'flex',gap:0,marginBottom:20}}>
+      {[{n:1,label:'Leagues'},{n:2,label:'Grad Year'},{n:3,label:'Gender + Export'}].map(({n,label},i)=>(
+        <React.Fragment key={n}>
+          <div onClick={()=>step>n&&setStep(n)}
+            style={{display:'flex',alignItems:'center',gap:6,fontSize:11,fontWeight:700,
+              color:step===n?'#60a5fa':step>n?'#22c55e':'#475569',
+              cursor:step>n?'pointer':'default'}}>
+            <div style={{width:22,height:22,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',
+              background:step===n?'#1e3a5f':step>n?'#14532d':'#1e2235',
+              border:`1px solid ${step===n?'#3b82f6':step>n?'#22c55e':'#334155'}`,
+              color:step===n?'#60a5fa':step>n?'#4ade80':'#475569',fontSize:11,fontWeight:800}}>
+              {step>n?'✓':n}
+            </div>
+            <span style={{whiteSpace:'nowrap'}}>{label}</span>
+          </div>
+          {i<2&&<div style={{flex:1,height:1,background:step>n?'#22c55e':'#334155',margin:'11px 8px 0'}}/>}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+
+  return (
+    <div>
+      <h2 style={{marginBottom:4}}>Audience Builder</h2>
+      <p style={{color:'#64748b',fontSize:12,marginBottom:16,lineHeight:1.6}}>
+        Build a Facebook Custom Audience CSV from your stored contacts. Instant — no API calls.
+        {contactStatus && <span style={{color:'#60a5fa',fontWeight:700}}> {contactStatus.totalContacts} contacts available.</span>}
+      </p>
+
+      {(!contactStatus||contactStatus.totalContacts===0) && (
+        <div style={{background:'#1a1207',border:'1px solid #431407',borderRadius:10,padding:'14px 16px',marginBottom:16,fontSize:13,color:'#f97316'}}>
+          ⚠ No contacts stored yet. Use the Contact Store panel to fetch contact details from SportsEngine first.
+        </div>
+      )}
+
+      <StepBar/>
+
+      {/* ── Step 1: League Selection ─────────────────────────────── */}
+      {step===1 && (
+        <div>
+          <p style={{fontSize:12,color:'#94a3b8',marginBottom:14}}>Which leagues should this audience include?</p>
+
+          {/* Mode selector cards */}
+          <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:20}}>
+            {[
+              { id:'all',    label:'All Leagues', desc:`All ${recentRegs.length} leagues in the contact store` },
+              { id:'year',   label:'Specific Year', desc:'All leagues from a particular season year' },
+              { id:'custom', label:'Custom Selection', desc:'Pick individual leagues by name' },
+            ].map(m=>(
+              <label key={m.id} onClick={()=>setLeagueMode(m.id)}
+                style={{display:'flex',alignItems:'center',gap:12,padding:'12px 16px',
+                  background:leagueMode===m.id?'#1e3a5f22':'#13161f',
+                  border:`1px solid ${leagueMode===m.id?'#3b82f6':'#252838'}`,
+                  borderRadius:10,cursor:'pointer',transition:'all 0.12s'}}>
+                <div style={{width:18,height:18,borderRadius:'50%',
+                  border:`2px solid ${leagueMode===m.id?'#3b82f6':'#334155'}`,
+                  background:leagueMode===m.id?'#2563eb':'transparent',
+                  display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  {leagueMode===m.id&&<div style={{width:6,height:6,borderRadius:'50%',background:'#fff'}}/>}
+                </div>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:leagueMode===m.id?'#f1f5f9':'#64748b'}}>{m.label}</div>
+                  <div style={{fontSize:11,color:'#475569'}}>{m.desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+
+          {/* Year picker */}
+          {leagueMode==='year' && (
+            <div style={{marginBottom:16}}>
+              <label style={{display:'block',fontSize:10,color:'#64748b',marginBottom:6,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>
+                Season Year
+              </label>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {availableYears.map(y=>(
+                  <button key={y} onClick={()=>setSelectedYear(y)}
+                    style={{padding:'8px 20px',borderRadius:8,fontSize:13,fontWeight:700,border:'none',cursor:'pointer',
+                      background:selectedYear===y?'#2563eb':'#1e2235',color:selectedYear===y?'#fff':'#64748b'}}>
+                    {y}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Custom league picker */}
+          {leagueMode==='custom' && (
+            <div style={{marginBottom:16}}>
+              <label style={{display:'block',fontSize:10,color:'#64748b',marginBottom:6,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>
+                Add Leagues
+              </label>
+              <SearchableSelect
+                value=""
+                onChange={id=>{
+                  const r = recentRegs.find(x=>String(x.id)===String(id));
+                  if (r&&!customLeagues.find(l=>String(l.id)===String(r.id)))
+                    setCustomLeagues(prev=>[...prev,{id:r.id,name:r.name}]);
+                }}
+                options={recentRegs.filter(r=>!customLeagues.find(l=>String(l.id)===String(r.id))).map(r=>({value:String(r.id),label:r.name}))}
+                placeholder="Search and add a league…"
+                style={{marginBottom:10}}
+              />
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {customLeagues.map(l=>(
+                  <div key={l.id} style={{display:'flex',alignItems:'center',gap:5,background:'#1e2235',border:'1px solid #2a2d3e',borderRadius:20,padding:'4px 10px 4px 12px',fontSize:11}}>
+                    <span style={{color:'#cbd5e1',maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{l.name}</span>
+                    <button onClick={()=>setCustomLeagues(prev=>prev.filter(x=>String(x.id)!==String(l.id)))}
+                      style={{background:'none',border:'none',color:'#475569',cursor:'pointer',fontSize:14,lineHeight:1,padding:'0 2px'}}>×</button>
+                  </div>
+                ))}
+              </div>
+              {customLeagues.length===0&&<p style={{color:'#334155',fontSize:11,margin:'6px 0 0'}}>No leagues selected yet.</p>}
+            </div>
+          )}
+
+          <button onClick={()=>setStep(2)}
+            disabled={leagueMode==='custom'&&customLeagues.length===0}
+            style={{padding:'10px 28px',background:'#2563eb',color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:700,fontSize:13,
+              opacity:leagueMode==='custom'&&customLeagues.length===0?0.4:1}}>
+            Next: Grad Year Range →
+          </button>
+        </div>
+      )}
+
+      {/* ── Step 2: Grad Year Range ──────────────────────────────── */}
+      {step===2 && (
+        <div>
+          <p style={{fontSize:12,color:'#94a3b8',marginBottom:14}}>
+            Filter by graduation year range. Leave both blank to include all years.
+          </p>
+          <div style={{display:'flex',gap:16,marginBottom:20,flexWrap:'wrap',alignItems:'flex-end'}}>
+            <div>
+              <label style={{display:'block',fontSize:10,color:'#64748b',marginBottom:5,fontWeight:600,textTransform:'uppercase'}}>From Year</label>
+              <input type="number" min="2020" max="2040" value={yearFrom}
+                onChange={e=>setYearFrom(e.target.value)}
+                placeholder="e.g. 2028"
+                style={{background:'#13161f',border:'1px solid #252838',color:'#f1f5f9',borderRadius:8,padding:'8px 14px',fontSize:14,fontWeight:600,width:120,outline:'none'}}/>
+            </div>
+            <div>
+              <label style={{display:'block',fontSize:10,color:'#64748b',marginBottom:5,fontWeight:600,textTransform:'uppercase'}}>To Year</label>
+              <input type="number" min="2020" max="2040" value={yearTo}
+                onChange={e=>setYearTo(e.target.value)}
+                placeholder="e.g. 2033"
+                style={{background:'#13161f',border:'1px solid #252838',color:'#f1f5f9',borderRadius:8,padding:'8px 14px',fontSize:14,fontWeight:600,width:120,outline:'none'}}/>
+            </div>
+            <button onClick={()=>{setYearFrom('');setYearTo('');}}
+              style={{padding:'8px 14px',borderRadius:8,fontSize:12,border:'1px solid #252838',background:'#1e2235',color:'#64748b',cursor:'pointer',fontWeight:600}}>
+              Clear
+            </button>
+          </div>
+
+          {/* Preview */}
+          {previewing && <div style={{color:'#64748b',fontSize:12,marginBottom:12}}>Computing preview…</div>}
+          {!previewing && preview && (
+            <div style={{background:'#0e1018',border:'1px solid #252838',borderRadius:10,padding:'14px',marginBottom:16}}>
+              <div style={{display:'flex',gap:20,marginBottom:12,flexWrap:'wrap'}}>
+                <div><div style={{fontSize:10,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>Matching Contacts</div>
+                  <div style={{fontSize:28,fontWeight:800,color:'#60a5fa'}}>{preview.total}</div></div>
+                <div><div style={{fontSize:10,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>With Email</div>
+                  <div style={{fontSize:28,fontWeight:800,color:'#22c55e'}}>{preview.withEmail}</div></div>
+              </div>
+              {preview.graduationYear?.length>0&&(
+                <ResponsiveContainer width="100%" height={100}>
+                  <BarChart data={preview.graduationYear} margin={{top:4,right:4,left:0,bottom:16}}>
+                    <XAxis dataKey="name" tick={{fill:'#64748b',fontSize:9}} angle={-30} textAnchor="end" interval={0}/>
+                    <Tooltip content={<Tip/>}/>
+                    <Bar dataKey="count" name="Contacts" fill="#3b82f6" radius={[2,2,0,0]}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          )}
+
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>setStep(1)} style={{padding:'10px 20px',background:'#1e2235',color:'#94a3b8',border:'1px solid #252838',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:13}}>← Back</button>
+            <button onClick={()=>setStep(3)} style={{padding:'10px 28px',background:'#2563eb',color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:700,fontSize:13}}>Next: Gender →</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 3: Gender + Export ──────────────────────────────── */}
+      {step===3 && (
+        <div>
+          <p style={{fontSize:12,color:'#94a3b8',marginBottom:14}}>Select genders to include. Leave all unchecked for all genders.</p>
+
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+            {genderOptions.map((g,i)=>{
+              const sel = selGenders.has(g);
+              return (
+                <label key={g} onClick={()=>setSelGenders(prev=>{const n=new Set(prev);sel?n.delete(g):n.add(g);return n;})}
+                  style={{display:'flex',alignItems:'center',gap:8,padding:'10px 18px',
+                    background:sel?`${PIE_COLORS[i%PIE_COLORS.length]}22`:'#13161f',
+                    border:`1px solid ${sel?PIE_COLORS[i%PIE_COLORS.length]:'#252838'}`,
+                    borderRadius:10,cursor:'pointer',transition:'all 0.12s'}}>
+                  <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${sel?PIE_COLORS[i%PIE_COLORS.length]:'#334155'}`,
+                    background:sel?PIE_COLORS[i%PIE_COLORS.length]:'transparent',display:'flex',alignItems:'center',justifyContent:'center'}}>
+                    {sel&&<span style={{color:'#fff',fontSize:10,fontWeight:800}}>✓</span>}
+                  </div>
+                  <span style={{fontSize:13,fontWeight:700,color:sel?PIE_COLORS[i%PIE_COLORS.length]:'#64748b'}}>{g}</span>
+                </label>
+              );
+            })}
+          </div>
+          {selGenders.size===0&&<p style={{fontSize:11,color:'#475569',marginBottom:12}}>All genders included (none selected = all).</p>}
+
+          {/* Final preview */}
+          {!previewing && preview && (
+            <div style={{background:'#0e1018',border:'1px solid #252838',borderRadius:10,padding:'14px 16px',marginBottom:16}}>
+              <div style={{display:'flex',gap:20,flexWrap:'wrap',marginBottom:preview.gender?.length>0?12:0}}>
+                <div>
+                  <div style={{fontSize:10,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>Ready to Export</div>
+                  <div style={{fontSize:32,fontWeight:800,color:'#22c55e',letterSpacing:'-1px'}}>{preview.total}</div>
+                  <div style={{fontSize:11,color:'#475569'}}>contacts total</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>With Email</div>
+                  <div style={{fontSize:32,fontWeight:800,color:'#60a5fa',letterSpacing:'-1px'}}>{preview.withEmail}</div>
+                  <div style={{fontSize:11,color:'#475569'}}>email match rate {preview.total>0?Math.round(preview.withEmail/preview.total*100):0}%</div>
+                </div>
+                {preview.gender?.map((g,i)=>(
+                  <div key={g.name}>
+                    <div style={{fontSize:10,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>{g.name}</div>
+                    <div style={{fontSize:24,fontWeight:700,color:PIE_COLORS[i%PIE_COLORS.length]}}>{g.count}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* File label */}
+          <div style={{marginBottom:16}}>
+            <label style={{display:'block',fontSize:10,color:'#64748b',marginBottom:5,fontWeight:600,textTransform:'uppercase'}}>
+              File Label (optional)
+            </label>
+            <input type="text" value={label} onChange={e=>setLabel(e.target.value)}
+              placeholder={buildLabel()}
+              style={{background:'#13161f',border:'1px solid #252838',color:'#f1f5f9',borderRadius:8,padding:'8px 14px',fontSize:13,width:'100%',outline:'none',boxSizing:'border-box'}}/>
+          </div>
+
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>setStep(2)} style={{padding:'10px 20px',background:'#1e2235',color:'#94a3b8',border:'1px solid #252838',borderRadius:8,cursor:'pointer',fontWeight:600,fontSize:13}}>← Back</button>
+            <button onClick={downloadCSV} disabled={!preview||preview.total===0}
+              style={{padding:'12px 32px',background:'#22c55e',color:'#0a0d14',border:'none',borderRadius:8,cursor:'pointer',fontWeight:800,fontSize:14,flex:1,
+                opacity:!preview||preview.total===0?0.4:1}}>
+              ⬇ Download FB Audience CSV ({preview?.total||0} contacts)
+            </button>
+          </div>
+          <p style={{margin:'10px 0 0',fontSize:10,color:'#334155'}}>
+            Instant download from stored contacts — no API call needed.
+            Columns: email, phone, fn, ln, zip, city, state, country, gender, grad_years, league.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+export default function Audiences({ ctx }) {
+  const { recentRegs = [] } = ctx;
+  const [cStatus, setCStatus] = useState(null);
+
+  async function loadCStatus() {
+    try { const r = await api.contactsStatus(); setCStatus(r.data); } catch {}
+  }
+
+  useEffect(()=>{ loadCStatus(); }, []);
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>FB Audiences</h1>
+        <p>Store registrant contact details locally, then build targeted Facebook Custom Audience exports — no repeated API calls.</p>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24, alignItems:'start' }}>
+        {/* Left: Contact Store */}
+        <div className="card" style={{ position:'sticky', top:20 }}>
+          <ContactStorePanel
+            recentRegs={recentRegs}
+            onStoreUpdated={loadCStatus}
+          />
+        </div>
+
+        {/* Right: Audience Builder */}
+        <div className="card">
+          <AudienceBuilder
+            recentRegs={recentRegs}
+            contactStatus={cStatus}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}

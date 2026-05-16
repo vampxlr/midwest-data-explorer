@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.*.local
+server/.env
+
+# Build output
+client/dist/
+client/build/
+
+# Vercel
+.vercel/
+
+# Local data store — contains real registration data, keep off GitHub
+server/data/
+
+# CSV exports
+server/data/exports/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temp
+*.tmp
+*.temp

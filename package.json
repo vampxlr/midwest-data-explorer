@@ -1,0 +1,20 @@
+{
+  "name": "midwest-3on3-explorer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd server && node --watch index.js",
+    "dev:client": "cd client && npm run dev",
+    "build": "cd client && npm install && npm run build",
+    "start": "node api/index.js"
+  },
+  "dependencies": {
+    "@vercel/blob": "^0.27.0",
+    "axios": "^1.15.2",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.0.0",
+    "node-cache": "^5.1.2"
+  }
+}
