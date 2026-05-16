@@ -25,9 +25,14 @@ async function saveExportsMeta(list) {
 const app = express();
 const cache = new NodeCache({ stdTTL: 300 });
 
+app.set('trust proxy', 1); // Vercel / reverse-proxy environments set X-Forwarded-For
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(rateLimit({ windowMs: 60000, max: 200 }));
+app.use(rateLimit({
+  windowMs: 60000,
+  max: 200,
+  validate: { xForwardedForHeader: false, forwardedHeader: false },
+}));
 
 const SE_TOKEN_URL = 'https://user.sportsengine.com/oauth/token';
 const SE_GRAPHQL_URL = 'https://api.sportsengine.com/graphql';
