@@ -111,7 +111,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
   }
 
   const selective = filterEvents.length > 0;
-  const db = store.load();
+  const db = await store.load();
 
   state = {
     running: true, phase: selective ? 'fetching' : 'discovering',
@@ -145,7 +145,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
         const deleted = store.purgeEvent(db, ev.id);
         log(`  ✓ Purged ${deleted} result${deleted!==1?'s':''} from "${ev.name}"`, deleted>0?'ok':'skip');
       }
-      store.save(db);
+      await store.save(db);
       toFetch = filterEvents; // always fetch all after purge
     } else {
       toFetch = store.pendingEvents(db, filterEvents);
@@ -249,7 +249,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
     if (!selective && currentCompleted === 0) {
       log(`${eventNum} ↷ SKIP — 0 completions reported`, 'skip');
       store.upsertEventMeta(db, ev, { fetchedAt: new Date().toISOString(), resultCount: 0, resultsCompleted: 0 });
-      store.save(db);
+      await store.save(db);
       state.current++;
       state.skipped++;
       broadcast('progress', { current: state.current, total: state.total, eventId: ev.id, name: ev.name, added: 0, skipped: true });
@@ -264,7 +264,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
         resultCount:      storedEvent.resultCount || storedCompleted,
         resultsCompleted: currentCompleted,
       });
-      store.save(db);
+      await store.save(db);
       state.current++;
       state.skipped++;
       broadcast('progress', { current: state.current, total: state.total, eventId: ev.id, name: ev.name, added: 0, skipped: true });
@@ -384,7 +384,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
       // resultsCompleted from the API — used for count-change detection next run
       resultsCompleted: regData.resultsCompleted ?? currentCompleted,
     });
-    store.save(db);
+    await store.save(db);
 
     state.current++;
     state.newResults   += added;
@@ -413,7 +413,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
 
   db.meta.lastRunAt     = new Date().toISOString();
   db.meta.totalResults  = db.results.length;
-  store.save(db);
+  await store.save(db);
 
   state.running     = false;
   state.phase       = 'done';
