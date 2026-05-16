@@ -13,12 +13,12 @@
  */
 
 const path = require('path');
-const fs   = require('fs');
+const fs = require('fs');
 
 // ── Environment detection ─────────────────────────────────────────────────────
 
 const IS_VERCEL = !!process.env.BLOB_READ_WRITE_TOKEN;
-const DATA_DIR  = path.join(__dirname, 'data');
+const DATA_DIR = path.join(__dirname, 'data');
 
 // Lazy-load Vercel Blob SDK so local dev doesn't need the package
 let sdk = null;
@@ -84,10 +84,10 @@ async function writeJSON(filename, data) {
     // Delete stale versions first to avoid accumulation
     await deleteAllBlobs(filename);
     await put(filename, JSON.stringify(data, null, 2), {
-      access:          'private',
+      access: 'private',
       addRandomSuffix: false,
-      contentType:     'application/json',
-      token:           process.env.BLOB_READ_WRITE_TOKEN,
+      contentType: 'application/json',
+      token: process.env.BLOB_READ_WRITE_TOKEN,
     });
     return;
   }
@@ -95,7 +95,7 @@ async function writeJSON(filename, data) {
   // Local fs (atomic write)
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const filePath = path.join(DATA_DIR, filename);
-  const tmp      = filePath + '.tmp';
+  const tmp = filePath + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
   fs.renameSync(tmp, filePath);
 }
@@ -127,10 +127,10 @@ async function writeFile(filename, content, contentType = 'text/plain; charset=u
     const { put } = getSDK();
     await deleteAllBlobs(filename);
     await put(filename, content, {
-      access:          'private',
+      access: 'private',
       addRandomSuffix: false,
       contentType,
-      token:           process.env.BLOB_READ_WRITE_TOKEN,
+      token: process.env.BLOB_READ_WRITE_TOKEN,
     });
     return;
   }
@@ -186,7 +186,7 @@ async function listFiles(prefix = '') {
     // Deduplicate by pathname (there may be old versions)
     const seen = new Set();
     return blobs
-      .sort((a,b) => new Date(b.uploadedAt) - new Date(a.uploadedAt))
+      .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt))
       .filter(b => { if (seen.has(b.pathname)) return false; seen.add(b.pathname); return true; })
       .map(b => b.pathname);
   }
