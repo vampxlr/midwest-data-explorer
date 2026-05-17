@@ -944,12 +944,16 @@ app.get('/api/aggregate/plan', async (req, res) => {
 });
 
 // Fetches ONE page per call. Client loops until hasMore === false.
+// Blob is only written on the FINAL page (hasMore === false) to minimise write operations.
+// Intermediate pages return compact results in the response; the client sends them back
+// in prevCompact on subsequent calls so the server can commit everything at once.
 app.post('/api/aggregate/fetch-event', async (req, res) => {
   const {
     orgId = '8008', eventId, eventName, eventStatus,
     resultsCompleted: currentCompleted = 0,
     purgeFirst = false,
     page: requestedPage,   // undefined/null = first call; number = continuation
+    prevCompact = [],      // compact results from earlier pages (client carries them)
   } = req.body || {};
   if (!eventId) return res.status(400).json({ error: 'eventId required' });
 
@@ -958,7 +962,8 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
   try {
     const db = await store.load();
 
-    if (isFirstCall && purgeFirst) store.purgeEvent(db, String(eventId));
+    // Purge is disabled on Vercel — only allowed in local dev
+    if (isFirstCall && purgeFirst && process.env.VERCEL !== '1') store.purgeEvent(db, String(eventId));
 
     const storedEvent     = db.events[String(eventId)];
     const storedCompleted = storedEvent?.resultsCompleted ?? null;
@@ -970,7 +975,6 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
     }
 
     const PER_PAGE = 25;
-    // First call: incremental start page; continuation: use the caller's page number
     const fetchPage = isFirstCall
       ? ((!purgeFirst && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
           ? Math.max(1, Math.floor(storedCount / PER_PAGE))
@@ -999,25 +1003,37 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
     const batch   = r.registrationResults || [];
     const hasMore = batch.length >= PER_PAGE;
 
-    const evObj   = { id: String(eventId), name: eventName || r.name || String(eventId), status: eventStatus ?? 2 };
-    const compact = batch.map(row => {
+    const evObj     = { id: String(eventId), name: eventName || r.name || String(eventId), status: eventStatus ?? 2 };
+    const thisPage  = batch.map(row => {
       const parsed = extractAnswers(row.answers || []);
       return { id: row.id, eventId: String(eventId), eventName: evObj.name, created: row.created || null, completed: row.completed, ...parsed };
     });
+    const allCompact = [...(prevCompact || []), ...thisPage];
 
-    const added = store.upsertResults(db, String(eventId), evObj.name, compact);
-    store.upsertEventMeta(db, evObj, {
-      fetchedAt:        new Date().toISOString(),
-      resultCount:      storedCount + added,
-      resultsCompleted: r.resultsCompleted ?? currentCompleted,
-    });
-    await store.save(db);
-    cache.del('analytics_agg');
+    if (!hasMore) {
+      // Final page — commit everything to blob (1 write per event, not per page)
+      const added = store.upsertResults(db, String(eventId), evObj.name, allCompact);
+      store.upsertEventMeta(db, evObj, {
+        fetchedAt:        new Date().toISOString(),
+        resultCount:      storedCount + added,
+        resultsCompleted: r.resultsCompleted ?? currentCompleted,
+      });
+      await store.save(db);
+      cache.del('analytics_agg');
 
+      return res.json({
+        added, fetched: allCompact.length, skipped: false,
+        hasMore: false, nextPage: null,
+        page: fetchPage, eventId, eventName: evObj.name,
+      });
+    }
+
+    // Intermediate page — return this page's compact rows for the client to carry forward
     res.json({
-      added, fetched: batch.length, skipped: false,
-      hasMore, nextPage: hasMore ? fetchPage + 1 : null,
+      added: 0, fetched: allCompact.length, skipped: false,
+      hasMore: true, nextPage: fetchPage + 1,
       page: fetchPage, eventId, eventName: evObj.name,
+      compact: allCompact,  // client echoes this back as prevCompact on the next call
     });
   } catch (err) {
     res.status(500).json({ error: err.message, eventId });

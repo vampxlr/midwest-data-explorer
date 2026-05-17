@@ -89,6 +89,9 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
     return () => es.close();
   }, [isVercel]);
 
+  // On Vercel lock to smart mode — no full-sweep or purge (conserves blob ops)
+  useEffect(() => { if (isVercel === true) setMode('smart'); }, [isVercel]);
+
   useEffect(() => { if (recentRegs.length) recomputeSmart(); }, [recentRegs, storedMap, yearFilter, mode]);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [sseLog, cdLog]);
 
@@ -168,8 +171,10 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
       cdAddLog(`[${i+1}/${eventsToFetch.length}] "${ev.name}"`, 'info');
 
       let evAdded=0, evFetched=0, nextPage=undefined, pageNum=0, wasSkipped=false;
+      let prevCompact = []; // carries intermediate page results to avoid mid-event blob saves
       try {
-        // Loop through pages — each call fetches one page (no server timeout risk)
+        // Loop through pages — each call fetches one page (no server timeout risk).
+        // Blob is only written on the final page; intermediate results travel in prevCompact.
         do {
           if (cdAbort.current) break;
           const res = await api.aggregateFetchEvent({
@@ -180,6 +185,7 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
             resultsCompleted: ev.resultsCompleted || 0,
             purgeFirst:       purgeFirst && mode === 'selected',
             ...(nextPage != null ? { page: nextPage } : {}),
+            ...(prevCompact.length > 0 ? { prevCompact } : {}),
           });
 
           if (res.data.skipped) {
@@ -189,14 +195,19 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
             break;
           }
 
-          evAdded   += res.data.added   || 0;
-          evFetched += res.data.fetched  || 0;
+          evFetched = res.data.fetched || 0;
           pageNum++;
-          nextPage = res.data.hasMore ? res.data.nextPage : null;
 
           if (res.data.hasMore) {
-            cdAddLog(`  ↓ page ${pageNum} (p${res.data.page}): +${res.data.added} — more pages…`, 'info');
+            prevCompact = res.data.compact || [];
+            nextPage    = res.data.nextPage;
+            cdAddLog(`  ↓ page ${pageNum} (p${res.data.page}): ${prevCompact.length} accumulated — more pages…`, 'info');
             await new Promise(r => setTimeout(r, 400));
+          } else {
+            // Final page — blob was saved, get the real added count
+            evAdded  = res.data.added || 0;
+            nextPage = null;
+            prevCompact = [];
           }
         } while (nextPage != null);
 
@@ -305,22 +316,29 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
 
       {open && (
         <>
-          {/* Mode toggle */}
-          <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
-            {[{id:'smart',label:'⚡ Smart Update'},{id:'all',label:'All Events'},{id:'selected',label:'Custom Selection'}].map(m=>(
-              <button key={m.id} onClick={()=>setMode(m.id)} disabled={running}
-                style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:700,
-                  border:`1px solid ${mode===m.id?'#3b82f6':'#252838'}`,cursor:running?'not-allowed':'pointer',
-                  background:mode===m.id?'#1e3a5f':'#1e2235',color:mode===m.id?'#60a5fa':'#64748b'}}>
-                {m.label}
-              </button>
-            ))}
-          </div>
+          {/* Mode toggle — on Vercel only Smart Update is allowed */}
+          {isVercel === true ? (
+            <div style={{background:'#0d1520',border:'1px solid #1e3a5f',borderRadius:8,padding:'8px 12px',marginBottom:14,display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:11,color:'#60a5fa',fontWeight:700}}>⚡ Smart Update only</span>
+              <span style={{fontSize:11,color:'#334155'}}>— purge and full-sweep are disabled on Vercel to conserve blob operations. Seed from local to refresh all data.</span>
+            </div>
+          ) : (
+            <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+              {[{id:'smart',label:'⚡ Smart Update'},{id:'all',label:'All Events'},{id:'selected',label:'Custom Selection'}].map(m=>(
+                <button key={m.id} onClick={()=>setMode(m.id)} disabled={running}
+                  style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:700,
+                    border:`1px solid ${mode===m.id?'#3b82f6':'#252838'}`,cursor:running?'not-allowed':'pointer',
+                    background:mode===m.id?'#1e3a5f':'#1e2235',color:mode===m.id?'#60a5fa':'#64748b'}}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Smart info */}
           {mode==='smart' && (
             <div style={{background:'#0d1520',border:'1px solid #1e3a5f',borderRadius:10,padding:'12px 14px',marginBottom:14}}>
-              <p style={{margin:'0 0 8px',fontSize:12,color:'#60a5fa',fontWeight:600}}>⚡ Only fetches events with new registrations since last run</p>
+              {isVercel !== true && <p style={{margin:'0 0 8px',fontSize:12,color:'#60a5fa',fontWeight:600}}>⚡ Only fetches events with new registrations since last run</p>}
               <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
                 <span style={{fontSize:11,color:'#64748b',fontWeight:600}}>Year filter:</span>
                 {[...years,''].map(y=>(
@@ -346,8 +364,8 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
             </div>
           )}
 
-          {/* All Events year filter */}
-          {mode==='all' && (
+          {/* All Events year filter — local dev only */}
+          {mode==='all' && isVercel !== true && (
             <div style={{background:'#0d0f17',border:'1px solid #252838',borderRadius:10,padding:'12px 14px',marginBottom:14}}>
               <p style={{margin:'0 0 8px',fontSize:11,color:'#94a3b8',fontWeight:600}}>Year filter</p>
               <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
@@ -362,8 +380,8 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
             </div>
           )}
 
-          {/* Custom selection */}
-          {mode==='selected' && (
+          {/* Custom selection — local dev only */}
+          {mode==='selected' && isVercel !== true && (
             <div style={{background:'#0d0f17',border:'1px solid #1e2235',borderRadius:10,padding:'12px 14px',marginBottom:14}}>
               <div style={{display:'flex',gap:10,alignItems:'flex-end',flexWrap:'wrap',marginBottom:10}}>
                 <div style={{flex:1,minWidth:200}}>
@@ -393,28 +411,31 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
 
           {/* Controls */}
           <div style={{display:'flex',gap:12,alignItems:'center',marginBottom:12,flexWrap:'wrap'}}>
-            <div>
-              <label style={{fontSize:11,color:'#64748b',display:'block',marginBottom:4}}>Delay between fetches</label>
-              <select value={delay} onChange={e=>setDelay(Number(e.target.value))} disabled={running}
-                style={{background:'#1e2235',border:'1px solid #2a2d3e',color:'#e2e8f0',borderRadius:6,padding:'6px 10px',fontSize:13}}>
-                <option value={800}>800ms</option>
-                <option value={1200}>1.2s (recommended)</option>
-                <option value={2000}>2s</option>
-                <option value={3000}>3s</option>
-              </select>
-            </div>
-            <div style={{marginTop:18}}>
+            {isVercel !== true && (
+              <div>
+                <label style={{fontSize:11,color:'#64748b',display:'block',marginBottom:4}}>Delay between fetches</label>
+                <select value={delay} onChange={e=>setDelay(Number(e.target.value))} disabled={running}
+                  style={{background:'#1e2235',border:'1px solid #2a2d3e',color:'#e2e8f0',borderRadius:6,padding:'6px 10px',fontSize:13}}>
+                  <option value={800}>800ms</option>
+                  <option value={1200}>1.2s (recommended)</option>
+                  <option value={2000}>2s</option>
+                  <option value={3000}>3s</option>
+                </select>
+              </div>
+            )}
+            <div style={{marginTop: isVercel !== true ? 18 : 0}}>
               {!running?(
                 <button className="btn-primary" onClick={startAgg}
-                  disabled={(mode==='selected'&&selected.length===0)||(mode==='smart'&&smartNeeds===0)}
-                  style={{opacity:((mode==='selected'&&selected.length===0)||(mode==='smart'&&smartNeeds===0))?0.4:1}}>
+                  disabled={mode==='smart' && smartNeeds===0}
+                  style={{opacity:(mode==='smart' && smartNeeds===0)?0.4:1}}>
                   {btnLabel()}
                 </button>
               ):(
                 <button disabled className="btn-primary" style={{background:'#1e3a5f',cursor:'not-allowed'}}>⏳ Running…</button>
               )}
-              {isVercel && running && (
-                <button onClick={()=>{cdAbort.current=true;}} style={{marginLeft:8,padding:'8px 14px',background:'#2b0d0d',color:'#f87171',border:'none',borderRadius:6,cursor:'pointer',fontSize:12,fontWeight:700}}>⏹ Stop</button>
+              {running && (
+                <button onClick={()=>{cdAbort.current=true; if(!isVercel && aggregator) aggregator?.stop?.();}}
+                  style={{marginLeft:8,padding:'8px 14px',background:'#2b0d0d',color:'#f87171',border:'none',borderRadius:6,cursor:'pointer',fontSize:12,fontWeight:700}}>⏹ Stop</button>
               )}
             </div>
           </div>
