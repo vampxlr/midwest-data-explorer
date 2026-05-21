@@ -166,8 +166,53 @@ function pickAnswerAll(answers, ...keys) {
     .filter(Boolean);
 }
 
-// Used by the client-driven fetch-event endpoint to parse form answers into
-// the same shape that the aggregator stores: { gradYears, gender, city, state, zip }
+/**
+ * Groups raw answers by "Player N" / "Member N" number to produce per-player records.
+ * Returns [{name, email, phone, gradYear}, ...] sorted by player number.
+ * Returns [] if the form doesn't use numbered player fields.
+ */
+function extractPlayers(answers) {
+  const ans = answers || [];
+  const groups = new Map(); // "1","2",... → {firstName, lastName, name, email, phone, gradYear}
+
+  for (const a of ans) {
+    const fieldName = a.name || '';
+    const val = resolveAnswerVal(a);
+    if (!val) continue;
+    const lo = fieldName.toLowerCase();
+
+    const m = fieldName.match(/(?:player|member|participant|athlete)\s*#?\s*(\d+)/i);
+    if (!m) continue;
+    const num = m[1];
+    if (!groups.has(num)) groups.set(num, {});
+    const g = groups.get(num);
+
+    if (/first[\s_-]?name|fname/i.test(lo) && !/last/i.test(lo))      g.firstName = val;
+    else if (/last[\s_-]?name|lname/i.test(lo))                        g.lastName  = val;
+    else if (/\bname\b/i.test(lo) && !/first|last|team|league/i.test(lo)) {
+      if (!g.firstName) g.name = val;
+    } else if (/email|e-mail/i.test(lo) && val.includes('@'))          g.email    = val.toLowerCase().trim();
+    else if (/phone|cell|mobile|telephone/i.test(lo)) {
+      const d = String(val).replace(/\D/g, '').slice(-10);
+      if (d.length >= 10) g.phone = d;
+    } else if (/grad(uation)?\s*year/i.test(lo)) {
+      const y = String(val).trim();
+      if (/^\d{4}$/.test(y)) g.gradYear = y;
+    }
+  }
+
+  return [...groups.entries()]
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, g]) => ({
+      name:     g.name || [g.firstName, g.lastName].filter(Boolean).join(' ') || null,
+      email:    g.email    || null,
+      phone:    g.phone    || null,
+      gradYear: g.gradYear || null,
+    }))
+    .filter(p => p.email || p.name || p.phone);
+}
+
+// Parses GraphQL form answers into the shape stored per result.
 function extractAnswers(answers) {
   const ans = answers || [];
   const gradYears = pickAnswerAll(ans, 'graduation year', 'grad year')
@@ -179,16 +224,36 @@ function extractAnswers(answers) {
     if (div) { const y = String(div).replace(/\D/g, ''); if (y.length === 4) gradYears.push(y); }
   }
 
-  const city  = pickAnswer(ans, 'city');
-  const state = pickAnswer(ans, 'state/province', 'state');
+  const city   = pickAnswer(ans, 'city');
+  const state  = pickAnswer(ans, 'state/province', 'state');
   const zipRaw = pickAnswer(ans, 'zip', 'postal');
+
+  // Collect ALL emails and phones — league forms have one per player on the team
+  const emails = [...new Set(
+    pickAnswerAll(ans, 'email', 'e-mail', 'email address')
+      .map(v => String(v).trim().toLowerCase())
+      .filter(v => v.includes('@'))
+  )];
+  const phones = [...new Set(
+    pickAnswerAll(ans, 'phone', 'cell', 'mobile', 'contact number', 'telephone')
+      .map(v => String(v).replace(/\D/g, '').slice(-10))
+      .filter(v => v.length >= 10)
+  )];
+
+  const players = extractPlayers(ans);
 
   return {
     gradYears,
-    gender: pickAnswer(ans, 'gender of team', 'gender') || null,
-    city:   city  ? city.trim()  : null,
-    state:  state ? state.trim() : null,
-    zip:    zipRaw ? String(zipRaw).trim().slice(0, 5) : null,
+    gender:  pickAnswer(ans, 'gender of team', 'gender') || null,
+    city:    city   ? city.trim()  : null,
+    state:   state  ? state.trim() : null,
+    zip:     zipRaw ? String(zipRaw).trim().slice(0, 5) : null,
+    email:   emails[0] || null,
+    emails,
+    phone:   phones[0] || null,
+    phones,
+    grade:   pickAnswer(ans, 'grade', 'current grade', 'school grade', 'grade level')?.trim() || null,
+    players, // per-player [{name, email, phone, gradYear}] — populated when form uses "Player N" fields
   };
 }
 
@@ -952,6 +1017,7 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
     orgId = '8008', eventId, eventName, eventStatus,
     resultsCompleted: currentCompleted = 0,
     purgeFirst = false,
+    backfill  = false,     // re-fetch all pages and merge new fields into existing records (no purge)
     page: requestedPage,   // undefined/null = first call; number = continuation
     prevCompact = [],      // compact results from earlier pages (client carries them)
   } = req.body || {};
@@ -969,14 +1035,14 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
     const storedCompleted = storedEvent?.resultsCompleted ?? null;
     const storedCount     = storedEvent?.resultCount     || 0;
 
-    // Skip only on the first call when count hasn't changed
-    if (isFirstCall && !purgeFirst && storedCompleted !== null && currentCompleted === storedCompleted) {
+    // Skip when count unchanged — but never skip in backfill or purge mode
+    if (isFirstCall && !purgeFirst && !backfill && storedCompleted !== null && currentCompleted === storedCompleted) {
       return res.json({ added: 0, skipped: true, reason: 'count_unchanged', eventId });
     }
 
     const PER_PAGE = 25;
     const fetchPage = isFirstCall
-      ? ((!purgeFirst && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
+      ? ((!purgeFirst && !backfill && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
           ? Math.max(1, Math.floor(storedCount / PER_PAGE))
           : 1)
       : requestedPage;
@@ -986,6 +1052,7 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
         id name resultsCompleted
         registrationResults(page:$page,perPage:$perPage){
           id profileId completed status created
+          totalPaid amountDue itemTotal
           answers{
             name
             ...on StringRegistrationResultAnswer{strValue:value}
@@ -1006,13 +1073,14 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
     const evObj     = { id: String(eventId), name: eventName || r.name || String(eventId), status: eventStatus ?? 2 };
     const thisPage  = batch.map(row => {
       const parsed = extractAnswers(row.answers || []);
-      return { id: row.id, eventId: String(eventId), eventName: evObj.name, created: row.created || null, completed: row.completed, ...parsed };
+      const revenue = row.totalPaid ?? row.itemTotal ?? row.amountDue ?? null;
+      return { id: row.id, profileId: row.profileId || null, eventId: String(eventId), eventName: evObj.name, created: row.created || null, completed: row.completed, revenue, ...parsed };
     });
     const allCompact = [...(prevCompact || []), ...thisPage];
 
     if (!hasMore) {
       // Final page — commit everything to blob (1 write per event, not per page)
-      const added = store.upsertResults(db, String(eventId), evObj.name, allCompact);
+      const added = store.upsertResults(db, String(eventId), evObj.name, allCompact, { merge: backfill });
       store.upsertEventMeta(db, evObj, {
         fetchedAt:        new Date().toISOString(),
         resultCount:      storedCount + added,
@@ -1022,7 +1090,7 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
       cache.del('analytics_agg');
 
       return res.json({
-        added, fetched: allCompact.length, skipped: false,
+        added, fetched: allCompact.length, skipped: false, backfilled: backfill,
         hasMore: false, nextPage: null,
         page: fetchPage, eventId, eventName: evObj.name,
       });
@@ -1061,6 +1129,458 @@ app.get('/api/reports/grad-years', async (req, res) => {
   const db = await store.load();
   const gradYears = store.gradYearStats(db, { fromDate, toDate, eventId });
   res.json({ gradYears, totalResults: db.results.length });
+});
+
+// ── Reports: league participant overlap ───────────────────────────────────────
+// Each result is indexed by ALL its identifiers (profileId, email, phone).
+// When matching a B result, all of its identifiers are tried against the A index,
+// so a match fires even when the two leagues stored different subsets for the same person.
+
+app.get('/api/reports/league-overlap', async (req, res) => {
+  const { eventIdA, eventIdB } = req.query;
+  if (!eventIdA || !eventIdB) return res.status(400).json({ error: 'eventIdA and eventIdB required' });
+
+  const db = await store.load();
+  const resultsA = db.results.filter(r => String(r.eventId) === String(eventIdA));
+  const resultsB = db.results.filter(r => String(r.eventId) === String(eventIdB));
+
+  // All matchable identifiers — uses every email/phone from multi-player league forms
+  function getKeys(r) {
+    const keys = [];
+    if (r.profileId) keys.push(`pid:${String(r.profileId)}`);
+    const allEmails = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+    for (const e of allEmails) { if (e && e.includes('@')) keys.push(`em:${e.toLowerCase().trim()}`); }
+    const allPhones = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+    for (const p of allPhones) { const d = String(p).replace(/\D/g, ''); if (d.length >= 10) keys.push(`ph:${d.slice(-10)}`); }
+    return keys;
+  }
+
+  // Build multi-key index for League A: identifier → result
+  // Every identifier gets its own entry so any of them can trigger a match.
+  const indexA    = new Map();
+  let matchableA  = 0;
+  for (const r of resultsA) {
+    const keys = getKeys(r);
+    if (keys.length) matchableA++;
+    for (const k of keys) {
+      if (!indexA.has(k)) indexA.set(k, r);
+    }
+  }
+
+  // Walk every League B result and try each of its identifiers against indexA.
+  // Deduplicate by A-side result id so a person who registered twice in B only
+  // appears once in "returning" (same as scatter's dedup logic).
+  const returning   = [];
+  const newUsers    = [];
+  const matchedAIds = new Set(); // source result ids already matched
+  let matchableB    = 0;
+
+  for (const rB of resultsB) {
+    const keysB = getKeys(rB);
+    if (keysB.length) matchableB++;
+    let pairedA = null;
+    for (const k of keysB) {
+      if (indexA.has(k)) { pairedA = indexA.get(k); break; }
+    }
+    if (pairedA) {
+      // Only add the first B-result that matches each A-result (dedup duplicates)
+      if (!matchedAIds.has(pairedA.id)) {
+        returning.push({ past: pairedA, current: rB });
+      }
+      matchedAIds.add(pairedA.id);
+    } else {
+      newUsers.push(rB);
+    }
+  }
+
+  // Lapsed = everyone in A who was not matched by any B result
+  const lapsed = resultsA.filter(r => !matchedAIds.has(r.id));
+
+  const hasContactData =
+    resultsA.some(r => r.email || r.phone) ||
+    resultsB.some(r => r.email || r.phone);
+
+  res.json({
+    eventA: db.events[String(eventIdA)] || { id: eventIdA, name: 'League A' },
+    eventB: db.events[String(eventIdB)] || { id: eventIdB, name: 'League B' },
+    newUsers, returning, lapsed,
+    stats: {
+      totalA: resultsA.length, totalB: resultsB.length,
+      matchable: { A: matchableA, B: matchableB },
+      new: newUsers.length, returning: returning.length, lapsed: lapsed.length,
+    },
+    hasContactData,
+  });
+});
+
+// ── League contact export — all unique emails/phones for one league ────────────
+
+app.get('/api/reports/league-emails', async (req, res) => {
+  const { eventId } = req.query;
+  if (!eventId) return res.status(400).json({ error: 'eventId required' });
+
+  const db = await store.load();
+  const results = db.results.filter(r => String(r.eventId) === String(eventId));
+
+  // Collect ALL emails and phones across every registration in the league
+  const emailSet = new Set();
+  const phoneSet = new Set();
+  const contacts = []; // one row per registration result
+
+  for (const r of results) {
+    const allEmails = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+    const allPhones = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+    for (const e of allEmails) if (e) emailSet.add(e.toLowerCase().trim());
+    for (const p of allPhones) if (p) phoneSet.add(String(p).replace(/\D/g,'').slice(-10));
+    contacts.push({
+      id: r.id, completed: r.completed, created: r.created,
+      emails: allEmails, phones: allPhones,
+      gradYears: r.gradYears || [], gender: r.gender || null,
+      grade: r.grade || null, city: r.city || null, state: r.state || null,
+    });
+  }
+
+  res.json({
+    eventId,
+    eventName: db.events[String(eventId)]?.name || String(eventId),
+    totalRegistrations: results.length,
+    uniqueEmails: [...emailSet],
+    uniquePhones: [...phoneSet],
+    contacts,
+  });
+});
+
+// ── Form field inspector — shows all answer field names for a registration ─────
+// Use this to understand how many email/phone fields a league form has.
+
+app.get('/api/reports/form-fields', async (req, res) => {
+  const { eventId, orgId = '8008' } = req.query;
+  if (!eventId) return res.status(400).json({ error: 'eventId required' });
+
+  const Q = `query($regId:ID!,$orgId:Int!){
+    registration(id:$regId,organizationId:$orgId){
+      id name
+      registrationResults(page:1,perPage:3){
+        id
+        answers{
+          name
+          ...on StringRegistrationResultAnswer{strValue:value}
+          ...on NumberRegistrationResultAnswer{numValue:value}
+          ...on ArrayRegistrationResultAnswer{arrValue:value}
+        }
+      }
+    }
+  }`;
+
+  try {
+    const d = await graphql(Q, { regId: String(eventId), orgId: parseInt(orgId) });
+    const results = d?.data?.registration?.registrationResults || [];
+
+    // Collect all field names + a sample value (email/phone fields starred)
+    const fieldMap = {};
+    for (const r of results) {
+      for (const a of (r.answers || [])) {
+        const val = a.strValue ?? a.numValue ?? (Array.isArray(a.arrValue) ? a.arrValue[0] : a.arrValue) ?? '';
+        const n   = a.name || '';
+        const lo  = n.toLowerCase();
+        const isEmail = /email|e-mail/.test(lo);
+        const isPhone = /phone|cell|mobile|telephone/.test(lo);
+        if (!fieldMap[n]) fieldMap[n] = { name: n, isEmail, isPhone, sample: String(val).slice(0, 40), count: 0 };
+        fieldMap[n].count++;
+      }
+    }
+
+    const fields = Object.values(fieldMap).sort((a, b) => a.name.localeCompare(b.name));
+    const emailFields = fields.filter(f => f.isEmail);
+    const phoneFields = fields.filter(f => f.isPhone);
+
+    res.json({
+      eventId,
+      registrationName: d?.data?.registration?.name,
+      sampleCount: results.length,
+      totalFields: fields.length,
+      emailFields,
+      phoneFields,
+      allFields: fields,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Reports: league scatter — "where did they go?" ────────────────────────────
+// Given a source league, finds every destination league that any of its participants
+// also joined, and lists participants who didn't sign up anywhere else.
+
+app.get('/api/reports/league-scatter', async (req, res) => {
+  const { sourceEventId, year } = req.query;
+  if (!sourceEventId) return res.status(400).json({ error: 'sourceEventId required' });
+
+  const db = await store.load();
+  const sourceResults = db.results.filter(r => String(r.eventId) === String(sourceEventId));
+
+  function getKeys(r) {
+    const keys = [];
+    if (r.profileId) keys.push(`pid:${String(r.profileId)}`);
+    const allEmails = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+    for (const e of allEmails) { if (e && e.includes('@')) keys.push(`em:${e.toLowerCase().trim()}`); }
+    const allPhones = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+    for (const p of allPhones) { const d = String(p).replace(/\D/g, ''); if (d.length >= 10) keys.push(`ph:${d.slice(-10)}`); }
+    return keys;
+  }
+
+  // Index all source participants by every identifier
+  const sourceIndex = new Map(); // identifier key → source result
+  let matchable = 0;
+  for (const r of sourceResults) {
+    const keys = getKeys(r);
+    if (keys.length) matchable++;
+    for (const k of keys) { if (!sourceIndex.has(k)) sourceIndex.set(k, r); }
+  }
+
+  // Resolve the display year for an event — prefers the year in the event name
+  // (e.g. "2026 Maple Grove…") because a league that opens in Dec 2025 for a
+  // 2026 season would otherwise be misclassified by its open/close dates.
+  function eventDisplayYear(eventId, fallbackName) {
+    const ev = db.events[String(eventId)];
+    const nameStr = ev?.name || fallbackName || '';
+    const m = nameStr.match(/\b(20\d{2})\b/);
+    if (m) return m[1];
+    return (ev?.close || ev?.open || '').slice(0, 4);
+  }
+
+  // Walk all other leagues' results (optionally filtered by year)
+  const otherResults = db.results.filter(r => {
+    if (String(r.eventId) === String(sourceEventId)) return false;
+    if (year) {
+      if (eventDisplayYear(r.eventId, r.eventName) !== String(year)) return false;
+    }
+    return true;
+  });
+
+  // Bucket by destination event; each source participant counted at most once per destination
+  const bucketMap     = new Map(); // eventId → { eventId, eventName, participants[] }
+  const matchedSrcIds = new Set(); // source result ids that found at least one destination
+
+  for (const rDest of otherResults) {
+    const keys = getKeys(rDest);
+    let srcResult = null;
+    for (const k of keys) { if (sourceIndex.has(k)) { srcResult = sourceIndex.get(k); break; } }
+    if (!srcResult) continue;
+
+    if (!bucketMap.has(String(rDest.eventId))) {
+      const ev = db.events[String(rDest.eventId)] || {};
+      bucketMap.set(String(rDest.eventId), {
+        eventId:   String(rDest.eventId),
+        eventName: ev.name || rDest.eventName || String(rDest.eventId),
+        participants: [],
+      });
+    }
+    const bucket = bucketMap.get(String(rDest.eventId));
+    // One entry per unique source participant per destination
+    if (!bucket.participants.some(p => p.sourceId === srcResult.id)) {
+      const mergedEmails = [...new Set([...(rDest.emails||[]), ...(srcResult.emails||[]), rDest.email, srcResult.email].filter(Boolean))];
+      const mergedPhones = [...new Set([...(rDest.phones||[]), ...(srcResult.phones||[]), rDest.phone, srcResult.phone].filter(Boolean))];
+      bucket.participants.push({
+        sourceId:      srcResult.id,
+        email:         mergedEmails[0] || null,
+        emails:        mergedEmails,
+        phone:         mergedPhones[0] || null,
+        phones:        mergedPhones,
+        gradYearPast:  srcResult.gradYears?.[0] || null,
+        gradYearNow:   rDest.gradYears?.[0]    || null,
+        grade:         rDest.grade  || srcResult.grade  || null,
+        gender:        rDest.gender || srcResult.gender || null,
+        city:          rDest.city   || srcResult.city   || null,
+        state:         rDest.state  || srcResult.state  || null,
+      });
+      matchedSrcIds.add(srcResult.id);
+    }
+  }
+
+  const buckets = [...bucketMap.values()]
+    .map(b => ({ ...b, count: b.participants.length }))
+    .sort((a, b) => b.count - a.count);
+
+  const nowhere = sourceResults
+    .filter(r => !matchedSrcIds.has(r.id))
+    .map(r => ({
+      sourceId: r.id,
+      email:    r.email  || null,
+      phone:    r.phone  || null,
+      gradYear: r.gradYears?.[0] || null,
+      grade:    r.grade  || null,
+      gender:   r.gender || null,
+      city:     r.city   || null,
+      state:    r.state  || null,
+    }));
+
+  // foundUnique = distinct source participants who signed up in at least one destination.
+  // totalCrossRegistrations = sum across buckets (one person in 3 leagues counts 3 times).
+  const foundUnique             = matchedSrcIds.size;
+  const totalCrossRegistrations = buckets.reduce((s, b) => s + b.count, 0);
+
+  res.json({
+    source: {
+      id:        sourceEventId,
+      name:      db.events[String(sourceEventId)]?.name || 'Source League',
+      total:     sourceResults.length,
+      matchable,
+    },
+    buckets,
+    nowhere: { count: nowhere.length, participants: nowhere },
+    year: year || null,
+    stats: {
+      foundUnique,             // unique people who signed up somewhere (foundUnique + nowhere = matchable)
+      totalCrossRegistrations, // total registrations across all destination leagues (can exceed foundUnique)
+      nowhere: nowhere.length,
+    },
+  });
+});
+
+// ── Reports: league scatter — individual participants ─────────────────────────
+// Unlike the primary scatter (which matches registration-to-registration),
+// this endpoint expands ALL emails/phones from every source registration and
+// treats each unique contact as one individual participant.  It then searches
+// the entire emails[] / phones[] arrays of every destination registration,
+// so a player who appears as a non-primary team member is still matched.
+
+app.get('/api/reports/league-scatter-individuals', async (req, res) => {
+  const { sourceEventId, year } = req.query;
+  if (!sourceEventId) return res.status(400).json({ error: 'sourceEventId required' });
+
+  const db = await store.load();
+  const sourceResults = db.results.filter(r => String(r.eventId) === String(sourceEventId));
+
+  // Individual = unique email only.  Phones stored alongside the email for display,
+  // but NOT counted as extra individuals — prevents doubling for players with both.
+  const individualMap = new Map();    // em:key  → { email, phones: string[] }
+  const phoneToEmailKey = new Map();  // ph:key  → em:key  (for cross-ref matching only)
+
+  for (const r of sourceResults) {
+    // Prefer players[] (structured per-player data set by backfill) over flat email/phone arrays
+    const players = r.players?.length ? r.players : null;
+
+    if (players) {
+      // Best case: each player has their own {name, email, phone} — perfectly paired
+      for (const p of players) {
+        if (!p.email) continue;
+        const key = `em:${p.email.toLowerCase().trim()}`;
+        if (!individualMap.has(key)) individualMap.set(key, { name: p.name||null, email: p.email, phones: p.phone ? [p.phone] : [] });
+        else if (p.phone) {
+          const entry = individualMap.get(key);
+          if (!entry.phones.includes(p.phone)) entry.phones.push(p.phone);
+          if (!entry.name && p.name) entry.name = p.name;
+        }
+        if (p.phone) {
+          const pk = `ph:${p.phone}`;
+          if (!phoneToEmailKey.has(pk)) phoneToEmailKey.set(pk, key);
+        }
+      }
+    } else {
+      // Fallback: flat emails[]/phones[] arrays — pair by position
+      const allEmails  = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+      const allPhones  = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+      const phonesClean = allPhones.map(p => String(p).replace(/\D/g, '').slice(-10)).filter(d => d.length >= 10);
+      const emailKeys  = [];
+      allEmails.forEach((e, idx) => {
+        const key = `em:${e.toLowerCase().trim()}`;
+        const pairedPhone = phonesClean[idx] || null;
+        if (!individualMap.has(key)) individualMap.set(key, { name: null, email: e, phones: pairedPhone ? [pairedPhone] : [] });
+        else if (pairedPhone) {
+          const entry = individualMap.get(key);
+          if (!entry.phones.includes(pairedPhone)) entry.phones.push(pairedPhone);
+        }
+        emailKeys.push(key);
+      });
+      if (emailKeys.length > 0) {
+        for (const d of phonesClean) {
+          const pk = `ph:${d}`;
+          if (!phoneToEmailKey.has(pk)) phoneToEmailKey.set(pk, emailKeys[0]);
+        }
+      }
+    }
+  }
+
+  function eventDisplayYear(eventId, fallbackName) {
+    const ev = db.events[String(eventId)];
+    const nameStr = ev?.name || fallbackName || '';
+    const m = nameStr.match(/\b(20\d{2})\b/);
+    if (m) return m[1];
+    return (ev?.close || ev?.open || '').slice(0, 4);
+  }
+
+  const otherResults = db.results.filter(r => {
+    if (String(r.eventId) === String(sourceEventId)) return false;
+    if (year && eventDisplayYear(r.eventId, r.eventName) !== String(year)) return false;
+    return true;
+  });
+
+  const bucketMap = new Map();
+  const foundKeys = new Set();
+
+  for (const rDest of otherResults) {
+    const allEmails = rDest.emails?.length ? rDest.emails : (rDest.email ? [rDest.email] : []);
+    const allPhones = rDest.phones?.length ? rDest.phones : (rDest.phone ? [rDest.phone] : []);
+
+    const matched = new Set();
+    for (const e of allEmails) {
+      const key = `em:${e.toLowerCase().trim()}`;
+      if (individualMap.has(key)) matched.add(key);
+    }
+    for (const p of allPhones) {
+      const d = String(p).replace(/\D/g, '').slice(-10);
+      if (d.length >= 10) {
+        const pk = `ph:${d}`;
+        // Resolve phone → email identity (doesn't create new individuals, just finds existing ones)
+        const emailKey = phoneToEmailKey.get(pk);
+        if (emailKey && individualMap.has(emailKey)) matched.add(emailKey);
+      }
+    }
+
+    for (const key of matched) {
+      foundKeys.add(key);
+      if (!bucketMap.has(String(rDest.eventId))) {
+        const ev = db.events[String(rDest.eventId)] || {};
+        bucketMap.set(String(rDest.eventId), {
+          eventId: String(rDest.eventId),
+          eventName: ev.name || rDest.eventName,
+          individuals: new Set(),
+        });
+      }
+      bucketMap.get(String(rDest.eventId)).individuals.add(key);
+    }
+  }
+
+  const buckets = [...bucketMap.values()]
+    .map(b => ({
+      eventId:      b.eventId,
+      eventName:    b.eventName,
+      count:        b.individuals.size,
+      participants: [...b.individuals]
+        .map(k => individualMap.get(k))
+        .filter(Boolean)
+        .map(v => ({ name: v.name||null, email: v.email, phones: v.phones })),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const nowhereList = [...individualMap.entries()]
+    .filter(([k]) => !foundKeys.has(k))
+    .map(([, v]) => ({ name: v.name||null, email: v.email, phones: v.phones }))
+    .filter(v => v.email);
+
+  res.json({
+    source: {
+      id:   sourceEventId,
+      name: db.events[String(sourceEventId)]?.name || 'Source League',
+      totalRegistrations: sourceResults.length,
+      totalIndividuals:   individualMap.size,
+    },
+    buckets,
+    nowhere: { count: nowhereList.length, list: nowhereList },
+    stats: { found: foundKeys.size, nowhere: nowhereList.length, total: individualMap.size },
+    year: year || null,
+  });
 });
 
 // ── Reports: per-event summary ────────────────────────────────────────────────
@@ -1143,7 +1663,7 @@ app.get('/api/reports/results', async (req, res) => {
 
 app.get('/api/reports/daily-activity', async (req, res) => {
   const date = req.query.date || store.todayCDT();
-  const db   = store.load();
+  const db   = await store.load();
 
   // Build a day→count map and a per-league breakdown for the requested date
   const dayTotals  = {};   // YYYY-MM-DD → total registrations (all events)
@@ -1265,6 +1785,229 @@ app.get('/api/reports/yoy', async (req, res) => {
     .sort((a, b) => b.total - a.total);
 
   res.json({ groups: result, allYears });
+});
+
+// ── YoY day-by-day pace — cumulative registrations by day-of-year ─────────────
+
+app.get('/api/reports/yoy-daily', async (req, res) => {
+  const db = await store.load();
+
+  // Classify an event by its name into league / camp / tournament
+  function classifyEvent(name = '') {
+    const n = name.toLowerCase();
+    if (/\btournament\b|\btourney\b/.test(n)) return 'tournament';
+    if (/\bcamp\b|\bclinic\b|\bshooting\b|\bscoring\b|\bskills?\b|\btraining\b|\bacademy\b|\bdevelopment\b/.test(n)) return 'camp';
+    return 'league';
+  }
+
+  // Season year — name first (more reliable for early-opening leagues)
+  function seasonYear(eventId, eventName) {
+    const ev = db.events[String(eventId)];
+    const m = (ev?.name || eventName || '').match(/\b(20\d{2})\b/);
+    if (m) return m[1];
+    return (ev?.close || ev?.open || '').slice(0, 4) || 'unknown';
+  }
+
+  // Day-of-year (1-based) from a YYYY-MM-DD date string
+  function dayOfYear(dateStr) {
+    if (!dateStr || dateStr.length < 10) return null;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const start = Date.UTC(y, 0, 1);
+    const cur   = Date.UTC(y, m - 1, d);
+    return Math.floor((cur - start) / 86400000) + 1;
+  }
+
+  // Reference labels: Jan 1 = day 1, using 2025 (non-leap) as display reference
+  function dayLabel(n) {
+    const d = new Date(Date.UTC(2025, 0, 1) + (n - 1) * 86400000);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  }
+
+  const TYPES = ['league', 'camp', 'tournament'];
+
+  // Accumulate: year → type → dayOfYear → count
+  const acc = {}; // year → { league: {}, camp: {}, tournament: {} }
+
+  for (const r of db.results) {
+    if (!r.completed) continue;
+    const date = store.toCDTDate(r.created);
+    if (!date || date.length < 10) continue;
+    const year = seasonYear(r.eventId, r.eventName);
+    if (!/^20\d{2}$/.test(year)) continue;
+    const type = classifyEvent(r.eventName || '');
+    const day  = dayOfYear(date);
+    if (!day) continue;
+
+    if (!acc[year]) acc[year] = { league: {}, camp: {}, tournament: {} };
+    acc[year][type][day] = (acc[year][type][day] || 0) + 1;
+  }
+
+  // Build per-year cumulative arrays
+  const byYear = {};
+  for (const [year, types] of Object.entries(acc)) {
+    // Combined across all types
+    const combined = {};
+    for (const t of TYPES) {
+      for (const [d, n] of Object.entries(types[t])) {
+        combined[d] = (combined[d] || 0) + n;
+      }
+    }
+    const maxDay = Math.max(...Object.keys(combined).map(Number), 0);
+
+    let cumAll = 0, cumLeague = 0, cumCamp = 0, cumTournament = 0;
+    const cumByDay = [];
+    for (let day = 1; day <= maxDay; day++) {
+      const all  = combined[day]        || 0;
+      const lg   = types.league[day]    || 0;
+      const cp   = types.camp[day]      || 0;
+      const tn   = types.tournament[day]|| 0;
+      cumAll        += all;
+      cumLeague     += lg;
+      cumCamp       += cp;
+      cumTournament += tn;
+      if (all > 0 || cumAll > 0) {
+        cumByDay.push({
+          day, date: dayLabel(day),
+          daily: all, dailyLeague: lg, dailyCamp: cp, dailyTournament: tn,
+          cum: cumAll, cumLeague, cumCamp, cumTournament,
+        });
+      }
+    }
+
+    byYear[year] = {
+      totals: { all: cumAll, league: cumLeague, camp: cumCamp, tournament: cumTournament },
+      cumByDay,
+    };
+  }
+
+  const years = Object.keys(byYear).sort();
+  res.json({ byYear, years });
+});
+
+// ── YoY retention: "how many 2025 [type] participants came back in 2026?" ──────
+// Source = ALL events of a given year+type, deduplicated across events.
+// Target = ALL events of a given year (or type).
+
+app.get('/api/reports/yoy-retention', async (req, res) => {
+  const { sourceYear, targetYear, sourceType = 'all', targetType = 'all' } = req.query;
+  if (!sourceYear || !targetYear) return res.status(400).json({ error: 'sourceYear and targetYear required' });
+
+  const db = await store.load();
+
+  function classifyEvent(name = '') {
+    const n = name.toLowerCase();
+    if (/\btournament\b|\btourney\b/.test(n)) return 'tournament';
+    if (/\bcamp\b|\bclinic\b|\bshooting\b|\bscoring\b|\bskills?\b|\btraining\b|\bacademy\b|\bdevelopment\b/.test(n)) return 'camp';
+    return 'league';
+  }
+  function eventYear(eventId, eventName) {
+    const ev = db.events[String(eventId)];
+    const m = (ev?.name || eventName || '').match(/\b(20\d{2})\b/);
+    if (m) return m[1];
+    return (ev?.close || ev?.open || '').slice(0, 4);
+  }
+  function getKeys(r) {
+    const keys = [];
+    if (r.profileId) keys.push(`pid:${String(r.profileId)}`);
+    const allEmails = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+    for (const e of allEmails) { if (e && e.includes('@')) keys.push(`em:${e.toLowerCase().trim()}`); }
+    const allPhones = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+    for (const p of allPhones) { const d = String(p).replace(/\D/g, ''); if (d.length >= 10) keys.push(`ph:${d.slice(-10)}`); }
+    return keys;
+  }
+
+  const matchesType = (name, type) =>
+    type === 'all' || classifyEvent(name) === type;
+
+  // Source results: all completed results from sourceYear events of sourceType
+  const sourceResults = db.results.filter(r =>
+    r.completed &&
+    eventYear(r.eventId, r.eventName) === String(sourceYear) &&
+    matchesType(r.eventName, sourceType)
+  );
+
+  // Build DEDUPLICATED participant index for source.
+  // A person in multiple source events counts once.
+  const srcIndex  = new Map(); // identifier key → canonical result
+  const srcById   = new Map(); // result.id → canonical result (for dedup within source)
+  let uniqueSrc   = 0;
+
+  for (const r of sourceResults) {
+    const keys = getKeys(r);
+    let canonical = null;
+    for (const k of keys) { if (srcIndex.has(k)) { canonical = srcIndex.get(k); break; } }
+    if (!canonical) {
+      canonical = r;
+      uniqueSrc++;
+    }
+    for (const k of keys) { if (!srcIndex.has(k)) srcIndex.set(k, canonical); }
+    srcById.set(r.id, canonical);
+  }
+
+  // Target results: all completed results from targetYear events of targetType
+  const targetResults = db.results.filter(r =>
+    r.completed &&
+    eventYear(r.eventId, r.eventName) === String(targetYear) &&
+    matchesType(r.eventName, targetType)
+  );
+
+  // Match target results against source index — bucket by target event
+  const bucketMap     = new Map();
+  const matchedSrcIds = new Set(); // canonical source result ids
+
+  for (const rT of targetResults) {
+    const keys = getKeys(rT);
+    let srcCanonical = null;
+    for (const k of keys) { if (srcIndex.has(k)) { srcCanonical = srcIndex.get(k); break; } }
+    if (!srcCanonical) continue;
+
+    const eid = String(rT.eventId);
+    if (!bucketMap.has(eid)) {
+      const ev = db.events[eid] || {};
+      bucketMap.set(eid, { eventId: eid, eventName: ev.name || rT.eventName, type: classifyEvent(ev.name||rT.eventName), participants: [] });
+    }
+    const bucket = bucketMap.get(eid);
+    if (!bucket.participants.some(p => p.sourceId === srcCanonical.id)) {
+      bucket.participants.push({
+        sourceId: srcCanonical.id,
+        email:    rT.email    || srcCanonical.email    || null,
+        phone:    rT.phone    || srcCanonical.phone    || null,
+        gradYearPast: srcCanonical.gradYears?.[0] || null,
+        gradYearNow:  rT.gradYears?.[0]           || null,
+        grade:   rT.grade    || srcCanonical.grade    || null,
+        gender:  rT.gender   || srcCanonical.gender   || null,
+        city:    rT.city     || srcCanonical.city     || null,
+      });
+      matchedSrcIds.add(srcCanonical.id);
+    }
+  }
+
+  const buckets = [...bucketMap.values()]
+    .map(b => ({ ...b, count: b.participants.length }))
+    .sort((a, b) => b.count - a.count);
+
+  // Revenue: sum from target results for matched participants
+  const revenueTotal = targetResults
+    .filter(r => { const keys = getKeys(r); return keys.some(k => srcIndex.has(k)); })
+    .reduce((s, r) => s + (r.revenue || 0), 0);
+  const revenueAll = targetResults.reduce((s, r) => s + (r.revenue || 0), 0);
+
+  // Lapsed: source participants with no match in target
+  const lapsed = [...new Set([...srcIndex.values()].map(r => r.id))]
+    .filter(id => !matchedSrcIds.has(id))
+    .map(id => {
+      const r = sourceResults.find(s => s.id === id) || {};
+      return { sourceId: id, email: r.email||null, phone: r.phone||null, gradYear: r.gradYears?.[0]||null, grade: r.grade||null, gender: r.gender||null, city: r.city||null };
+    });
+
+  res.json({
+    sourceYear, targetYear, sourceType, targetType,
+    source: { totalResults: sourceResults.length, uniqueParticipants: uniqueSrc },
+    returned: { unique: matchedSrcIds.size, pct: uniqueSrc ? Math.round(matchedSrcIds.size/uniqueSrc*100) : 0 },
+    lapsed:   { count: lapsed.length, participants: lapsed },
+    buckets,
+    revenue: { returned: revenueTotal, allTarget: revenueAll, hasData: revenueAll > 0 },
+  });
 });
 
 // ── Facebook Custom Audience CSV export ───────────────────────────────────────

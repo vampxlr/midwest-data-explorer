@@ -89,8 +89,8 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
     return () => es.close();
   }, [isVercel]);
 
-  // On Vercel lock to smart mode — no full-sweep or purge (conserves blob ops)
-  useEffect(() => { if (isVercel === true) setMode('smart'); }, [isVercel]);
+  // On Vercel default to smart; backfill is also allowed (merge, not purge)
+  useEffect(() => { if (isVercel === true && mode !== 'backfill') setMode('smart'); }, [isVercel]);
 
   useEffect(() => { if (recentRegs.length) recomputeSmart(); }, [recentRegs, storedMap, yearFilter, mode]);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [sseLog, cdLog]);
@@ -116,11 +116,12 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
   }
 
   async function startClientDriven() {
+    const isBackfill = mode === 'backfill';
     cdAbort.current = false;
     setCdRunning(true); setCdLog([]); setCdPhase('planning');
     setCdProgress({ current:0, total:0, added:0, skipped:0, errors:0 });
 
-    cdAddLog('Planning — fetching event list from SportsEngine…', 'info');
+    cdAddLog(isBackfill ? `Backfill — collecting all ${yearFilter||'known'} events…` : 'Planning — fetching event list from SportsEngine…', 'info');
 
     let eventsToFetch = [];
     try {
@@ -131,18 +132,26 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
         });
         cdAddLog(`Selective mode — ${eventsToFetch.length} league(s) chosen`, 'info');
       } else if (mode === 'smart') {
-        // Use local smart computation (no round-trip for plan needed)
         if (smartInfo?.needs?.length === 0) {
           cdAddLog('All events are up-to-date — nothing to fetch', 'ok');
-          setCdPhase('done');
-          setCdRunning(false);
+          setCdPhase('done'); setCdRunning(false);
           if (onComplete) onComplete({ newResults: 0 });
           return;
         }
         eventsToFetch = smartInfo?.needs || [];
         cdAddLog(`Smart Update — ${eventsToFetch.length} event(s) need work (${smartInfo?.upToDate?.length||0} up-to-date, skipping)`, 'info');
+      } else if (mode === 'backfill') {
+        // All events for the chosen year — pulled from already-known recentRegs
+        eventsToFetch = yearFilter
+          ? recentRegs.filter(r => eventYear(r) === yearFilter)
+          : recentRegs;
+        if (!eventsToFetch.length) {
+          cdAddLog(`No ${yearFilter||''} events found in the events list`, 'warn');
+          setCdPhase('idle'); setCdRunning(false);
+          return;
+        }
+        cdAddLog(`Backfill Contacts — ${eventsToFetch.length} event(s) for ${yearFilter||'all years'}. Will fill missing email/phone/grade without deleting data.`, 'info');
       } else {
-        // All mode — call server plan endpoint
         const year = yearFilter || undefined;
         const planRes = await api.aggregatePlan(orgId, year);
         eventsToFetch = planRes.data.needs || [];
@@ -155,7 +164,7 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
     }
 
     if (!eventsToFetch.length) {
-      cdAddLog('Nothing to fetch — all up-to-date', 'ok');
+      cdAddLog('Nothing to fetch', 'ok');
       setCdPhase('done'); setCdRunning(false);
       return;
     }
@@ -171,10 +180,8 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
       cdAddLog(`[${i+1}/${eventsToFetch.length}] "${ev.name}"`, 'info');
 
       let evAdded=0, evFetched=0, nextPage=undefined, pageNum=0, wasSkipped=false;
-      let prevCompact = []; // carries intermediate page results to avoid mid-event blob saves
+      let prevCompact = [];
       try {
-        // Loop through pages — each call fetches one page (no server timeout risk).
-        // Blob is only written on the final page; intermediate results travel in prevCompact.
         do {
           if (cdAbort.current) break;
           const res = await api.aggregateFetchEvent({
@@ -184,6 +191,7 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
             eventStatus:      ev.status,
             resultsCompleted: ev.resultsCompleted || 0,
             purgeFirst:       purgeFirst && mode === 'selected',
+            backfill:         isBackfill,
             ...(nextPage != null ? { page: nextPage } : {}),
             ...(prevCompact.length > 0 ? { prevCompact } : {}),
           });
@@ -227,12 +235,14 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
       }
     }
 
-    const finalDb = await api.storeEvents();
-    cdAddLog(`════ DONE — ${added} new results saved · ${skipped} skipped · ${errors} errors ════`, added>0?'ok':'info');
+    const finalMsg = isBackfill
+      ? `════ BACKFILL DONE — ${eventsToFetch.length} events processed · ${errors} errors ════`
+      : `════ DONE — ${added} new results saved · ${skipped} skipped · ${errors} errors ════`;
+    cdAddLog(finalMsg, errors > 0 ? 'warn' : 'ok');
     setCdPhase('done'); setCdRunning(false);
     await loadStoredMap();
     if (onComplete) onComplete({ newResults: added, eventsProcessed: eventsToFetch.length, skipped, errors });
-    toast.success(`Done — ${added} new results saved`);
+    toast.success(isBackfill ? `Backfill done — ${eventsToFetch.length} events updated` : `Done — ${added} new results saved`);
   }
 
   async function startAgg() {
@@ -245,7 +255,7 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
     else if (mode==='smart') events = (smartInfo?.needs||[]).map(pack);
     else if (yearFilter) events = recentRegs.filter(r=>eventYear(r)===yearFilter).map(pack);
 
-    const doPurge = mode==='selected' && purgeFirst;
+    const doPurge = (mode==='selected' || mode==='all') && purgeFirst;
     try {
       const res = await api.startAggregate(orgId, delay, events, doPurge);
       if (!res.data.started) toast.error(res.data.message);
@@ -276,9 +286,15 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
       if (smartNeeds===0) return '✓ All up-to-date';
       return `⚡ Smart Update — ${smartNeeds} event${smartNeeds!==1?'s':''} need work`;
     }
+    if (mode==='backfill') {
+      const n = yearFilter ? recentRegs.filter(r=>eventYear(r)===yearFilter).length : recentRegs.length;
+      return `↻ Backfill Contacts — ${n} event${n!==1?'s':''} (${yearFilter||'all years'})`;
+    }
     if (mode==='selected') return purgeFirst?`↺ Purge & Re-fetch ${selected.length} league${selected.length!==1?'s':''}`:`▶ Fetch ${selected.length} league${selected.length!==1?'s':''}`;
     const n = yearFilter ? recentRegs.filter(r=>eventYear(r)===yearFilter).length : recentRegs.length;
-    return `▶ Fetch All${yearFilter?' '+yearFilter:''} Events (${n})`;
+    return purgeFirst
+      ? `↺ Purge & Re-fetch All ${yearFilter||''} Events (${n})`
+      : `▶ Fetch All${yearFilter?' '+yearFilter:''} Events (${n})`;
   }
 
   return (
@@ -316,24 +332,25 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
 
       {open && (
         <>
-          {/* Mode toggle — on Vercel only Smart Update is allowed */}
-          {isVercel === true ? (
-            <div style={{background:'#0d1520',border:'1px solid #1e3a5f',borderRadius:8,padding:'8px 12px',marginBottom:14,display:'flex',alignItems:'center',gap:8}}>
-              <span style={{fontSize:11,color:'#60a5fa',fontWeight:700}}>⚡ Smart Update only</span>
-              <span style={{fontSize:11,color:'#334155'}}>— purge and full-sweep are disabled on Vercel to conserve blob operations. Seed from local to refresh all data.</span>
-            </div>
-          ) : (
-            <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
-              {[{id:'smart',label:'⚡ Smart Update'},{id:'all',label:'All Events'},{id:'selected',label:'Custom Selection'}].map(m=>(
-                <button key={m.id} onClick={()=>setMode(m.id)} disabled={running}
-                  style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:700,
-                    border:`1px solid ${mode===m.id?'#3b82f6':'#252838'}`,cursor:running?'not-allowed':'pointer',
-                    background:mode===m.id?'#1e3a5f':'#1e2235',color:mode===m.id?'#60a5fa':'#64748b'}}>
-                  {m.label}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Mode toggle */}
+          <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+            {/* Smart Update and Backfill always available; full-sweep and purge only on local */}
+            {[
+              {id:'smart',    label:'⚡ Smart Update',      always:true},
+              {id:'backfill', label:'↻ Backfill Contacts',  always:true},
+              {id:'all',      label:'All Events',            always:false},
+              {id:'selected', label:'Custom Selection',      always:false},
+            ].filter(m => m.always || isVercel !== true).map(m=>(
+              <button key={m.id} onClick={()=>setMode(m.id)} disabled={running}
+                style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:700,
+                  border:`1px solid ${mode===m.id?(m.id==='backfill'?'#a855f7':'#3b82f6'):'#252838'}`,
+                  cursor:running?'not-allowed':'pointer',
+                  background:mode===m.id?(m.id==='backfill'?'#2d1a4a':'#1e3a5f'):'#1e2235',
+                  color:mode===m.id?(m.id==='backfill'?'#c084fc':'#60a5fa'):'#64748b'}}>
+                {m.label}
+              </button>
+            ))}
+          </div>
 
           {/* Smart info */}
           {mode==='smart' && (
@@ -364,11 +381,33 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
             </div>
           )}
 
-          {/* All Events year filter — local dev only */}
+          {/* Backfill Contacts info */}
+          {mode==='backfill' && (
+            <div style={{background:'#1a0d2e',border:'1px solid #6b21a8',borderRadius:10,padding:'12px 14px',marginBottom:14}}>
+              <p style={{margin:'0 0 8px',fontSize:12,color:'#c084fc',fontWeight:600}}>
+                ↻ Backfill Contacts — fills missing email, phone, and grade on existing records
+              </p>
+              <p style={{margin:'0 0 10px',fontSize:11,color:'#475569'}}>
+                Re-fetches every event for the chosen year and updates records that were saved before contact fields were extracted. No data is deleted.
+              </p>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+                <span style={{fontSize:11,color:'#64748b',fontWeight:600}}>Year:</span>
+                {[...years,''].map(y=>(
+                  <button key={y||'all'} onClick={()=>setYearFilter(y)} disabled={running}
+                    style={{padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',
+                      background:yearFilter===y?'#7e22ce':'#1e2235',color:yearFilter===y?'#fff':'#64748b'}}>
+                    {y||'All years'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* All Events — local dev only */}
           {mode==='all' && isVercel !== true && (
             <div style={{background:'#0d0f17',border:'1px solid #252838',borderRadius:10,padding:'12px 14px',marginBottom:14}}>
-              <p style={{margin:'0 0 8px',fontSize:11,color:'#94a3b8',fontWeight:600}}>Year filter</p>
-              <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+                <span style={{fontSize:11,color:'#94a3b8',fontWeight:600}}>Year filter:</span>
                 {[...years,''].map(y=>(
                   <button key={y||'all'} onClick={()=>setYearFilter(y)} disabled={running}
                     style={{padding:'5px 14px',borderRadius:20,fontSize:12,fontWeight:700,border:'none',cursor:'pointer',
@@ -377,6 +416,12 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
                   </button>
                 ))}
               </div>
+              <label style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:purgeFirst?'#f87171':'#64748b',cursor:running?'not-allowed':'pointer'}}>
+                <input type="checkbox" checked={purgeFirst} onChange={e=>setPurgeFirst(e.target.checked)} disabled={running}
+                  style={{accentColor:'#ef4444',width:14,height:14}}/>
+                Purge {yearFilter||'all'} data first, then re-fetch fresh
+                {purgeFirst && <span style={{fontSize:11,color:'#ef4444',fontWeight:700}}>— this deletes all stored results for {yearFilter||'every'} event before re-fetching</span>}
+              </label>
             </div>
           )}
 
@@ -426,8 +471,8 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
             <div style={{marginTop: isVercel !== true ? 18 : 0}}>
               {!running?(
                 <button className="btn-primary" onClick={startAgg}
-                  disabled={mode==='smart' && smartNeeds===0}
-                  style={{opacity:(mode==='smart' && smartNeeds===0)?0.4:1}}>
+                  disabled={(mode==='smart' && smartNeeds===0) || (mode==='selected' && selected.length===0)}
+                  style={{opacity:((mode==='smart'&&smartNeeds===0)||(mode==='selected'&&selected.length===0))?0.4:1}}>
                   {btnLabel()}
                 </button>
               ):(

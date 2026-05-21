@@ -67,14 +67,36 @@ function upsertEventMeta(store, ev, extra = {}) {
   };
 }
 
-function upsertResults(store, eventId, eventName, newResults) {
-  const existingIds = new Set(
-    store.results.filter(r => r.eventId === eventId).map(r => r.id)
-  );
+// Fields that backfill mode fills in when they are missing on existing records.
+const BACKFILL_FIELDS = ['profileId', 'email', 'emails', 'phone', 'phones', 'grade', 'revenue', 'players'];
+
+function upsertResults(store, eventId, eventName, newResults, { merge = false } = {}) {
+  // Build index: resultId → array index, for fast lookup and in-place mutation
+  const idxById = {};
+  store.results.forEach((r, i) => { if (r.eventId === eventId) idxById[r.id] = i; });
+
   let added = 0;
   for (const r of newResults) {
-    if (existingIds.has(r.id)) continue;
+    if (idxById[r.id] !== undefined) {
+      if (merge) {
+        // Fill in any fields that were null/missing on the stored record
+        const existing = store.results[idxById[r.id]];
+        for (const f of BACKFILL_FIELDS) {
+          const newVal = r[f];
+          const oldVal = existing[f];
+          if (newVal == null || newVal === '') continue;
+          // For arrays (emails, phones): merge if old is missing or empty
+          if (Array.isArray(newVal)) {
+            if (!Array.isArray(oldVal) || oldVal.length === 0) existing[f] = newVal;
+          } else {
+            if (oldVal == null || oldVal === '') existing[f] = newVal;
+          }
+        }
+      }
+      continue;
+    }
     store.results.push({ ...r, eventId, eventName });
+    idxById[r.id] = store.results.length - 1;
     added++;
   }
   store.meta.totalResults = store.results.length;

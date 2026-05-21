@@ -88,12 +88,57 @@ function extractAnswers(answers) {
     const m = answers.find(lower(keys)); return m ? val(m) : null;
   };
 
+  const pickAll = (...keys) => {
+    const k = keys.map(x => x.toLowerCase());
+    return answers.filter(a => k.some(kk => (a.name||'').toLowerCase().includes(kk))).map(val).filter(Boolean);
+  };
+
+  const emails = [...new Set(
+    pickAll('email', 'e-mail', 'email address')
+      .map(v => String(v).trim().toLowerCase()).filter(v => v.includes('@'))
+  )];
+  const phones = [...new Set(
+    pickAll('phone', 'cell', 'mobile', 'contact number', 'telephone')
+      .map(v => String(v).replace(/\D/g, '').slice(-10)).filter(v => v.length >= 10)
+  )];
+
+  // Per-player grouping by "Player N" field names
+  const playerGroups = new Map();
+  for (const a of answers) {
+    const fn = a.name || '';
+    const v  = val(a);
+    if (!v) continue;
+    const m = fn.match(/(?:player|member|participant|athlete)\s*#?\s*(\d+)/i);
+    if (!m) continue;
+    const num = m[1];
+    if (!playerGroups.has(num)) playerGroups.set(num, {});
+    const g = playerGroups.get(num);
+    const lo = fn.toLowerCase();
+    if (/first[\s_-]?name|fname/i.test(lo) && !/last/i.test(lo)) g.firstName = v;
+    else if (/last[\s_-]?name|lname/i.test(lo))                   g.lastName  = v;
+    else if (/\bname\b/i.test(lo) && !/first|last|team/i.test(lo)) { if (!g.firstName) g.name = v; }
+    else if (/email|e-mail/i.test(lo) && v.includes('@'))          g.email = v.toLowerCase().trim();
+    else if (/phone|cell|mobile|telephone/i.test(lo)) {
+      const d = String(v).replace(/\D/g,'').slice(-10); if (d.length >= 10) g.phone = d;
+    } else if (/grad(uation)?\s*year/i.test(lo) && /^\d{4}$/.test(v.trim())) g.gradYear = v.trim();
+  }
+  const players = [...playerGroups.entries()]
+    .sort(([a],[b]) => Number(a)-Number(b))
+    .map(([,g]) => ({ name: g.name||[g.firstName,g.lastName].filter(Boolean).join(' ')||null, email:g.email||null, phone:g.phone||null, gradYear:g.gradYear||null }))
+    .filter(p => p.email||p.name||p.phone);
+
   return {
     gradYears,
     gender: pick('gender of team', 'gender'),
     city:   pick('city')?.trim() || null,
     state:  pick('state/province', 'state')?.trim() || null,
     zip:    pick('zip', 'postal') ? String(pick('zip', 'postal')).trim().slice(0, 5) : null,
+    email:  emails[0] || null,
+    emails,
+    phone:  phones[0] || null,
+    phones,
+    grade:  pick('grade', 'current grade', 'school grade', 'grade level')?.trim() || null,
+    players,
   };
 }
 
@@ -371,7 +416,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
 
     const compact = rawResults.map(r => {
       const parsed = extractAnswers(r.answers || []);
-      return { id: r.id, eventId: ev.id, eventName: ev.name, created: r.created || null, completed: r.completed, ...parsed };
+      return { id: r.id, profileId: r.profileId || null, eventId: ev.id, eventName: ev.name, created: r.created || null, completed: r.completed, ...parsed };
     });
 
     const added     = store.upsertResults(db, ev.id, ev.name, compact);
