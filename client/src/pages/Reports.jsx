@@ -1398,11 +1398,20 @@ export default function Reports({ ctx }) {
                     toast.success(`${list.length} ${type}s copied`);
                   }
                   function dlCSV() {
-                    const hdr = 'All Emails,All Phones,Grad Years,Grade,Gender,City,State';
-                    const rows = contacts.map(c=>[
-                      c.emails.join('; '), c.phones.join('; '),
-                      (c.gradYears||[]).join('; '), c.grade||'', c.gender||'', c.city||'', c.state||'',
-                    ].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+                    const hdr = 'Email,All Phones (registration),Grad Years,Grade,Gender,City,State';
+                    const rows = [];
+                    for (const c of contacts) {
+                      const phonesStr = (c.phones||[]).join('; ');
+                      const gradStr   = (c.gradYears||[]).join('; ');
+                      const rest      = [gradStr, c.grade||'', c.gender||'', c.city||'', c.state||''];
+                      if (c.emails?.length) {
+                        for (const email of c.emails) {
+                          rows.push([email, phonesStr, ...rest].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+                        }
+                      } else {
+                        rows.push(['', phonesStr, ...rest].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','));
+                      }
+                    }
                     const blob = new Blob([hdr+'\n'+rows.join('\n')],{type:'text/csv'});
                     const url  = URL.createObjectURL(blob);
                     const a    = document.createElement('a');
@@ -1436,7 +1445,7 @@ export default function Reports({ ctx }) {
                         </button>
                         <button onClick={dlCSV}
                           style={{padding:'6px 14px',borderRadius:6,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',background:'#162032',color:'#94a3b8'}}>
-                          ⬇ CSV (all emails per registration)
+                          ⬇ CSV (one row per email)
                         </button>
                         <button onClick={()=>setShowTable(s=>!s)}
                           style={{padding:'6px 14px',borderRadius:6,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',background:'#1e2235',color:'#64748b'}}>

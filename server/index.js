@@ -1583,6 +1583,148 @@ app.get('/api/reports/league-scatter-individuals', async (req, res) => {
   });
 });
 
+// ── Lapsed individuals — source-year participants not in exclude-year ─────────
+// Returns per-player records (uses players[] when available, else emails[]) for
+// everyone in sourceYear leagues whose email/phone doesn't appear in excludeYear.
+
+app.get('/api/reports/lapsed-individuals', async (req, res) => {
+  // excludeMode: 'year' (default) | 'events'
+  const {
+    sourceYear, sourceEventIds,
+    excludeYear = new Date().getFullYear().toString(),
+    excludeEventIds,   // comma-sep event IDs to use as "already signed up" instead of a year
+  } = req.query;
+
+  const db = await store.load();
+
+  function eventDisplayYear(eventId, fallbackName) {
+    const ev = db.events[String(eventId)];
+    const nameStr = ev?.name || fallbackName || '';
+    const m = nameStr.match(/\b(20\d{2})\b/);
+    if (m) return m[1];
+    return (ev?.close || ev?.open || '').slice(0, 4);
+  }
+
+  // ── Source results ────────────────────────────────────────────────────────────
+  const sourceIdSet = sourceEventIds ? new Set(sourceEventIds.split(',').map(s => s.trim())) : null;
+  const sourceResults = db.results.filter(r => {
+    if (sourceIdSet) return sourceIdSet.has(String(r.eventId));
+    if (sourceYear)  return eventDisplayYear(r.eventId, r.eventName) === String(sourceYear);
+    return true;
+  });
+
+  // ── Build exclude index ───────────────────────────────────────────────────────
+  const excludeIndex = new Set();
+  const excludeIdSet = excludeEventIds ? new Set(excludeEventIds.split(',').map(s => s.trim())) : null;
+
+  const excludeResults = db.results.filter(r => {
+    if (excludeIdSet) return excludeIdSet.has(String(r.eventId));
+    return eventDisplayYear(r.eventId, r.eventName) === String(excludeYear);
+  });
+
+  for (const r of excludeResults) {
+    const allEmails = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+    const allPhones = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+    for (const e of allEmails) if (e) excludeIndex.add(`em:${e.toLowerCase().trim()}`);
+    for (const p of allPhones) {
+      const d = String(p).replace(/\D/g, '').slice(-10);
+      if (d.length >= 10) excludeIndex.add(`ph:${d}`);
+    }
+    for (const pl of (r.players || [])) {
+      if (pl.email) excludeIndex.add(`em:${pl.email.toLowerCase().trim()}`);
+      if (pl.phone) { const d = String(pl.phone).replace(/\D/g,'').slice(-10); if (d.length>=10) excludeIndex.add(`ph:${d}`); }
+    }
+  }
+
+  // ── Build individual map ──────────────────────────────────────────────────────
+  // em:key → {name, email, phones[], gradYears: Set, sourceLeagues: Set}
+  const individualMap = new Map();
+  const phoneToEmailKey = new Map();
+
+  for (const r of sourceResults) {
+    const leagueName = db.events[String(r.eventId)]?.name || r.eventName || String(r.eventId);
+    const players = r.players?.length ? r.players : null;
+    const regGradYears = (r.gradYears || []).filter(y => /^\d{4}$/.test(y));
+
+    const addIndividual = (key, name, phones, gradYears = []) => {
+      if (!individualMap.has(key)) {
+        individualMap.set(key, {
+          name:         name || null,
+          email:        key.slice(3),
+          phones,
+          gradYears:    new Set(gradYears),
+          sourceLeagues: new Set([leagueName]),
+        });
+      } else {
+        const entry = individualMap.get(key);
+        entry.sourceLeagues.add(leagueName);
+        if (!entry.name && name) entry.name = name;
+        for (const ph of phones) if (!entry.phones.includes(ph)) entry.phones.push(ph);
+        for (const gy of gradYears) entry.gradYears.add(gy);
+      }
+    };
+
+    if (players) {
+      players.forEach((p, idx) => {
+        if (!p.email) return;
+        const key = `em:${p.email.toLowerCase().trim()}`;
+        // gradYear: prefer per-player field, fall back to registration-level list positionally
+        const gy = p.gradYear || regGradYears[idx] || null;
+        addIndividual(key, p.name || null, p.phone ? [p.phone] : [], gy ? [gy] : []);
+        if (p.phone) { const pk = `ph:${p.phone}`; if (!phoneToEmailKey.has(pk)) phoneToEmailKey.set(pk, key); }
+      });
+    } else {
+      const allEmails   = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+      const allPhones   = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+      const phonesClean = allPhones.map(p => String(p).replace(/\D/g,'').slice(-10)).filter(d => d.length >= 10);
+      allEmails.forEach((e, idx) => {
+        const key    = `em:${e.toLowerCase().trim()}`;
+        const paired = phonesClean[idx] || null;
+        const gy     = regGradYears[idx] || null;
+        addIndividual(key, null, paired ? [paired] : [], gy ? [gy] : []);
+        if (paired) { const pk = `ph:${paired}`; if (!phoneToEmailKey.has(pk)) phoneToEmailKey.set(pk, key); }
+      });
+    }
+  }
+
+  // ── Filter to lapsed ──────────────────────────────────────────────────────────
+  const lapsed = [];
+  for (const [key, ind] of individualMap) {
+    const inExclude = excludeIndex.has(key) || ind.phones.some(p => excludeIndex.has(`ph:${p}`));
+    if (!inExclude) lapsed.push({
+      name:          ind.name,
+      email:         ind.email,
+      phones:        ind.phones,
+      gradYears:     [...ind.gradYears].sort(),
+      sourceLeagues: [...ind.sourceLeagues],
+    });
+  }
+
+  // ── Grad-year breakdown of lapsed ─────────────────────────────────────────────
+  const gyCount = {};
+  for (const p of lapsed) {
+    for (const gy of p.gradYears) gyCount[gy] = (gyCount[gy] || 0) + 1;
+  }
+  const gradYearBreakdown = Object.entries(gyCount)
+    .map(([year, count]) => ({ year, count }))
+    .sort((a, b) => a.year.localeCompare(b.year));
+
+  // Labels for exclude section
+  const excludeLabel = excludeIdSet
+    ? [...excludeIdSet].map(id => db.events[id]?.name || id).join(', ')
+    : excludeYear;
+
+  res.json({
+    sourceYear:        sourceYear || 'custom',
+    excludeYear:       excludeIdSet ? null : excludeYear,
+    excludeLabel,
+    totalIndividuals:  individualMap.size,
+    lapsedCount:       lapsed.length,
+    lapsed,
+    gradYearBreakdown,
+  });
+});
+
 // ── Reports: per-event summary ────────────────────────────────────────────────
 
 app.get('/api/reports/events', async (req, res) => {
@@ -2472,17 +2614,59 @@ app.get('/api/contacts/status', async (req, res) => {
   });
 });
 
-// ── Preview — estimate audience size from stored contacts ─────────────────────
+// ── Shared helper: filter results from store.json for audience endpoints ────────
+function filterStoreResults(db, { eventIds, gradYearFrom, gradYearTo, genders } = {}) {
+  const eidSet    = eventIds ? new Set(eventIds.map(String)) : null;
+  const genderSet = genders  ? new Set(genders.map(s => s.toLowerCase())) : null;
+  return db.results.filter(r => {
+    if (eidSet && !eidSet.has(String(r.eventId))) return false;
+    if (genderSet) {
+      const lc = (r.gender || '').toLowerCase();
+      if (![...genderSet].some(g => lc.includes(g))) return false;
+    }
+    if (gradYearFrom || gradYearTo) {
+      const gys = r.gradYears || [];
+      const match = gys.some(y => {
+        if (gradYearFrom && y < gradYearFrom) return false;
+        if (gradYearTo   && y > gradYearTo)   return false;
+        return true;
+      });
+      if (!match) return false;
+    }
+    return true;
+  });
+}
+
+// ── Preview — estimate audience size (reads from main store, all player emails) ─
 app.get('/api/contacts/preview', async (req, res) => {
   const { eventIds, gradYearFrom, gradYearTo, genders } = req.query;
-  const db = await contactStore.load();
-  const filtered = contactStore.filterContacts(db, {
-    eventIds:    eventIds   ? eventIds.split(',').map(s=>s.trim())    : null,
+  const db = await store.load();
+  const filtered = filterStoreResults(db, {
+    eventIds:     eventIds     ? eventIds.split(',').map(s=>s.trim())  : null,
     gradYearFrom: gradYearFrom || null,
     gradYearTo:   gradYearTo   || null,
-    genders:     genders    ? genders.split(',').map(s=>s.trim())     : null,
+    genders:      genders      ? genders.split(',').map(s=>s.trim())   : null,
   });
-  res.json(contactStore.summarise(filtered));
+
+  // Unique emails — all player emails from emails[] array
+  const allEmails = new Set();
+  const gyMap = {}, geMap = {};
+  for (const r of filtered) {
+    const arr = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+    for (const e of arr) if (e) allEmails.add(e.toLowerCase().trim());
+    const g = r.gender?.trim(); if (g) geMap[g] = (geMap[g]||0)+1;
+    for (const gy of (r.gradYears||[])) {
+      if (/^\d{4}$/.test(gy)) gyMap[gy] = (gyMap[gy]||0)+1;
+    }
+  }
+  const toArr = m => Object.entries(m).map(([name,count])=>({name,count})).sort((a,b)=>b.count-a.count);
+  res.json({
+    total:          filtered.length,           // registrations
+    withEmail:      filtered.filter(r => r.email || r.emails?.length).length,
+    uniqueEmails:   allEmails.size,            // individual player emails
+    graduationYear: Object.entries(gyMap).map(([name,count])=>({name,count})).sort((a,b)=>a.name.localeCompare(b.name)),
+    gender:         toArr(geMap),
+  });
 });
 
 // ── SSE stream — fetch contacts from SportsEngine for selected events ─────────
@@ -2577,16 +2761,26 @@ app.post('/api/contacts/fetch', async (req, res) => {
       const ans = answers || [];
       const pick    = (...keys) => pickAnswer(ans,    ...keys);
       const pickAll = (...keys) => pickAnswerAll(ans, ...keys);
+      const emails = [...new Set(
+        pickAll('email','e-mail','email address','contact email','guardian email','parent email','account email','family email')
+          .map(v => String(v).trim().toLowerCase()).filter(v => v.includes('@'))
+      )];
+      const phones = [...new Set(
+        pickAll('phone','mobile','cell','telephone','contact phone','contact number')
+          .map(v => String(v).replace(/\D/g,'').slice(-10)).filter(v => v.length >= 10)
+      )];
       return {
-        email:      pick('email','contact email','guardian email','parent email','account email','e-mail','family email'),
-        phone:      pick('phone','mobile','cell','telephone','contact phone'),
-        firstName:  pick('first name','contact first','parent first','guardian first','fname'),
-        lastName:   pick('last name', 'contact last', 'parent last', 'guardian last', 'lname'),
-        zip:        pick('zip','postal'),
-        city:       pick('city'),
-        state:      pick('state/province','state'),
-        gender:     pick('gender of team','gender'),
-        gradYears:  pickAll('graduation year','grad year'),
+        email:     emails[0] || '',
+        emails,
+        phone:     phones[0] || '',
+        phones,
+        firstName: pick('first name','contact first','parent first','guardian first','fname'),
+        lastName:  pick('last name', 'contact last', 'parent last', 'guardian last', 'lname'),
+        zip:       pick('zip','postal'),
+        city:      pick('city'),
+        state:     pick('state/province','state'),
+        gender:    pick('gender of team','gender'),
+        gradYears: pickAll('graduation year','grad year'),
       };
     }
 
@@ -2690,12 +2884,12 @@ app.post('/api/contacts/purge', async (req, res) => {
   res.json({ deleted: total });
 });
 
-// ── Audience export — instant from stored contacts (no API call) ──────────────
+// ── Audience export — reads from main store (all player emails, no API call) ───
 app.get('/api/contacts/export', async (req, res) => {
   const { eventIds, gradYearFrom, gradYearTo, genders, label = 'audience' } = req.query;
-  const db = await contactStore.load();
+  const db = await store.load();
 
-  const filtered = contactStore.filterContacts(db, {
+  const filtered = filterStoreResults(db, {
     eventIds:     eventIds     ? eventIds.split(',').map(s=>s.trim())     : null,
     gradYearFrom: gradYearFrom || null,
     gradYearTo:   gradYearTo   || null,
@@ -2714,19 +2908,36 @@ app.get('/api/contacts/export', async (req, res) => {
   const date = store.todayCDT();
 
   const header = 'email,phone,fn,ln,zip,city,state,country,gender,grad_years,league';
-  const rows   = filtered.map(c => [
-    c.email     || '',
-    c.phone     || '',
-    (c.firstName||'').replace(/,/g,' '),
-    (c.lastName ||'').replace(/,/g,' '),
-    (c.zip      ||'').slice(0,5),
-    (c.city     ||'').replace(/,/g,' '),
-    c.state     || '',
-    'US',
-    mapGender(c.gender),
-    (c.gradYears||[]).filter(y=>(!gradYearFrom||y>=gradYearFrom)&&(!gradYearTo||y<=gradYearTo)).join(';'),
-    (c.eventName||'').replace(/,/g,' '),
-  ].join(','));
+  const seenEmails = new Set();
+  const rows = [];
+
+  for (const r of filtered) {
+    const allEmails  = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+    const allPhones  = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+    const fn   = (r.firstName||'').replace(/,/g,' ');
+    const ln   = (r.lastName ||'').replace(/,/g,' ');
+    const zip  = (r.zip      ||'').slice(0,5);
+    const cit  = (r.city     ||'').replace(/,/g,' ');
+    const st   = r.state     || '';
+    const gen  = mapGender(r.gender);
+    const gys  = (r.gradYears||[]).filter(y=>(!gradYearFrom||y>=gradYearFrom)&&(!gradYearTo||y<=gradYearTo)).join(';');
+    const ev   = (db.events[String(r.eventId)]?.name || r.eventName || '').replace(/,/g,' ');
+
+    // One row per unique player email — pair positionally with phones[] when possible
+    allEmails.forEach((email, idx) => {
+      const em = (email || '').toLowerCase().trim();
+      if (!em || seenEmails.has(em)) return;
+      seenEmails.add(em);
+      const ph = allPhones[idx] || allPhones[0] || '';
+      rows.push([em, ph, fn, ln, zip, cit, st, 'US', gen, gys, ev].join(','));
+    });
+
+    // Registration with no emails — still include one row with phone/name for completeness
+    if (!allEmails.some(e => e)) {
+      const ph = allPhones[0] || r.phone || '';
+      rows.push(['', ph, fn, ln, zip, cit, st, 'US', gen, gys, ev].join(','));
+    }
+  }
 
   const csv = [header, ...rows].join('\r\n');
   res.setHeader('Content-Type',        'text/csv');

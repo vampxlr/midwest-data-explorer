@@ -39,19 +39,21 @@ function upsertContacts(db, ev, contacts) {
   const now = new Date().toISOString();
   for (const c of contacts) {
     db.contacts.push({
-      resultId:         c.resultId,
-      eventId:          eid,
-      eventName:        ev.name,
-      email:            c.email     || '',
-      phone:            c.phone     || '',
-      firstName:        c.firstName || '',
-      lastName:         c.lastName  || '',
-      zip:              c.zip       || '',
-      city:             c.city      || '',
-      state:            c.state     || '',
-      gender:           c.gender    || '',
-      gradYears:        c.gradYears || [],
-      fetchedAt:        now,
+      resultId:  c.resultId,
+      eventId:   eid,
+      eventName: ev.name,
+      email:     c.email  || '',
+      emails:    c.emails?.length ? c.emails : (c.email ? [c.email] : []),
+      phone:     c.phone  || '',
+      phones:    c.phones?.length ? c.phones : (c.phone ? [c.phone] : []),
+      firstName: c.firstName || '',
+      lastName:  c.lastName  || '',
+      zip:       c.zip       || '',
+      city:      c.city      || '',
+      state:     c.state     || '',
+      gender:    c.gender    || '',
+      gradYears: c.gradYears || [],
+      fetchedAt: now,
     });
   }
   db.events[eid] = {
