@@ -40,3 +40,10 @@ npm-debug.log*
 # Temp
 *.tmp
 *.temp
+
+# Claude Code tooling (auto-generated, not project code)
+.claude/
+.agents/
+CLAUDE.md
+AGENTS.md
+skills-lock.json
