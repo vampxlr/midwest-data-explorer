@@ -8,7 +8,8 @@
     "dev:convex": "npx convex dev",
     "build": "cd client && npm install && npm run build",
     "start": "node api/index.js",
-    "seed:convex": "node scripts/seedConvex.mjs"
+    "seed:convex": "node scripts/seedConvex.mjs",
+    "deploy:convex": "node scripts/deployConvex.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^0.27.0",
