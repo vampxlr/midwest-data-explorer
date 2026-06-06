@@ -14,6 +14,8 @@ const blobStorage  = require('./blobStorage');
 let aggregator = null;
 try { aggregator = require('./aggregator'); } catch {}
 
+const convexSync = require('./convexSync');
+
 // ── Export history metadata (now async via blobStorage) ───────────────────────
 async function loadExportsMeta() {
   return blobStorage.readJSON('exports-meta.json', []);
@@ -87,7 +89,7 @@ function inWindow(reg, days = 90) {
 
 const ANSWERS_QUERY = `query($regId: ID!, $orgId: Int!, $page: Int, $perPage: Int!) {
   registration(id: $regId, organizationId: $orgId) {
-    id name resultsCompleted
+    id name resultsCompleted resultsTotal
     registrationResults(page: $page, perPage: $perPage) {
       id profileId completed status created
       answers {
@@ -113,6 +115,7 @@ async function fetchAllRegistrationResults(regId, orgId, logFn) {
   let allResults = [];
   let regMeta    = null;
   let page       = 1;
+  let knownTotal = null; // resultsTotal from first response (all registrations, not just completed)
 
   do {
     const data = await graphql(ANSWERS_QUERY, {
@@ -125,16 +128,18 @@ async function fetchAllRegistrationResults(regId, orgId, logFn) {
     if (!reg) break;
     regMeta = reg;
     const batch = reg.registrationResults || [];
+    if (knownTotal === null) knownTotal = reg.resultsTotal ?? null;
     allResults = allResults.concat(batch);
 
     if (logFn) {
-      const total = reg.resultsCompleted || '?';
-      logFn(`  ← page ${page}: +${batch.length} results (${allResults.length}/${total} total)`, 'response');
+      const totalLabel = knownTotal != null ? `/${knownTotal}` : '';
+      const estPages   = knownTotal != null ? Math.ceil(knownTotal / PER_PAGE) : '?';
+      logFn(`  ← page ${page}/${estPages}: +${batch.length} results (${allResults.length}${totalLabel} fetched)`, 'response');
     }
 
-    if (batch.length < PER_PAGE) break; // last page
+    if (batch.length < PER_PAGE) break;
+    if (knownTotal !== null && allResults.length >= knownTotal) break;
     page++;
-    // Small delay between pages to stay within rate limits
     await new Promise(r => setTimeout(r, 300));
   } while (true);
 
@@ -785,6 +790,7 @@ app.get('/api/store/purge-reload-stream', async (req, res) => {
     log(`  Results currently saved  : ${existingCount}`, 'info');
     const deletedCount = store.purgeEvent(db, eventId);
     await store.save(db);
+    convexSync.fireAndForget(() => convexSync.purgeEventResults(String(eventId)));
 
     // Clear in-memory caches
     cache.del(`analytics_reg_${eventId}_${orgId}`);
@@ -862,6 +868,10 @@ app.get('/api/store/purge-reload-stream', async (req, res) => {
     );
     db.meta.totalResults = db.results.length;
     await store.save(db);
+    convexSync.fireAndForget(async () => {
+      await convexSync.syncEventResults(db, String(eventId));
+      await convexSync.updateState(db);
+    });
 
     log(`  ✓ Saved ${added} new results`, 'ok');
     log(`  ✓ Total results in store  : ${db.results.length}`, 'ok');
@@ -892,6 +902,10 @@ app.post('/api/store/purge', async (req, res) => {
   const eventName    = db.events[eventId]?.name || eventId;
   const deletedCount = store.purgeEvent(db, eventId);
   await store.save(db);
+  convexSync.fireAndForget(async () => {
+    await convexSync.purgeEventResults(String(eventId));
+    await convexSync.updateState(db);
+  });
   cache.keys().filter(k =>
     k.includes(eventId) || k.startsWith('analytics_agg_') || k.startsWith('regs_all_')
   ).forEach(k => cache.del(k));
@@ -1088,6 +1102,10 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
       });
       await store.save(db);
       cache.del('analytics_agg');
+      convexSync.fireAndForget(async () => {
+        await convexSync.syncEventResults(db, String(eventId));
+        await convexSync.updateState(db);
+      });
 
       return res.json({
         added, fetched: allCompact.length, skipped: false, backfilled: backfill,
@@ -2823,7 +2841,7 @@ app.post('/api/contacts/fetch', async (req, res) => {
       }
 
       try {
-        let allResults = [], regMeta = null, page = startPage;
+        let allResults = [], regMeta = null, page = startPage, knownTotal = null;
         do {
           const data = await graphql(ANSWERS_QUERY, {
             regId: String(ev.id), orgId: parseInt(orgId), page, perPage: PER_PAGE,
@@ -2831,26 +2849,33 @@ app.post('/api/contacts/fetch', async (req, res) => {
           const reg = data?.data?.registration;
           if (!reg) break;
           regMeta = reg;
-          const batch = reg.registrationResults||[];
+          const batch = reg.registrationResults || [];
+          if (knownTotal === null) knownTotal = reg.resultsTotal ?? null;
           allResults = allResults.concat(batch);
-          const pct = reg.resultsCompleted>0?Math.round((storedCount+allResults.length)/reg.resultsCompleted*100):'?';
-          clog(`  ← page ${page}: +${batch.length} (${storedCount+allResults.length}/${reg.resultsCompleted} — ${pct}%)`, 'response');
+
+          // Progress display: when fetching from page 1, show only newly fetched; when incremental, add stored baseline
+          const fetchedSoFar = startPage > 1 ? storedCount + allResults.length : allResults.length;
+          const totalLabel   = knownTotal != null ? `/${knownTotal}` : '';
+          const estPages     = knownTotal != null ? Math.ceil(knownTotal / PER_PAGE) : '?';
+          clog(`  ← page ${page}/${estPages}: +${batch.length} (${fetchedSoFar}${totalLabel} total)`, 'response');
+
           if (batch.length < PER_PAGE) break;
+          if (knownTotal !== null && allResults.length >= knownTotal) break;
           page++;
-          await new Promise(r=>setTimeout(r,300));
+          await new Promise(r => setTimeout(r, 300));
         } while (true);
 
         const contacts = allResults
-          .filter(r=>r.completed)
-          .map(r=>({ resultId:r.id, ...extractContact(r.answers) }));
+          .filter(r => r.completed)
+          .map(r => ({ resultId: r.id, ...extractContact(r.answers) }));
 
         const saved = contactStore.upsertContacts(db, ev, contacts);
-        // Update resultsCompleted so next run can do count comparison
         if (db.events[String(ev.id)]) {
           db.events[String(ev.id)].resultsCompleted = regMeta?.resultsCompleted ?? currentCompleted;
+          db.events[String(ev.id)].contactCount     = contacts.length;
         }
         await contactStore.save(db);
-        clog(`  ✓ Saved ${saved} new contact(s)`, 'ok');
+        clog(`  ✓ Saved ${contacts.length} contact(s) (${allResults.length} total fetched, ${allResults.length - contacts.length} incomplete)`, 'ok');
       } catch (err) {
         clog(`  ✗ Failed: ${err.message}`, 'error');
       }

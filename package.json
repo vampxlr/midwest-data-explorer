@@ -5,12 +5,15 @@
   "scripts": {
     "dev:server": "cd server && node --watch index.js",
     "dev:client": "cd client && npm run dev",
+    "dev:convex": "npx convex dev",
     "build": "cd client && npm install && npm run build",
-    "start": "node api/index.js"
+    "start": "node api/index.js",
+    "seed:convex": "node scripts/seedConvex.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^0.27.0",
     "axios": "^1.15.2",
+    "convex": "^1.25.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

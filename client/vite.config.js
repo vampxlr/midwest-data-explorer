@@ -1,5 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
@@ -15,7 +19,9 @@ export default defineConfig({
   },
   resolve: {
     extensions: ['.jsx', '.js', '.json'],
+    alias: {
+      // Points to convex/_generated once `npx convex dev` has been run
+      '@convex': path.resolve(__dirname, '../convex/_generated'),
+    },
   },
-  // Expose env vars prefixed with VITE_ to the client
-  // VITE_API_BASE is only needed when deploying separately (not Vercel single-deploy)
 });
