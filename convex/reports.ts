@@ -48,6 +48,33 @@ export const storeStatus = query({
   },
 });
 
+// ── Lightweight stats for Express status endpoint (no full event scan) ────────
+
+export const storeStats = query({
+  handler: async (ctx) => {
+    const [state, allEvents] = await Promise.all([
+      ctx.db.query("storeState").withIndex("by_key", (q) => q.eq("key", "meta")).first(),
+      ctx.db.query("events").collect(),
+    ]);
+    const closed  = allEvents.filter(e => e.status === 2 && e.fetchedAt).length;
+    const open    = allEvents.filter(e => e.status !== 2 && e.fetchedAt).length;
+    const pending = allEvents.filter(e => !e.fetchedAt).length;
+    return {
+      totalResults: state?.totalResults ?? 0,
+      totalEvents: allEvents.length,
+      closedFetched: closed,
+      openFetched: open,
+      pending,
+      meta: {
+        orgId: state?.orgId ?? "8008",
+        lastRunAt: state?.lastRunAt ?? null,
+        lastUpdatedAt: state?.lastUpdatedAt ?? null,
+        totalResults: state?.totalResults ?? 0,
+      },
+    };
+  },
+});
+
 // ── Per-event results (indexed) ─────────────────────────────────────────────
 
 export const resultsByEvent = query({

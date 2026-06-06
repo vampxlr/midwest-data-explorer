@@ -1,27 +1,57 @@
 /**
  * Persistent store for aggregated registration data.
  *
- * All I/O is now ASYNC so the same code works both locally (fs) and on
- * Vercel (Blob storage) via the blobStorage abstraction layer.
+ * On Vercel (CONVEX_URL set): Convex is the primary store.
+ *   - load()  reads events + meta from Convex (results NOT loaded — 30k docs)
+ *   - save()  writes dirty events + new results + updated meta to Convex
  *
- * Callers must await load() and save().
+ * Local dev (no CONVEX_URL): reads/writes from server/data/store.json.
  */
-const blobStorage = require('./blobStorage');
 
-const STORE_FILE    = 'store.json';
+const path = require('path');
+const fs   = require('fs');
+
+const IS_CONVEX  = !!process.env.CONVEX_URL;
+const CONVEX_URL = process.env.CONVEX_URL;
+const DATA_DIR   = path.join(__dirname, 'data');
+const STORE_FILE = path.join(DATA_DIR, 'store.json');
+
 const CDT_OFFSET_MS = -5 * 60 * 60 * 1000; // UTC-5 (CDT)
+
+// ── Convex HTTP helpers ────────────────────────────────────────────────────────
+
+async function convexQuery(fnPath, args = {}) {
+  const r = await fetch(`${CONVEX_URL}/api/query`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Convex query ${fnPath} failed: ${JSON.stringify(data)}`);
+  return data.value;
+}
+
+async function convexMutation(fnPath, args = {}) {
+  const r = await fetch(`${CONVEX_URL}/api/mutation`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Convex mutation ${fnPath} failed: ${JSON.stringify(data)}`);
+  return data.value;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function emptyStore() {
   return {
-    meta: { orgId:'8008', lastRunAt:null, totalResults:0 },
-    events:  {},   // eventId → { id, name, status, open, close, fetchedAt, resultCount, resultsCompleted }
-    results: [],   // flat array of registration results
+    meta:    { orgId: '8008', lastRunAt: null, totalResults: 0 },
+    events:  {},
+    results: [],
   };
 }
 
-/** Convert any ISO timestamp to a CDT date string (YYYY-MM-DD). */
 function toCDTDate(isoStr) {
   if (!isoStr) return '';
   const ms = new Date(isoStr).getTime();
@@ -29,22 +59,114 @@ function toCDTDate(isoStr) {
   return new Date(ms + CDT_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-/** Today's date in CDT. */
 function todayCDT() { return toCDTDate(new Date().toISOString()); }
 
 // ── I/O ───────────────────────────────────────────────────────────────────────
 
 async function load() {
-  const data = await blobStorage.readJSON(STORE_FILE, null);
-  return data || emptyStore();
+  if (IS_CONVEX) {
+    try {
+      const value = await convexQuery('reports:storeStatus');
+      return {
+        meta:     value.meta || { orgId: '8008', lastRunAt: null, totalResults: 0 },
+        events:   value.events || {},
+        results:  [],          // never load all 30k results
+        _convex:  true,        // flag for save() and upsertResults()
+        _origTotal: value.meta?.totalResults ?? 0,
+      };
+    } catch (e) {
+      console.error('[store] Convex load failed:', e.message);
+      return { ...emptyStore(), _convex: true, _origTotal: 0 };
+    }
+  }
+
+  // Local FS
+  try {
+    if (!fs.existsSync(STORE_FILE)) return emptyStore();
+    return JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')) || emptyStore();
+  } catch {
+    return emptyStore();
+  }
 }
 
 async function save(store) {
+  if (IS_CONVEX) {
+    const now = new Date().toISOString();
+
+    // 1. Upsert dirty events
+    const dirtyEvents = Object.values(store.events)
+      .filter(e => e._dirty)
+      .map(({ _dirty, ...e }) => ({
+        seId:             String(e.id),
+        name:             String(e.name ?? ''),
+        status:           e.status,
+        open:             e.open   || undefined,
+        close:            e.close  || undefined,
+        sport:            e.sport  || undefined,
+        fetchedAt:        e.fetchedAt || now,
+        resultCount:      e.resultCount      != null ? e.resultCount      : undefined,
+        resultsCompleted: e.resultsCompleted  != null ? e.resultsCompleted  : undefined,
+      }));
+
+    if (dirtyEvents.length > 0) {
+      for (let i = 0; i < dirtyEvents.length; i += 50) {
+        await convexMutation('serverSync:batchUpsertEvents', { events: dirtyEvents.slice(i, i + 50) });
+      }
+    }
+
+    // 2. Upsert new results (in-memory results accumulated during this request)
+    let inserted = 0;
+    if (store.results.length > 0) {
+      for (let i = 0; i < store.results.length; i += 50) {
+        const batch = store.results.slice(i, i + 50).map(r => ({
+          seId:        String(r.seId ?? r.id),
+          eventId:     String(r.eventId),
+          eventName:   String(r.eventName ?? ''),
+          profileId:   r.profileId   || undefined,
+          email:       r.email       || undefined,
+          emails:      Array.isArray(r.emails)    ? r.emails.map(String)    : [],
+          phone:       r.phone       || undefined,
+          phones:      Array.isArray(r.phones)    ? r.phones.map(String)    : [],
+          firstName:   r.firstName   || undefined,
+          lastName:    r.lastName    || undefined,
+          zip:         r.zip         || undefined,
+          city:        r.city        || undefined,
+          state:       r.state       || undefined,
+          gender:      r.gender      || undefined,
+          gradYears:   Array.isArray(r.gradYears) ? r.gradYears.map(String) : [],
+          grade:       r.grade       || undefined,
+          revenue:     typeof r.revenue === 'number' ? r.revenue : undefined,
+          players:     Array.isArray(r.players)   ? r.players                : [],
+          created:     r.created     || undefined,
+          completed:   typeof r.completed === 'boolean' ? r.completed : undefined,
+        }));
+        const res = await convexMutation('serverSync:batchUpsertResults', { results: batch });
+        inserted += res?.inserted ?? 0;
+      }
+    }
+
+    // 3. Update storeState — increment totalResults by newly inserted docs only
+    if (dirtyEvents.length > 0 || inserted > 0) {
+      const newTotal = (store._origTotal ?? 0) + inserted;
+      await convexMutation('serverSync:updateStoreState', {
+        orgId:         store.meta.orgId     || '8008',
+        lastRunAt:     store.meta.lastRunAt || undefined,
+        totalResults:  newTotal,
+        lastUpdatedAt: now,
+      });
+    }
+    return;
+  }
+
+  // Local FS
   store.meta.totalResults = store.results.length;
-  await blobStorage.writeJSON(STORE_FILE, store);
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = STORE_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(store, null, 2));
+  fs.renameSync(tmp, STORE_FILE);
 }
 
-// ── Business logic (all sync — they operate on the in-memory object) ──────────
+// ── Business logic (sync — operate on in-memory db) ───────────────────────────
 
 function pendingEvents(store, allEvents) {
   return allEvents.filter(ev => {
@@ -57,21 +179,20 @@ function pendingEvents(store, allEvents) {
 
 function upsertEventMeta(store, ev, extra = {}) {
   store.events[ev.id] = {
-    id:    ev.id,
-    name:  ev.name,
+    id:     ev.id,
+    name:   ev.name,
     status: ev.status,
-    open:  ev.open,
-    close: ev.close,
-    sport: ev.sport,
+    open:   ev.open,
+    close:  ev.close,
+    sport:  ev.sport,
+    _dirty: true,     // marks event as changed — save() uses this
     ...extra,
   };
 }
 
-// Fields that backfill mode fills in when they are missing on existing records.
 const BACKFILL_FIELDS = ['profileId', 'email', 'emails', 'phone', 'phones', 'grade', 'revenue', 'players'];
 
 function upsertResults(store, eventId, eventName, newResults, { merge = false } = {}) {
-  // Build index: resultId → array index, for fast lookup and in-place mutation
   const idxById = {};
   store.results.forEach((r, i) => { if (r.eventId === eventId) idxById[r.id] = i; });
 
@@ -79,13 +200,11 @@ function upsertResults(store, eventId, eventName, newResults, { merge = false } 
   for (const r of newResults) {
     if (idxById[r.id] !== undefined) {
       if (merge) {
-        // Fill in any fields that were null/missing on the stored record
         const existing = store.results[idxById[r.id]];
         for (const f of BACKFILL_FIELDS) {
           const newVal = r[f];
           const oldVal = existing[f];
           if (newVal == null || newVal === '') continue;
-          // For arrays (emails, phones): merge if old is missing or empty
           if (Array.isArray(newVal)) {
             if (!Array.isArray(oldVal) || oldVal.length === 0) existing[f] = newVal;
           } else {
@@ -99,7 +218,11 @@ function upsertResults(store, eventId, eventName, newResults, { merge = false } 
     idxById[r.id] = store.results.length - 1;
     added++;
   }
-  store.meta.totalResults = store.results.length;
+
+  // In Convex mode, don't touch meta.totalResults — save() computes it from inserted count
+  if (!store._convex) {
+    store.meta.totalResults = store.results.length;
+  }
   return added;
 }
 
@@ -109,9 +232,11 @@ function purgeEvent(store, eventId) {
   const deleted = before - store.results.length;
   if (store.events[eventId]) {
     const { id, name, status, open, close, sport } = store.events[eventId];
-    store.events[eventId] = { id, name, status, open, close, sport };
+    store.events[eventId] = { id, name, status, open, close, sport, _dirty: true };
   }
-  store.meta.totalResults = store.results.length;
+  if (!store._convex) {
+    store.meta.totalResults = store.results.length;
+  }
   return deleted;
 }
 
@@ -123,7 +248,7 @@ function dailyStats(store, { fromDate, toDate, eventId } = {}) {
     if (fromDate && day < fromDate) continue;
     if (toDate   && day > toDate)   continue;
     if (eventId  && r.eventId !== eventId) continue;
-    if (!map[day]) map[day] = { date:day, total:0, byEvent:{} };
+    if (!map[day]) map[day] = { date: day, total: 0, byEvent: {} };
     map[day].total++;
     map[day].byEvent[r.eventId] = (map[day].byEvent[r.eventId] || 0) + 1;
   }
@@ -148,6 +273,7 @@ function gradYearStats(store, { fromDate, toDate, eventId } = {}) {
 }
 
 module.exports = {
+  IS_CONVEX,
   load, save, emptyStore,
   pendingEvents, upsertEventMeta, upsertResults, purgeEvent,
   dailyStats, gradYearStats,

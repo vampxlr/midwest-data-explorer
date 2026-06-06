@@ -420,7 +420,7 @@ app.get('/api/boot/stream', async (req, res) => {
     send('ready', {
       orgName:       me.data?.result?.client?.name || 'Midwest 3 on 3',
       orgId,
-      storeResults:  db.results.length,
+      storeResults:  db._convex ? db.meta.totalResults : db.results.length,
       recentEvents:  allEvents.map(e => ({ id: e.id, name: e.name, status: e.status, resultsCompleted: e.resultsCompleted, open: e.open, close: e.close })),
     });
 
@@ -741,13 +741,13 @@ app.get('/api/store/status', async (req, res) => {
   const open    = eventList.filter(e => e.status !== 2 && e.fetchedAt).length;
   const pending = eventList.filter(e => !e.fetchedAt).length;
   res.json({
-    meta:         db.meta,
-    totalResults: db.results.length,
-    totalEvents:  eventList.length,
+    meta:          db.meta,
+    totalResults:  db._convex ? db.meta.totalResults : db.results.length,
+    totalEvents:   eventList.length,
     closedFetched: closed,
-    openFetched:  open,
+    openFetched:   open,
     pending,
-    aggregator:   aggregator.getState(),
+    aggregator:    aggregator.getState(),
   });
 });
 
@@ -789,8 +789,11 @@ app.get('/api/store/purge-reload-stream', async (req, res) => {
     const existingCount = db.results.filter(r => r.eventId === eventId).length;
     log(`  Results currently saved  : ${existingCount}`, 'info');
     const deletedCount = store.purgeEvent(db, eventId);
+    // On Vercel+Convex: also purge results from Convex (local purge is no-op when results=[])
+    if (store.IS_CONVEX) {
+      await convexSync.purgeEventResults(String(eventId));
+    }
     await store.save(db);
-    convexSync.fireAndForget(() => convexSync.purgeEventResults(String(eventId)));
 
     // Clear in-memory caches
     cache.del(`analytics_reg_${eventId}_${orgId}`);
@@ -866,15 +869,11 @@ app.get('/api/store/purge-reload-stream', async (req, res) => {
       { id: String(eventId), name: reg.name, status: eventMeta.status, open: eventMeta.open, close: eventMeta.close },
       { fetchedAt: new Date().toISOString(), resultCount: rawResults.length, purgedAndReloaded: new Date().toISOString() }
     );
-    db.meta.totalResults = db.results.length;
+    if (!db._convex) db.meta.totalResults = db.results.length;
     await store.save(db);
-    convexSync.fireAndForget(async () => {
-      await convexSync.syncEventResults(db, String(eventId));
-      await convexSync.updateState(db);
-    });
 
     log(`  ✓ Saved ${added} new results`, 'ok');
-    log(`  ✓ Total results in store  : ${db.results.length}`, 'ok');
+    log(`  ✓ Total results in store  : ${db._convex ? db.meta.totalResults : db.results.length}`, 'ok');
     log(`════════════════════════════════════════`, 'info');
     log(` COMPLETE`, 'ok');
     log(`════════════════════════════════════════`, 'info');
@@ -901,15 +900,14 @@ app.post('/api/store/purge', async (req, res) => {
   const db = await store.load();
   const eventName    = db.events[eventId]?.name || eventId;
   const deletedCount = store.purgeEvent(db, eventId);
-  await store.save(db);
-  convexSync.fireAndForget(async () => {
+  if (store.IS_CONVEX) {
     await convexSync.purgeEventResults(String(eventId));
-    await convexSync.updateState(db);
-  });
+  }
+  await store.save(db);
   cache.keys().filter(k =>
     k.includes(eventId) || k.startsWith('analytics_agg_') || k.startsWith('regs_all_')
   ).forEach(k => cache.del(k));
-  res.json({ eventId, eventName, deleted: deletedCount, totalInStore: db.results.length });
+  res.json({ eventId, eventName, deleted: deletedCount, totalInStore: db._convex ? db.meta.totalResults : db.results.length });
 });
 
 // ── List events currently in store (for the data-management UI) ───────────────
@@ -1102,10 +1100,6 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
       });
       await store.save(db);
       cache.del('analytics_agg');
-      convexSync.fireAndForget(async () => {
-        await convexSync.syncEventResults(db, String(eventId));
-        await convexSync.updateState(db);
-      });
 
       return res.json({
         added, fetched: allCompact.length, skipped: false, backfilled: backfill,
