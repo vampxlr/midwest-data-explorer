@@ -1125,12 +1125,20 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
 app.get('/api/reports/daily', async (req, res) => {
   const { fromDate, toDate, eventId } = req.query;
   const db = await store.load();
-  const daily = store.dailyStats(db, { fromDate, toDate, eventId });
 
-  // Enrich with event names
   const eventMap = {};
   for (const e of Object.values(db.events)) eventMap[e.id] = e.name;
 
+  if (store.IS_CONVEX) {
+    const daily = await store.convexQuery('reports:reportDaily', {
+      fromDate: fromDate || undefined,
+      toDate: toDate || undefined,
+      eventId: eventId || undefined,
+    });
+    return res.json({ daily, eventMap, totalResults: db.meta.totalResults, meta: db.meta });
+  }
+
+  const daily = store.dailyStats(db, { fromDate, toDate, eventId });
   res.json({ daily, eventMap, totalResults: db.results.length, meta: db.meta });
 });
 
@@ -1139,6 +1147,16 @@ app.get('/api/reports/daily', async (req, res) => {
 app.get('/api/reports/grad-years', async (req, res) => {
   const { fromDate, toDate, eventId } = req.query;
   const db = await store.load();
+
+  if (store.IS_CONVEX) {
+    const gradYears = await store.convexQuery('reports:reportGradYears', {
+      fromDate: fromDate || undefined,
+      toDate: toDate || undefined,
+      eventId: eventId || undefined,
+    });
+    return res.json({ gradYears, totalResults: db.meta.totalResults });
+  }
+
   const gradYears = store.gradYearStats(db, { fromDate, toDate, eventId });
   res.json({ gradYears, totalResults: db.results.length });
 });
@@ -1743,6 +1761,22 @@ app.get('/api/reports/events', async (req, res) => {
   const { fromDate, toDate } = req.query;
   const db = await store.load();
 
+  if (store.IS_CONVEX) {
+    // In Convex mode, build event list from db.events (already loaded).
+    // resultCount is pre-stored per event; date filtering not applied.
+    const list = Object.values(db.events)
+      .filter(e => (e.resultCount || 0) > 0)
+      .map(e => ({
+        id: e.id,
+        name: e.name,
+        count: e.resultCount || 0,
+        status: e.status ?? null,
+        gradYears: [],
+      }))
+      .sort((a, b) => b.count - a.count);
+    return res.json({ events: list, totalResults: db.meta.totalResults, meta: db.meta });
+  }
+
   const byEvent = {};
   for (const r of db.results) {
     if (!r.eventId) continue;
@@ -1773,6 +1807,12 @@ app.get('/api/reports/events', async (req, res) => {
 
 app.get('/api/reports/recent', async (req, res) => {
   const db = await store.load();
+
+  if (store.IS_CONVEX) {
+    const stats = await store.convexQuery('reports:reportRecent', {});
+    return res.json({ ...stats, meta: db.meta });
+  }
+
   // All comparisons use CDT (UTC-5) so day boundaries match SportsEngine's display.
   const today     = store.todayCDT();
   const yest      = store.toCDTDate(new Date(Date.now() - 86400000).toISOString());

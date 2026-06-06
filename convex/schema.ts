@@ -68,4 +68,14 @@ export default defineSchema({
     totalResults: v.optional(v.number()),
     lastUpdatedAt: v.optional(v.string()),
   }).index("by_key", ["key"]),
+
+  statsDaily: defineTable({
+    date: v.string(),   // "YYYY-MM-DD" in CDT
+    count: v.number(),
+  }).index("by_date", ["date"]),
+
+  statsGradYear: defineTable({
+    year: v.string(),   // "YYYY"
+    count: v.number(),  // completed registrations only
+  }).index("by_year", ["year"]),
 });

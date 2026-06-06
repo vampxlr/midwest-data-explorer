@@ -6,12 +6,22 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 
+const CDT_OFFSET_MS = -5 * 60 * 60 * 1000;
+function toCDTDate(isoStr: string): string {
+  const ms = new Date(isoStr).getTime();
+  if (isNaN(ms)) return isoStr.slice(0, 10);
+  return new Date(ms + CDT_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 export const batchUpsertResults = mutation({
   args: { results: v.array(v.any()) },
   handler: async (ctx, { results }) => {
     let inserted = 0;
     let updated = 0;
     const now = new Date().toISOString();
+    const dailyDelta: Record<string, number> = {};
+    const gradYearDelta: Record<string, number> = {};
+
     for (const r of results) {
       const seId = String(r.seId ?? r.id);
       const existing = await ctx.db
@@ -47,8 +57,47 @@ export const batchUpsertResults = mutation({
       } else {
         await ctx.db.insert("results", doc);
         inserted++;
+        // Track stats delta for new inserts only
+        if (doc.created) {
+          const date = toCDTDate(doc.created);
+          dailyDelta[date] = (dailyDelta[date] || 0) + 1;
+        }
+        if (doc.completed) {
+          for (const gy of doc.gradYears) {
+            if (/^\d{4}$/.test(gy)) {
+              gradYearDelta[gy] = (gradYearDelta[gy] || 0) + 1;
+            }
+          }
+        }
       }
     }
+
+    // Apply daily stats delta
+    for (const [date, delta] of Object.entries(dailyDelta)) {
+      const stat = await ctx.db
+        .query("statsDaily")
+        .withIndex("by_date", (q) => q.eq("date", date))
+        .first();
+      if (stat) {
+        await ctx.db.patch(stat._id, { count: stat.count + delta });
+      } else {
+        await ctx.db.insert("statsDaily", { date, count: delta });
+      }
+    }
+
+    // Apply grad year stats delta
+    for (const [year, delta] of Object.entries(gradYearDelta)) {
+      const stat = await ctx.db
+        .query("statsGradYear")
+        .withIndex("by_year", (q) => q.eq("year", year))
+        .first();
+      if (stat) {
+        await ctx.db.patch(stat._id, { count: stat.count + delta });
+      } else {
+        await ctx.db.insert("statsGradYear", { year, count: delta });
+      }
+    }
+
     return { inserted, updated };
   },
 });

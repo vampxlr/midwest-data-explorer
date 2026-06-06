@@ -274,6 +274,7 @@ function gradYearStats(store, { fromDate, toDate, eventId } = {}) {
 
 module.exports = {
   IS_CONVEX,
+  convexQuery,
   load, save, emptyStore,
   pendingEvents, upsertEventMeta, upsertResults, purgeEvent,
   dailyStats, gradYearStats,
