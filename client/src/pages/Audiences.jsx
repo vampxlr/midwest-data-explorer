@@ -258,9 +258,9 @@ function ContactStorePanel({ recentRegs, onStoreUpdated }) {
 function AudienceBuilder({ recentRegs, contactStatus }) {
   const [step,          setStep]          = useState(1);
   // Step 1: league selection mode
-  const [leagueMode,    setLeagueMode]    = useState('all');  // 'all' | 'year' | 'custom'
-  const [selectedYear,  setSelectedYear]  = useState(curYear); // for 'year' mode
-  const [customLeagues, setCustomLeagues] = useState([]);       // for 'custom' mode
+  const [leagueMode,    setLeagueMode]    = useState('all');        // 'all' | 'year' | 'custom'
+  const [selectedYears, setSelectedYears] = useState(new Set([curYear])); // for 'year' mode — multi
+  const [customLeagues, setCustomLeagues] = useState([]);               // for 'custom' mode
   // Step 2: grad year range
   const [yearFrom,      setYearFrom]      = useState('');
   const [yearTo,        setYearTo]        = useState('');
@@ -288,9 +288,10 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
   function getEventIds() {
     if (leagueMode==='all') return null; // null = all
     if (leagueMode==='year') {
+      if (!selectedYears.size) return null;
       return recentRegs
-        .filter(r=>(r.close||r.open||'').slice(0,4)===selectedYear)
-        .map(r=>String(r.id));
+        .filter(r => selectedYears.has((r.close||r.open||'').slice(0,4)))
+        .map(r => String(r.id));
     }
     return customLeagues.map(l=>String(l.id));
   }
@@ -315,7 +316,7 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
     finally { setPreviewing(false); }
   }
 
-  useEffect(()=>{ if (step>=2) refreshPreview(); }, [step, leagueMode, selectedYear, customLeagues, yearFrom, yearTo, selGenders]);
+  useEffect(()=>{ if (step>=2) refreshPreview(); }, [step, leagueMode, selectedYears, customLeagues, yearFrom, yearTo, selGenders]);
 
   function downloadCSV() {
     const url = api.contactsExportUrl({
@@ -331,7 +332,7 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
 
   function buildLabel() {
     const parts = [];
-    if (leagueMode==='year') parts.push(selectedYear);
+    if (leagueMode==='year') parts.push([...selectedYears].sort().join('-') || 'year');
     else if (leagueMode==='custom') parts.push(`${customLeagues.length}leagues`);
     else parts.push('all');
     if (yearFrom||yearTo) parts.push(`${yearFrom||'*'}-${yearTo||'*'}`);
@@ -390,7 +391,7 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
           <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:20}}>
             {[
               { id:'all',    label:'All Leagues', desc:`All ${recentRegs.length} leagues in the contact store` },
-              { id:'year',   label:'Specific Year', desc:'All leagues from a particular season year' },
+              { id:'year',   label:'By Year', desc:'All leagues from one or more season years (multi-select)' },
               { id:'custom', label:'Custom Selection', desc:'Pick individual leagues by name' },
             ].map(m=>(
               <label key={m.id} onClick={()=>setLeagueMode(m.id)}
@@ -412,21 +413,45 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
             ))}
           </div>
 
-          {/* Year picker */}
+          {/* Year picker — multi-select */}
           {leagueMode==='year' && (
             <div style={{marginBottom:16}}>
-              <label style={{display:'block',fontSize:10,color:'#64748b',marginBottom:6,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>
-                Season Year
-              </label>
-              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-                {availableYears.map(y=>(
-                  <button key={y} onClick={()=>setSelectedYear(y)}
-                    style={{padding:'8px 20px',borderRadius:8,fontSize:13,fontWeight:700,border:'none',cursor:'pointer',
-                      background:selectedYear===y?'#2563eb':'#1e2235',color:selectedYear===y?'#fff':'#64748b'}}>
-                    {y}
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                <label style={{fontSize:10,color:'#64748b',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>
+                  Season Year(s) — click to toggle
+                </label>
+                {selectedYears.size > 0 && (
+                  <button onClick={()=>setSelectedYears(new Set())}
+                    style={{fontSize:10,background:'none',border:'none',color:'#475569',cursor:'pointer',padding:'0 4px'}}>
+                    clear all
                   </button>
-                ))}
+                )}
               </div>
+              <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                {availableYears.map(y=>{
+                  const on = selectedYears.has(y);
+                  return (
+                    <button key={y} onClick={()=>setSelectedYears(prev=>{
+                        const n = new Set(prev);
+                        on ? n.delete(y) : n.add(y);
+                        return n;
+                      })}
+                      style={{padding:'8px 20px',borderRadius:8,fontSize:13,fontWeight:700,border:'none',cursor:'pointer',
+                        background:on?'#2563eb':'#1e2235',color:on?'#fff':'#64748b',
+                        outline: on?'2px solid #3b82f6':'none', outlineOffset:1}}>
+                      {y}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedYears.size > 0 && (
+                <div style={{marginTop:8,fontSize:11,color:'#64748b'}}>
+                  {(() => {
+                    const ids = recentRegs.filter(r=>selectedYears.has((r.close||r.open||'').slice(0,4)));
+                    return `${ids.length} league${ids.length!==1?'s':''} selected across ${[...selectedYears].sort().join(', ')}`;
+                  })()}
+                </div>
+              )}
             </div>
           )}
 
@@ -460,12 +485,17 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
             </div>
           )}
 
-          <button onClick={()=>setStep(2)}
-            disabled={leagueMode==='custom'&&customLeagues.length===0}
-            style={{padding:'10px 28px',background:'#2563eb',color:'#fff',border:'none',borderRadius:8,cursor:'pointer',fontWeight:700,fontSize:13,
-              opacity:leagueMode==='custom'&&customLeagues.length===0?0.4:1}}>
-            Next: Grad Year Range →
-          </button>
+          {(() => {
+            const disabled = (leagueMode==='custom' && customLeagues.length===0) ||
+                             (leagueMode==='year'   && selectedYears.size===0);
+            return (
+              <button onClick={()=>setStep(2)} disabled={disabled}
+                style={{padding:'10px 28px',background:'#2563eb',color:'#fff',border:'none',borderRadius:8,
+                  cursor:disabled?'not-allowed':'pointer',fontWeight:700,fontSize:13,opacity:disabled?0.4:1}}>
+                Next: Grad Year Range →
+              </button>
+            );
+          })()}
         </div>
       )}
 
