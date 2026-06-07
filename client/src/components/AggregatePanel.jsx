@@ -225,7 +225,9 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
         }
       } catch (err) {
         errors++;
-        cdAddLog(`  ✗ FAILED: ${err.response?.data?.error || err.message}`, 'error');
+        const apiErr = err.response?.data;
+        const detailMsg = apiErr?.detail ? ` — ${JSON.stringify(apiErr.detail)}` : '';
+        cdAddLog(`  ✗ FAILED: ${apiErr?.error || err.message}${detailMsg}`, 'error');
       }
 
       setCdProgress({ current: i+1, total: eventsToFetch.length, added, skipped, errors });

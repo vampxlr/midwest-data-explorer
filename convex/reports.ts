@@ -18,6 +18,26 @@ function toCDTDate(isoStr: string): string {
   return new Date(ms + CDT_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+// ── YoY classification helpers (mirrors /api/reports/yoy-daily in server/index.js) ─
+function classifyEvent(name: string = ""): string {
+  const n = name.toLowerCase();
+  if (/\btournament\b|\btourney\b/.test(n)) return "tournament";
+  if (/\bcamp\b|\bclinic\b|\bshooting\b|\bscoring\b|\bskills?\b|\btraining\b|\bacademy\b|\bdevelopment\b/.test(n)) return "camp";
+  return "league";
+}
+function seasonYear(eventName: string, eventClose?: string, eventOpen?: string): string {
+  const m = (eventName || "").match(/\b(20\d{2})\b/);
+  if (m) return m[1];
+  return (eventClose || eventOpen || "").slice(0, 4) || "unknown";
+}
+function dayOfYear(dateStr: string): number | null {
+  if (!dateStr || dateStr.length < 10) return null;
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const start = Date.UTC(y, 0, 1);
+  const cur = Date.UTC(y, m - 1, d);
+  return Math.floor((cur - start) / 86400000) + 1;
+}
+
 // ── Store status ────────────────────────────────────────────────────────────
 
 export const storeStatus = query({
@@ -231,6 +251,176 @@ export const lapsedIndividuals = query({
   },
 });
 
+// ── YoY retention (per-event indexed scans, bounded by year/type filters) ──
+// Source = ALL completed results from sourceEventIds, deduplicated across events.
+// Target = ALL completed results from targetEventIds, matched against source.
+
+function getKeysFor(r: { profileId?: string; emails?: string[]; email?: string; phones?: string[]; phone?: string }): string[] {
+  const keys: string[] = [];
+  if (r.profileId) keys.push(`pid:${String(r.profileId)}`);
+  const allEmails = r.emails?.length ? r.emails : (r.email ? [r.email] : []);
+  for (const e of allEmails) {
+    if (e && e.includes("@")) keys.push(`em:${e.toLowerCase().trim()}`);
+  }
+  const allPhones = r.phones?.length ? r.phones : (r.phone ? [r.phone] : []);
+  for (const p of allPhones) {
+    const d = String(p).replace(/\D/g, "");
+    if (d.length >= 10) keys.push(`ph:${d.slice(-10)}`);
+  }
+  return keys;
+}
+
+export const yoyRetention = query({
+  args: {
+    sourceEventIds: v.array(v.string()),
+    targetEventIds: v.array(v.string()),
+  },
+  handler: async (ctx, { sourceEventIds, targetEventIds }) => {
+    type Canonical = {
+      seId: string;
+      email?: string;
+      phone?: string;
+      gradYears: string[];
+      grade?: string;
+      gender?: string;
+      city?: string;
+      revenue?: number;
+    };
+
+    const toCanonical = (r: any): Canonical => ({
+      seId: r.seId,
+      email: r.email,
+      phone: r.phone,
+      gradYears: r.gradYears ?? [],
+      grade: r.grade,
+      gender: r.gender,
+      city: r.city,
+      revenue: r.revenue,
+    });
+
+    // Build deduplicated source index: identifier key → canonical participant
+    const srcIndex = new Map<string, Canonical>();
+    let uniqueSrc = 0;
+    let sourceResultsCount = 0;
+
+    for (const eid of sourceEventIds) {
+      const rows = await ctx.db
+        .query("results")
+        .withIndex("by_eventId", (q) => q.eq("eventId", eid))
+        .collect();
+      for (const r of rows) {
+        if (!r.completed) continue;
+        sourceResultsCount++;
+        const keys = getKeysFor(r);
+        let canonical: Canonical | null = null;
+        for (const k of keys) {
+          if (srcIndex.has(k)) { canonical = srcIndex.get(k)!; break; }
+        }
+        if (!canonical) {
+          canonical = toCanonical(r);
+          uniqueSrc++;
+        }
+        for (const k of keys) {
+          if (!srcIndex.has(k)) srcIndex.set(k, canonical);
+        }
+      }
+    }
+
+    // Match target results against source index — bucket by target event
+    const bucketMap = new Map<string, {
+      eventId: string;
+      eventName: string;
+      participants: Array<{
+        sourceId: string;
+        email: string | null;
+        phone: string | null;
+        gradYearPast: string | null;
+        gradYearNow: string | null;
+        grade: string | null;
+        gender: string | null;
+        city: string | null;
+      }>;
+    }>();
+    const matchedSrcIds = new Set<string>();
+    let revenueTotal = 0;
+    let revenueAll = 0;
+
+    for (const eid of targetEventIds) {
+      const rows = await ctx.db
+        .query("results")
+        .withIndex("by_eventId", (q) => q.eq("eventId", eid))
+        .collect();
+      for (const rT of rows) {
+        if (!rT.completed) continue;
+        revenueAll += rT.revenue || 0;
+        const keys = getKeysFor(rT);
+        let srcCanonical: Canonical | null = null;
+        for (const k of keys) {
+          if (srcIndex.has(k)) { srcCanonical = srcIndex.get(k)!; break; }
+        }
+        if (!srcCanonical) continue;
+        revenueTotal += rT.revenue || 0;
+
+        if (!bucketMap.has(eid)) {
+          bucketMap.set(eid, { eventId: eid, eventName: rT.eventName, participants: [] });
+        }
+        const bucket = bucketMap.get(eid)!;
+        if (!bucket.participants.some((p) => p.sourceId === srcCanonical!.seId)) {
+          bucket.participants.push({
+            sourceId: srcCanonical.seId,
+            email: rT.email || srcCanonical.email || null,
+            phone: rT.phone || srcCanonical.phone || null,
+            gradYearPast: srcCanonical.gradYears?.[0] || null,
+            gradYearNow: rT.gradYears?.[0] || null,
+            grade: rT.grade || srcCanonical.grade || null,
+            gender: rT.gender || srcCanonical.gender || null,
+            city: rT.city || srcCanonical.city || null,
+          });
+          matchedSrcIds.add(srcCanonical.seId);
+        }
+      }
+    }
+
+    const buckets = [...bucketMap.values()]
+      .map((b) => ({ ...b, count: b.participants.length }))
+      .sort((a, b) => b.count - a.count);
+
+    // Lapsed: unique source participants with no match in target
+    const lapsed: Array<{
+      sourceId: string;
+      email: string | null;
+      phone: string | null;
+      gradYear: string | null;
+      grade: string | null;
+      gender: string | null;
+      city: string | null;
+    }> = [];
+    const seen = new Set<string>();
+    for (const canonical of srcIndex.values()) {
+      if (seen.has(canonical.seId)) continue;
+      seen.add(canonical.seId);
+      if (matchedSrcIds.has(canonical.seId)) continue;
+      lapsed.push({
+        sourceId: canonical.seId,
+        email: canonical.email || null,
+        phone: canonical.phone || null,
+        gradYear: canonical.gradYears?.[0] || null,
+        grade: canonical.grade || null,
+        gender: canonical.gender || null,
+        city: canonical.city || null,
+      });
+    }
+
+    return {
+      source: { totalResults: sourceResultsCount, uniqueParticipants: uniqueSrc },
+      returned: { unique: matchedSrcIds.size },
+      lapsed: { count: lapsed.length, participants: lapsed },
+      buckets,
+      revenue: { returned: revenueTotal, allTarget: revenueAll },
+    };
+  },
+});
+
 // ── Audience preview (scans per-event, uses index) ─────────────────────────
 
 export const audiencePreview = query({
@@ -396,6 +586,69 @@ export const reportRecent = query({
   },
 });
 
+// ── Report: gender/state/city/zip distributions (pre-computed, completed only) ─
+
+export const reportDemographics = query({
+  handler: async (ctx) => {
+    const [gender, state, city, zip] = await Promise.all([
+      ctx.db.query("statsGender").collect(),
+      ctx.db.query("statsState").collect(),
+      ctx.db.query("statsCity").collect(),
+      ctx.db.query("statsZip").collect(),
+    ]);
+    const toArr = (rows: Array<{ count: number }>, key: string) =>
+      rows
+        .map((r: any) => ({ name: r[key], count: r.count }))
+        .sort((a, b) => b.count - a.count);
+    return {
+      gender: toArr(gender, "gender"),
+      state: toArr(state, "state"),
+      city: toArr(city, "city").slice(0, 50),
+      zip: toArr(zip, "zip").slice(0, 100),
+    };
+  },
+});
+
+// ── Report: year-over-year daily registration activity (statsYoyDaily) ────────
+
+export const reportYoyDaily = query({
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("statsYoyDaily").collect();
+    return rows.map((r) => ({ year: r.year, type: r.type, day: r.day, count: r.count }));
+  },
+});
+
+// ── Report: daily league activity for one date (statsDaily + indexed range) ───
+
+export const reportDailyActivity = query({
+  args: { date: v.string() },
+  handler: async (ctx, { date }) => {
+    // A CDT calendar date "YYYY-MM-DD" covers UTC [date 05:00, date+1 05:00)
+    const fromCreated = `${date}T05:00:00.000Z`;
+    const nextDate = new Date(new Date(`${date}T00:00:00.000Z`).getTime() + 86400000)
+      .toISOString()
+      .slice(0, 10);
+    const toCreated = `${nextDate}T05:00:00.000Z`;
+
+    const [dayResults, dailyStats] = await Promise.all([
+      ctx.db
+        .query("results")
+        .withIndex("by_created", (q) => q.gte("created", fromCreated).lt("created", toCreated))
+        .collect(),
+      ctx.db.query("statsDaily").collect(),
+    ]);
+
+    return {
+      dayResults: dayResults.map((r) => ({
+        eventId: r.eventId,
+        eventName: r.eventName,
+        gradYears: r.gradYears,
+      })),
+      dailyStats: dailyStats.map((s) => ({ date: s.date, count: s.count })),
+    };
+  },
+});
+
 // ── Backfill: one-time scan of all results to populate stats tables ────────────
 
 export const resultPageInternal = internalQuery({
@@ -404,9 +657,15 @@ export const resultPageInternal = internalQuery({
     const result = await ctx.db.query("results").paginate(paginationOpts);
     return {
       page: result.page.map((r) => ({
+        eventId: r.eventId,
+        eventName: r.eventName,
         created: r.created,
         gradYears: r.gradYears,
         completed: r.completed,
+        gender: r.gender,
+        state: r.state,
+        city: r.city,
+        zip: r.zip,
       })),
       isDone: result.isDone,
       continueCursor: result.continueCursor,
@@ -414,33 +673,80 @@ export const resultPageInternal = internalQuery({
   },
 });
 
+export const allEventsInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const events = await ctx.db.query("events").collect();
+    return events.map((e) => ({ seId: e.seId, name: e.name, close: e.close, open: e.open }));
+  },
+});
+
 export const writeBackfilledStats = internalMutation({
   args: {
     dailyStats: v.array(v.object({ date: v.string(), count: v.number() })),
     gradYearStats: v.array(v.object({ year: v.string(), count: v.number() })),
+    genderStats: v.array(v.object({ gender: v.string(), count: v.number() })),
+    stateStats: v.array(v.object({ state: v.string(), count: v.number() })),
+    cityStats: v.array(v.object({ city: v.string(), count: v.number() })),
+    zipStats: v.array(v.object({ zip: v.string(), count: v.number() })),
+    yoyDailyStats: v.array(v.object({ year: v.string(), type: v.string(), day: v.number(), count: v.number() })),
   },
-  handler: async (ctx, { dailyStats, gradYearStats }) => {
+  handler: async (ctx, { dailyStats, gradYearStats, genderStats, stateStats, cityStats, zipStats, yoyDailyStats }) => {
     for (const { date, count } of dailyStats) {
       const existing = await ctx.db
         .query("statsDaily")
         .withIndex("by_date", (q) => q.eq("date", date))
         .first();
-      if (existing) {
-        await ctx.db.patch(existing._id, { count });
-      } else {
-        await ctx.db.insert("statsDaily", { date, count });
-      }
+      if (existing) await ctx.db.patch(existing._id, { count });
+      else await ctx.db.insert("statsDaily", { date, count });
     }
     for (const { year, count } of gradYearStats) {
       const existing = await ctx.db
         .query("statsGradYear")
         .withIndex("by_year", (q) => q.eq("year", year))
         .first();
-      if (existing) {
-        await ctx.db.patch(existing._id, { count });
-      } else {
-        await ctx.db.insert("statsGradYear", { year, count });
-      }
+      if (existing) await ctx.db.patch(existing._id, { count });
+      else await ctx.db.insert("statsGradYear", { year, count });
+    }
+    for (const { gender, count } of genderStats) {
+      const existing = await ctx.db
+        .query("statsGender")
+        .withIndex("by_gender", (q) => q.eq("gender", gender))
+        .first();
+      if (existing) await ctx.db.patch(existing._id, { count });
+      else await ctx.db.insert("statsGender", { gender, count });
+    }
+    for (const { state, count } of stateStats) {
+      const existing = await ctx.db
+        .query("statsState")
+        .withIndex("by_state", (q) => q.eq("state", state))
+        .first();
+      if (existing) await ctx.db.patch(existing._id, { count });
+      else await ctx.db.insert("statsState", { state, count });
+    }
+    for (const { city, count } of cityStats) {
+      const existing = await ctx.db
+        .query("statsCity")
+        .withIndex("by_city", (q) => q.eq("city", city))
+        .first();
+      if (existing) await ctx.db.patch(existing._id, { count });
+      else await ctx.db.insert("statsCity", { city, count });
+    }
+    for (const { zip, count } of zipStats) {
+      const existing = await ctx.db
+        .query("statsZip")
+        .withIndex("by_zip", (q) => q.eq("zip", zip))
+        .first();
+      if (existing) await ctx.db.patch(existing._id, { count });
+      else await ctx.db.insert("statsZip", { zip, count });
+    }
+    for (const { year, type, day, count } of yoyDailyStats) {
+      const existing = await ctx.db
+        .query("statsYoyDaily")
+        .withIndex("by_year_type_day", (q) => q.eq("year", year).eq("type", type).eq("day", day))
+        .first();
+      if (existing) await ctx.db.patch(existing._id, { count });
+      else await ctx.db.insert("statsYoyDaily", { year, type, day, count });
     }
   },
 });
@@ -449,9 +755,20 @@ export const backfillStats = action({
   handler: async (ctx) => {
     const dailyDelta: Record<string, number> = {};
     const gradYearDelta: Record<string, number> = {};
+    const genderDelta: Record<string, number> = {};
+    const stateDelta: Record<string, number> = {};
+    const cityDelta: Record<string, number> = {};
+    const zipDelta: Record<string, number> = {};
+    const yoyDailyDelta: Record<string, number> = {};
     let cursor: string | null = null;
     let isDone = false;
     let total = 0;
+
+    const allEvents = await ctx.runQuery(internal.reports.allEventsInternal, {});
+    const eventMap = new Map<string, { name: string; close?: string; open?: string }>();
+    for (const e of allEvents) {
+      eventMap.set(e.seId, { name: e.name, close: e.close, open: e.open });
+    }
 
     while (!isDone) {
       const result = await ctx.runQuery(internal.reports.resultPageInternal, {
@@ -468,6 +785,29 @@ export const backfillStats = action({
               gradYearDelta[gy] = (gradYearDelta[gy] || 0) + 1;
             }
           }
+          if (r.gender) genderDelta[r.gender] = (genderDelta[r.gender] || 0) + 1;
+          const st = r.state?.trim();
+          if (st) stateDelta[st] = (stateDelta[st] || 0) + 1;
+          const ci = r.city?.trim();
+          if (ci) cityDelta[ci] = (cityDelta[ci] || 0) + 1;
+          if (r.zip) {
+            const z = String(r.zip).slice(0, 5);
+            zipDelta[z] = (zipDelta[z] || 0) + 1;
+          }
+          if (r.created) {
+            const date = toCDTDate(r.created);
+            const day = dayOfYear(date);
+            if (day) {
+              const ev = eventMap.get(r.eventId);
+              const name = ev?.name || r.eventName;
+              const year = seasonYear(name, ev?.close, ev?.open);
+              if (/^20\d{2}$/.test(year)) {
+                const type = classifyEvent(name);
+                const key = `${year}|${type}|${day}`;
+                yoyDailyDelta[key] = (yoyDailyDelta[key] || 0) + 1;
+              }
+            }
+          }
         }
         total++;
       }
@@ -475,26 +815,53 @@ export const backfillStats = action({
       isDone = result.isDone;
     }
 
+    const empty = { dailyStats: [], gradYearStats: [], genderStats: [], stateStats: [], cityStats: [], zipStats: [], yoyDailyStats: [] };
+
     // Write in batches of 400 to avoid Convex write limits per transaction
     const dailyEntries = Object.entries(dailyDelta).map(([date, count]) => ({ date, count }));
     for (let i = 0; i < dailyEntries.length; i += 400) {
       await ctx.runMutation(internal.reports.writeBackfilledStats, {
+        ...empty,
         dailyStats: dailyEntries.slice(i, i + 400),
-        gradYearStats: [],
       });
     }
     const gradYearEntries = Object.entries(gradYearDelta).map(([year, count]) => ({ year, count }));
     if (gradYearEntries.length > 0) {
-      await ctx.runMutation(internal.reports.writeBackfilledStats, {
-        dailyStats: [],
-        gradYearStats: gradYearEntries,
-      });
+      await ctx.runMutation(internal.reports.writeBackfilledStats, { ...empty, gradYearStats: gradYearEntries });
+    }
+    const genderEntries = Object.entries(genderDelta).map(([gender, count]) => ({ gender, count }));
+    if (genderEntries.length > 0) {
+      await ctx.runMutation(internal.reports.writeBackfilledStats, { ...empty, genderStats: genderEntries });
+    }
+    const stateEntries = Object.entries(stateDelta).map(([state, count]) => ({ state, count }));
+    for (let i = 0; i < stateEntries.length; i += 400) {
+      await ctx.runMutation(internal.reports.writeBackfilledStats, { ...empty, stateStats: stateEntries.slice(i, i + 400) });
+    }
+    const cityEntries = Object.entries(cityDelta).map(([city, count]) => ({ city, count }));
+    for (let i = 0; i < cityEntries.length; i += 400) {
+      await ctx.runMutation(internal.reports.writeBackfilledStats, { ...empty, cityStats: cityEntries.slice(i, i + 400) });
+    }
+    const zipEntries = Object.entries(zipDelta).map(([zip, count]) => ({ zip, count }));
+    for (let i = 0; i < zipEntries.length; i += 400) {
+      await ctx.runMutation(internal.reports.writeBackfilledStats, { ...empty, zipStats: zipEntries.slice(i, i + 400) });
+    }
+    const yoyDailyEntries = Object.entries(yoyDailyDelta).map(([key, count]) => {
+      const [year, type, dayStr] = key.split("|");
+      return { year, type, day: Number(dayStr), count };
+    });
+    for (let i = 0; i < yoyDailyEntries.length; i += 400) {
+      await ctx.runMutation(internal.reports.writeBackfilledStats, { ...empty, yoyDailyStats: yoyDailyEntries.slice(i, i + 400) });
     }
 
     return {
       total,
       dailyDays: Object.keys(dailyDelta).length,
       gradYears: Object.keys(gradYearDelta).length,
+      genders: Object.keys(genderDelta).length,
+      states: Object.keys(stateDelta).length,
+      cities: Object.keys(cityDelta).length,
+      zips: Object.keys(zipDelta).length,
+      yoyDailyKeys: Object.keys(yoyDailyDelta).length,
     };
   },
 });

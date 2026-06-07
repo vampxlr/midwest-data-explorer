@@ -78,4 +78,31 @@ export default defineSchema({
     year: v.string(),   // "YYYY"
     count: v.number(),  // completed registrations only
   }).index("by_year", ["year"]),
+
+  statsGender: defineTable({
+    gender: v.string(),
+    count: v.number(),  // completed registrations only
+  }).index("by_gender", ["gender"]),
+
+  statsState: defineTable({
+    state: v.string(),
+    count: v.number(),  // completed registrations only
+  }).index("by_state", ["state"]),
+
+  statsCity: defineTable({
+    city: v.string(),
+    count: v.number(),  // completed registrations only
+  }).index("by_city", ["city"]),
+
+  statsZip: defineTable({
+    zip: v.string(),    // 5-digit
+    count: v.number(),  // completed registrations only
+  }).index("by_zip", ["zip"]),
+
+  statsYoyDaily: defineTable({
+    year: v.string(),   // season year "YYYY"
+    type: v.string(),   // "league" | "camp" | "tournament"
+    day: v.number(),    // day-of-year, 1-366 (CDT)
+    count: v.number(),  // completed registrations only
+  }).index("by_year_type_day", ["year", "type", "day"]),
 });

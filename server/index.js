@@ -571,7 +571,9 @@ app.get('/api/analytics/registration', async (req, res) => {
 
   // Prefer locally-stored data — fall back to live API if not yet aggregated
   const db = await store.load();
-  const stored = db.results.filter(r => String(r.eventId) === String(registrationId));
+  const stored = store.IS_CONVEX
+    ? await store.convexQuery('reports:resultsByEvent', { eventId: String(registrationId) })
+    : db.results.filter(r => String(r.eventId) === String(registrationId));
   if (stored.length > 0) {
     const gradYearMap = {}, genderMap = {}, stateMap = {}, cityMap = {}, zipMap = {};
     let teams = 0;
@@ -634,49 +636,62 @@ app.get('/api/analytics/aggregate', async (req, res) => {
 
   try {
     const db = await store.load();
-    const gradYearMap = {}, genderMap = {}, stateMap = {}, cityMap = {}, zipMap = {};
-    const eventCountMap = {};
-    let totalTeams = 0;
-
-    for (const r of db.results) {
-      if (!r.completed) continue;
-      totalTeams++;
-
-      // Per-event team count
-      if (!eventCountMap[r.eventId]) {
-        eventCountMap[r.eventId] = { id: String(r.eventId), name: r.eventName, teams: 0 };
-      }
-      eventCountMap[r.eventId].teams++;
-
-      for (const gy of (r.gradYears || [])) {
-        if (/^\d{4}$/.test(gy)) gradYearMap[gy] = (gradYearMap[gy] || 0) + 1;
-      }
-      if (r.gender) genderMap[r.gender] = (genderMap[r.gender] || 0) + 1;
-      const st = r.state?.trim(); if (st) stateMap[st] = (stateMap[st] || 0) + 1;
-      const ci = r.city?.trim();  if (ci) cityMap[ci]  = (cityMap[ci]  || 0) + 1;
-      if (r.zip) { const z = String(r.zip).slice(0,5); zipMap[z] = (zipMap[z] || 0) + 1; }
-    }
-
     const toArr = m =>
       Object.entries(m).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
 
-    let gradYearData = toArr(gradYearMap);
+    // Per-event team counts and the all-time total can be derived directly from
+    // db.events (resultsCompleted) — already loaded, no results scan needed.
+    const registrationSummary = Object.values(db.events)
+      .filter(e => (e.resultsCompleted || 0) > 0)
+      .map(e => ({ id: String(e.id), name: e.name, teams: e.resultsCompleted || 0 }))
+      .sort((a, b) => b.teams - a.teams);
+    const totalTeams = registrationSummary.reduce((s, e) => s + e.teams, 0);
+
+    let gradYearData, genderData, stateData, cityData, zipData;
+
+    if (store.IS_CONVEX) {
+      const [gradYears, demo] = await Promise.all([
+        store.convexQuery('reports:reportGradYears', {}),
+        store.convexQuery('reports:reportDemographics', {}),
+      ]);
+      gradYearData = gradYears;
+      genderData   = demo.gender;
+      stateData    = demo.state;
+      cityData     = demo.city;
+      zipData      = demo.zip;
+    } else {
+      const gradYearMap = {}, genderMap = {}, stateMap = {}, cityMap = {}, zipMap = {};
+      for (const r of db.results) {
+        if (!r.completed) continue;
+        for (const gy of (r.gradYears || [])) {
+          if (/^\d{4}$/.test(gy)) gradYearMap[gy] = (gradYearMap[gy] || 0) + 1;
+        }
+        if (r.gender) genderMap[r.gender] = (genderMap[r.gender] || 0) + 1;
+        const st = r.state?.trim(); if (st) stateMap[st] = (stateMap[st] || 0) + 1;
+        const ci = r.city?.trim();  if (ci) cityMap[ci]  = (cityMap[ci]  || 0) + 1;
+        if (r.zip) { const z = String(r.zip).slice(0,5); zipMap[z] = (zipMap[z] || 0) + 1; }
+      }
+      gradYearData = toArr(gradYearMap);
+      genderData   = toArr(genderMap);
+      stateData    = toArr(stateMap);
+      cityData     = toArr(cityMap).slice(0, 50);
+      zipData      = toArr(zipMap).slice(0, 100);
+    }
+
     if (gradYearFilter) {
       const years = gradYearFilter.split(',').map(s => s.trim());
       gradYearData = gradYearData.filter(d => years.includes(d.name));
     }
-
-    const registrationSummary = Object.values(eventCountMap).sort((a, b) => b.teams - a.teams);
 
     res.json({
       registrationsAnalyzed: registrationSummary.length,
       registrationSummary,
       total: totalTeams,
       graduationYear: gradYearData,
-      gender:   toArr(genderMap),
-      state:    toArr(stateMap),
-      city:     toArr(cityMap).slice(0, 50),
-      zip:      toArr(zipMap).slice(0, 100),
+      gender:   genderData,
+      state:    stateData,
+      city:     cityData,
+      zip:      zipData,
       division: [],
     });
   } catch (err) {
@@ -1116,7 +1131,7 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
       compact: allCompact,  // client echoes this back as prevCompact on the next call
     });
   } catch (err) {
-    res.status(500).json({ error: err.message, eventId });
+    res.status(500).json({ error: err.message, detail: err.response?.data, eventId });
   }
 });
 
@@ -1863,20 +1878,37 @@ app.get('/api/reports/daily-activity', async (req, res) => {
   const dayTotals  = {};   // YYYY-MM-DD → total registrations (all events)
   const leagueMap  = {};   // eventId    → { id, name, count, gradYears:{} }
 
-  for (const r of db.results) {
-    if (!r.created) continue;
-    const day = store.toCDTDate(r.created);
-    dayTotals[day] = (dayTotals[day] || 0) + 1;
-
-    if (day !== date) continue;
-
-    if (!leagueMap[r.eventId]) {
-      leagueMap[r.eventId] = { id: r.eventId, name: r.eventName, count: 0, gradYears: {} };
+  if (store.IS_CONVEX) {
+    // Pre-computed daily totals + an indexed range scan for just this date's
+    // results (bounded — one day's registrations, not all 30k)
+    const data = await store.convexQuery('reports:reportDailyActivity', { date });
+    for (const s of data.dailyStats) dayTotals[s.date] = s.count;
+    for (const r of data.dayResults) {
+      if (!leagueMap[r.eventId]) {
+        leagueMap[r.eventId] = { id: r.eventId, name: r.eventName, count: 0, gradYears: {} };
+      }
+      leagueMap[r.eventId].count++;
+      for (const gy of (r.gradYears || [])) {
+        if (/^\d{4}$/.test(gy))
+          leagueMap[r.eventId].gradYears[gy] = (leagueMap[r.eventId].gradYears[gy] || 0) + 1;
+      }
     }
-    leagueMap[r.eventId].count++;
-    for (const gy of (r.gradYears || [])) {
-      if (/^\d{4}$/.test(gy))
-        leagueMap[r.eventId].gradYears[gy] = (leagueMap[r.eventId].gradYears[gy] || 0) + 1;
+  } else {
+    for (const r of db.results) {
+      if (!r.created) continue;
+      const day = store.toCDTDate(r.created);
+      dayTotals[day] = (dayTotals[day] || 0) + 1;
+
+      if (day !== date) continue;
+
+      if (!leagueMap[r.eventId]) {
+        leagueMap[r.eventId] = { id: r.eventId, name: r.eventName, count: 0, gradYears: {} };
+      }
+      leagueMap[r.eventId].count++;
+      for (const gy of (r.gradYears || [])) {
+        if (/^\d{4}$/.test(gy))
+          leagueMap[r.eventId].gradYears[gy] = (leagueMap[r.eventId].gradYears[gy] || 0) + 1;
+      }
     }
   }
 
@@ -1936,25 +1968,27 @@ app.get('/api/reports/yoy', async (req, res) => {
     return m ? m[1] : 'unknown';
   }
 
-  // Group results: normalizedName → { baseName, eventsByYear: { year: { id, name, count } } }
+  // Group by event (using each event's resultsCompleted as its team count) —
+  // avoids scanning all results, which Convex mode doesn't load into memory.
+  // normalizedName → { baseName, eventsByYear: { year: { id, name, count } } }
   const groups = {};
 
-  for (const r of db.results) {
-    if (!r.completed) continue;
-    const norm  = normalizeName(r.eventName);
-    const year  = seasonYear(r.eventId, r.eventName);
+  for (const ev of Object.values(db.events)) {
+    const count = ev.resultsCompleted || 0;
+    if (count <= 0) continue;
+    const norm = normalizeName(ev.name);
+    const year = seasonYear(ev.id, ev.name);
 
     if (!groups[norm]) {
       // Use the shortest/cleanest version of the name as display name
-      const base = (r.eventName || '')
-        .replace(/\s+(20\d{2})\s*$/, '').trim();
+      const base = (ev.name || '').replace(/\s+(20\d{2})\s*$/, '').trim();
       groups[norm] = { baseName: base, years: {} };
     }
 
     if (!groups[norm].years[year]) {
-      groups[norm].years[year] = { id: r.eventId, name: r.eventName, count: 0 };
+      groups[norm].years[year] = { id: ev.id, name: ev.name, count: 0 };
     }
-    groups[norm].years[year].count++;
+    groups[norm].years[year].count += count;
   }
 
   // Only include groups that appear in at least 2 different years (true YoY)
@@ -2022,18 +2056,27 @@ app.get('/api/reports/yoy-daily', async (req, res) => {
   // Accumulate: year → type → dayOfYear → count
   const acc = {}; // year → { league: {}, camp: {}, tournament: {} }
 
-  for (const r of db.results) {
-    if (!r.completed) continue;
-    const date = store.toCDTDate(r.created);
-    if (!date || date.length < 10) continue;
-    const year = seasonYear(r.eventId, r.eventName);
-    if (!/^20\d{2}$/.test(year)) continue;
-    const type = classifyEvent(r.eventName || '');
-    const day  = dayOfYear(date);
-    if (!day) continue;
+  if (store.IS_CONVEX) {
+    const rows = await store.convexQuery('reports:reportYoyDaily', {});
+    for (const { year, type, day, count } of rows) {
+      if (!/^20\d{2}$/.test(year) || !TYPES.includes(type) || !day) continue;
+      if (!acc[year]) acc[year] = { league: {}, camp: {}, tournament: {} };
+      acc[year][type][day] = (acc[year][type][day] || 0) + count;
+    }
+  } else {
+    for (const r of db.results) {
+      if (!r.completed) continue;
+      const date = store.toCDTDate(r.created);
+      if (!date || date.length < 10) continue;
+      const year = seasonYear(r.eventId, r.eventName);
+      if (!/^20\d{2}$/.test(year)) continue;
+      const type = classifyEvent(r.eventName || '');
+      const day  = dayOfYear(date);
+      if (!day) continue;
 
-    if (!acc[year]) acc[year] = { league: {}, camp: {}, tournament: {} };
-    acc[year][type][day] = (acc[year][type][day] || 0) + 1;
+      if (!acc[year]) acc[year] = { league: {}, camp: {}, tournament: {} };
+      acc[year][type][day] = (acc[year][type][day] || 0) + 1;
+    }
   }
 
   // Build per-year cumulative arrays
@@ -2112,6 +2155,35 @@ app.get('/api/reports/yoy-retention', async (req, res) => {
 
   const matchesType = (name, type) =>
     type === 'all' || classifyEvent(name) === type;
+
+  if (store.IS_CONVEX) {
+    // db.events is fully synced (small table) — use it to find the bounded
+    // list of event ids for source/target years+types, then let Convex do
+    // the per-event indexed scans (avoids reading all 30k results).
+    const sourceEventIds = Object.entries(db.events)
+      .filter(([eid, ev]) => eventYear(eid, ev.name) === String(sourceYear) && matchesType(ev.name, sourceType))
+      .map(([eid]) => eid);
+    const targetEventIds = Object.entries(db.events)
+      .filter(([eid, ev]) => eventYear(eid, ev.name) === String(targetYear) && matchesType(ev.name, targetType))
+      .map(([eid]) => eid);
+
+    const result = await store.convexQuery('reports:yoyRetention', { sourceEventIds, targetEventIds });
+
+    const buckets = result.buckets.map(b => {
+      const ev = db.events[b.eventId] || {};
+      return { ...b, eventName: ev.name || b.eventName, type: classifyEvent(ev.name || b.eventName) };
+    });
+    const uniqueSrc = result.source.uniqueParticipants;
+
+    return res.json({
+      sourceYear, targetYear, sourceType, targetType,
+      source: result.source,
+      returned: { unique: result.returned.unique, pct: uniqueSrc ? Math.round(result.returned.unique / uniqueSrc * 100) : 0 },
+      lapsed: result.lapsed,
+      buckets,
+      revenue: { returned: result.revenue.returned, allTarget: result.revenue.allTarget, hasData: result.revenue.allTarget > 0 },
+    });
+  }
 
   // Source results: all completed results from sourceYear events of sourceType
   const sourceResults = db.results.filter(r =>
