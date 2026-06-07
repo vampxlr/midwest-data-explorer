@@ -1079,7 +1079,6 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
         id name resultsCompleted
         registrationResults(page:$page,perPage:$perPage){
           id profileId completed status created
-          totalPaid amountDue itemTotal
           answers{
             name
             ...on StringRegistrationResultAnswer{strValue:value}
@@ -1100,8 +1099,7 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
     const evObj     = { id: String(eventId), name: eventName || r.name || String(eventId), status: eventStatus ?? 2 };
     const thisPage  = batch.map(row => {
       const parsed = extractAnswers(row.answers || []);
-      const revenue = row.totalPaid ?? row.itemTotal ?? row.amountDue ?? null;
-      return { id: row.id, profileId: row.profileId || null, eventId: String(eventId), eventName: evObj.name, created: row.created || null, completed: row.completed, revenue, ...parsed };
+      return { id: row.id, profileId: row.profileId || null, eventId: String(eventId), eventName: evObj.name, created: row.created || null, completed: row.completed, revenue: null, ...parsed };
     });
     const allCompact = [...(prevCompact || []), ...thisPage];
 
