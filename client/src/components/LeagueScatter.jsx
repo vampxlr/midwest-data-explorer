@@ -52,15 +52,15 @@ function ContactBar({ list, label }) {
   return (
     <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:8 }}>
       <button onClick={() => copy(emails,'email')}
-        style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'#1e3a5f', color:'#60a5fa' }}>
+        style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'var(--chip-bg)', color:'var(--accent-light)' }}>
         Copy {emails.length} Email{emails.length!==1?'s':''}
       </button>
       <button onClick={() => copy(phones,'phone')}
-        style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'#1e3a5f', color:'#60a5fa' }}>
+        style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'var(--chip-bg)', color:'var(--accent-light)' }}>
         Copy {phones.length} Phone{phones.length!==1?'s':''}
       </button>
       <button onClick={() => downloadCSV(list, `${label}.csv`)}
-        style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'#162032', color:'#94a3b8' }}>
+        style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'var(--surface-3)', color:'var(--text-2)' }}>
         ⬇ CSV
       </button>
     </div>
@@ -69,18 +69,18 @@ function ContactBar({ list, label }) {
 
 function ParticipantMini({ rows, mode = 'dest' }) {
   const [show, setShow] = useState(false);
-  if (!rows.length) return <p style={{ color:'#334155', fontSize:12, margin:0 }}>No records.</p>;
+  if (!rows.length) return <p style={{ color:'var(--text-5)', fontSize:12, margin:0 }}>No records.</p>;
   return (
     <>
       <button onClick={() => setShow(s => !s)}
-        style={{ fontSize:11, color:'#475569', background:'none', border:'none', cursor:'pointer', padding:0, marginBottom:6 }}>
+        style={{ fontSize:11, color:'var(--text-4)', background:'none', border:'none', cursor:'pointer', padding:0, marginBottom:6 }}>
         {show ? '▲ Hide' : `▼ Show ${rows.length} participant${rows.length!==1?'s':''}`}
       </button>
       {show && (
         <div style={{ overflowX:'auto', marginTop:4 }}>
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
             <thead>
-              <tr style={{ borderBottom:'1px solid #1e2235' }}>
+              <tr style={{ borderBottom:'1px solid var(--surface-1)' }}>
                 <th style={TH}>Email</th>
                 <th style={TH}>Phone</th>
                 {mode === 'dest' ? (
@@ -95,16 +95,16 @@ function ParticipantMini({ rows, mode = 'dest' }) {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i} style={{ borderBottom:'1px solid #12141c', background: i%2===0?'transparent':'#0a0c12' }}>
+                <tr key={i} style={{ borderBottom:'1px solid var(--surface-3)', background: i%2===0?'transparent':'var(--surface-3)' }}>
                   <td style={{ ...TD, maxWidth: 220 }}>
                     {(r.emails?.length ? r.emails : r.email ? [r.email] : []).map((e,ei) => (
-                      <div key={ei}><a href={`mailto:${e}`} style={{ color:'#60a5fa', textDecoration:'none', fontSize:10 }}>{e}</a></div>
-                    ))||<span style={{ color:'#334155' }}>—</span>}
+                      <div key={ei}><a href={`mailto:${e}`} style={{ color:'var(--accent-light)', textDecoration:'none', fontSize:10 }}>{e}</a></div>
+                    ))||<span style={{ color:'var(--text-5)' }}>—</span>}
                   </td>
                   <td style={TD}>
                     {(r.phones?.length ? r.phones : r.phone ? [r.phone] : []).map((p,pi) => (
-                      <div key={pi}><a href={`tel:${p}`} style={{ color:'#34d399', textDecoration:'none' }}>{fmt10(p)}</a></div>
-                    ))||<span style={{ color:'#334155' }}>—</span>}
+                      <div key={pi}><a href={`tel:${p}`} style={{ color:'var(--accent-green)', textDecoration:'none' }}>{fmt10(p)}</a></div>
+                    ))||<span style={{ color:'var(--text-5)' }}>—</span>}
                   </td>
                   {mode === 'dest' ? (
                     <><td style={TD}>{r.gradYearPast||'—'}</td><td style={TD}>{r.gradYearNow||'—'}</td></>
@@ -124,7 +124,7 @@ function ParticipantMini({ rows, mode = 'dest' }) {
   );
 }
 
-const TH = { textAlign:'left', padding:'5px 8px', color:'#64748b', fontWeight:600, fontSize:10, textTransform:'uppercase', letterSpacing:'0.5px', whiteSpace:'nowrap' };
+const TH = { textAlign:'left', padding:'5px 8px', color:'var(--text-3)', fontWeight:600, fontSize:10, textTransform:'uppercase', letterSpacing:'0.5px', whiteSpace:'nowrap' };
 const TD = { padding:'5px 8px', color:'#cbd5e1', whiteSpace:'nowrap' };
 
 // Action bar + expandable table for the individuals panel
@@ -159,19 +159,19 @@ function IndParticipantSection({ participants, label }) {
     <>
       <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:8 }}>
         <button onClick={copyEmails}
-          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'#1e3a5f', color:'#60a5fa' }}>
+          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'var(--chip-bg)', color:'var(--accent-light)' }}>
           Copy {emails.length} Email{emails.length!==1?'s':''}
         </button>
         <button onClick={copyPhones}
-          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'#1e3a5f', color:'#34d399' }}>
+          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'var(--chip-bg)', color:'var(--accent-green)' }}>
           Copy {phones.length} Phone{phones.length!==1?'s':''}
         </button>
         <button onClick={csv}
-          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'#162032', color:'#94a3b8' }}>
+          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'var(--surface-3)', color:'var(--text-2)' }}>
           ⬇ CSV
         </button>
         <button onClick={() => setShow(s => !s)}
-          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'#1e2235', color:'#64748b' }}>
+          style={{ padding:'4px 10px', borderRadius:6, fontSize:11, fontWeight:700, border:'none', cursor:'pointer', background:'var(--surface-1)', color:'var(--text-3)' }}>
           {show ? '▲ Hide' : `▼ Show ${participants.length} participant${participants.length!==1?'s':''}`}
         </button>
       </div>
@@ -179,7 +179,7 @@ function IndParticipantSection({ participants, label }) {
         <div style={{ overflowX:'auto', maxHeight:320, overflowY:'auto', marginTop:4 }}>
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:11 }}>
             <thead>
-              <tr style={{ borderBottom:'1px solid #1e2235' }}>
+              <tr style={{ borderBottom:'1px solid var(--surface-1)' }}>
                 <th style={TH}>Name</th>
                 <th style={TH}>Email</th>
                 <th style={TH}>Phone</th>
@@ -187,17 +187,17 @@ function IndParticipantSection({ participants, label }) {
             </thead>
             <tbody>
               {participants.map((p, i) => (
-                <tr key={i} style={{ borderBottom:'1px solid #12141c', background: i%2===0?'transparent':'#0a0c12' }}>
-                  <td style={{ ...TD, color:'#e2e8f0' }}>{p.name || <span style={{ color:'#334155' }}>—</span>}</td>
+                <tr key={i} style={{ borderBottom:'1px solid var(--surface-3)', background: i%2===0?'transparent':'var(--surface-3)' }}>
+                  <td style={{ ...TD, color:'var(--text-1)' }}>{p.name || <span style={{ color:'var(--text-5)' }}>—</span>}</td>
                   <td style={{ ...TD, maxWidth:260 }}>
-                    <a href={`mailto:${p.email}`} style={{ color:'#60a5fa', textDecoration:'none' }}>{p.email}</a>
+                    <a href={`mailto:${p.email}`} style={{ color:'var(--accent-light)', textDecoration:'none' }}>{p.email}</a>
                   </td>
                   <td style={TD}>
                     {(p.phones||[]).length > 0
                       ? (p.phones||[]).map((ph,pi) => (
-                          <div key={pi}><a href={`tel:${ph}`} style={{ color:'#34d399', textDecoration:'none' }}>{fmt10(ph)}</a></div>
+                          <div key={pi}><a href={`tel:${ph}`} style={{ color:'var(--accent-green)', textDecoration:'none' }}>{fmt10(ph)}</a></div>
                         ))
-                      : <span style={{ color:'#334155' }}>—</span>
+                      : <span style={{ color:'var(--text-5)' }}>—</span>
                     }
                   </td>
                 </tr>
@@ -216,9 +216,9 @@ const CustomTip = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
   return (
-    <div style={{ background:'#0e1018', border:'1px solid #252838', borderRadius:8, padding:'10px 14px' }}>
-      <p style={{ color:'#94a3b8', fontSize:11, marginBottom:4, maxWidth:220 }}>{d.eventName}</p>
-      <p style={{ color:'#60a5fa', fontSize:16, fontWeight:800, margin:0 }}>{d.count} participant{d.count!==1?'s':''}</p>
+    <div style={{ background:'var(--surface-3)', border:'1px solid var(--line)', borderRadius:8, padding:'10px 14px' }}>
+      <p style={{ color:'var(--text-2)', fontSize:11, marginBottom:4, maxWidth:220 }}>{d.eventName}</p>
+      <p style={{ color:'var(--accent-light)', fontSize:16, fontWeight:800, margin:0 }}>{d.count} participant{d.count!==1?'s':''}</p>
     </div>
   );
 };
@@ -275,7 +275,7 @@ export default function LeagueScatter({ events = [] }) {
     <div className="card" style={{ marginTop:16 }}>
       <div style={{ marginBottom:14 }}>
         <h2 style={{ margin:'0 0 4px' }}>Where Did They Go?</h2>
-        <p style={{ color:'#475569', fontSize:12, margin:0 }}>
+        <p style={{ color:'var(--text-4)', fontSize:12, margin:0 }}>
           Pick a past league and a target year — see which leagues those participants signed up for, and who didn't sign up anywhere.
         </p>
       </div>
@@ -283,7 +283,7 @@ export default function LeagueScatter({ events = [] }) {
       {/* Controls */}
       <div style={{ display:'flex', gap:12, flexWrap:'wrap', alignItems:'flex-end', marginBottom:14 }}>
         <div style={{ flex:2, minWidth:220 }}>
-          <label style={{ fontSize:11, color:'#64748b', display:'block', marginBottom:4 }}>Source League (past)</label>
+          <label style={{ fontSize:11, color:'var(--text-3)', display:'block', marginBottom:4 }}>Source League (past)</label>
           <SearchableSelect
             value={sourceId} onChange={setSourceId}
             options={[{ value:'', label:'Select source league…' }, ...events.map(e => ({ value:String(e.id), label:e.name }))]}
@@ -291,12 +291,12 @@ export default function LeagueScatter({ events = [] }) {
           />
         </div>
         <div>
-          <label style={{ fontSize:11, color:'#64748b', display:'block', marginBottom:4 }}>Compare against year</label>
+          <label style={{ fontSize:11, color:'var(--text-3)', display:'block', marginBottom:4 }}>Compare against year</label>
           <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
             {[...years, ''].map(y => (
               <button key={y||'all'} onClick={() => setYearFilter(y)}
                 style={{ padding:'6px 12px', borderRadius:20, fontSize:11, fontWeight:700, border:'none', cursor:'pointer',
-                  background: yearFilter===y ? '#2563eb':'#1e2235', color: yearFilter===y ? '#fff':'#64748b' }}>
+                  background: yearFilter===y ? '#2563eb':'var(--surface-1)', color: yearFilter===y ? '#fff':'var(--text-3)' }}>
                 {y || 'All years'}
               </button>
             ))}
@@ -305,7 +305,7 @@ export default function LeagueScatter({ events = [] }) {
         <button onClick={run} disabled={!sourceId || loading}
           style={{ padding:'8px 18px', borderRadius:6, fontSize:12, fontWeight:700, border:'none',
             cursor: sourceId && !loading ? 'pointer':'not-allowed',
-            background: sourceId ? '#2563eb':'#1e2235', color: sourceId ? '#fff':'#64748b',
+            background: sourceId ? '#2563eb':'var(--surface-1)', color: sourceId ? '#fff':'var(--text-3)',
             opacity: loading ? 0.6 : 1, whiteSpace:'nowrap' }}>
           {loading ? 'Analyzing…' : '▶ Analyze'}
         </button>
@@ -317,17 +317,17 @@ export default function LeagueScatter({ events = [] }) {
           {/* Summary bar */}
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16 }}>
             {[
-              { label:'Total in source',              val: data.source.total,     color:'#94a3b8' },
-              { label:'Matchable (have ID)',           val: data.source.matchable, color:'#64748b', sub:'email / phone / profile' },
+              { label:'Total in source',              val: data.source.total,     color:'var(--text-2)' },
+              { label:'Matchable (have ID)',           val: data.source.matchable, color:'var(--text-3)', sub:'email / phone / profile' },
               { label:`Unique people found ${yearFilter||'elsewhere'}`, val: foundUnique, color:'#22c55e', sub: `${foundPct}% of matchable` },
-              { label:'Total cross-registrations',    val: totalCross,            color:'#60a5fa', sub:'1 person × 3 leagues = 3' },
+              { label:'Total cross-registrations',    val: totalCross,            color:'var(--accent-light)', sub:'1 person × 3 leagues = 3' },
               { label:'Leagues they joined',          val: data.buckets.length,   color:'#a855f7' },
               { label:`Didn't sign up anywhere`,      val: data.nowhere.count,    color:'#ef4444', sub: `${nowherePct}% of matchable` },
             ].map(s => (
-              <div key={s.label} style={{ background:'#1e2235', borderRadius:8, padding:'8px 14px', minWidth:100 }}>
-                <div style={{ fontSize:9, color:'#475569', textTransform:'uppercase', letterSpacing:'0.5px' }}>{s.label}</div>
+              <div key={s.label} style={{ background:'var(--surface-1)', borderRadius:8, padding:'8px 14px', minWidth:100 }}>
+                <div style={{ fontSize:9, color:'var(--text-4)', textTransform:'uppercase', letterSpacing:'0.5px' }}>{s.label}</div>
                 <div style={{ fontSize:22, fontWeight:800, color:s.color }}>{s.val}</div>
-                {s.sub && <div style={{ fontSize:9, color:'#334155' }}>{s.sub}</div>}
+                {s.sub && <div style={{ fontSize:9, color:'var(--text-5)' }}>{s.sub}</div>}
               </div>
             ))}
           </div>
@@ -335,23 +335,23 @@ export default function LeagueScatter({ events = [] }) {
           {/* Chart */}
           {chartData.length > 0 && (
             <div style={{ marginBottom:20 }}>
-              <h3 style={{ color:'#94a3b8', fontSize:13, margin:'0 0 10px' }}>
+              <h3 style={{ color:'var(--text-2)', fontSize:13, margin:'0 0 10px' }}>
                 Where they signed up {yearFilter ? `in ${yearFilter}` : ''}
-                {data.buckets.length > 20 && <span style={{ color:'#475569', fontWeight:400 }}> (top 20 of {data.buckets.length})</span>}
+                {data.buckets.length > 20 && <span style={{ color:'var(--text-4)', fontWeight:400 }}> (top 20 of {data.buckets.length})</span>}
               </h3>
               <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 36)}>
                 <BarChart data={chartData} layout="vertical" margin={{ top:0, right:20, left:8, bottom:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e2235" horizontal={false}/>
-                  <XAxis type="number" stroke="#334155" tick={{ fill:'#64748b', fontSize:11 }}/>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-1)" horizontal={false}/>
+                  <XAxis type="number" stroke="var(--text-5)" tick={{ fill:'var(--text-3)', fontSize:11 }}/>
                   <YAxis type="category" dataKey="eventName" width={200}
-                    tick={{ fill:'#94a3b8', fontSize:11 }} stroke="#334155"/>
+                    tick={{ fill:'var(--text-2)', fontSize:11 }} stroke="var(--text-5)"/>
                   <Tooltip content={<CustomTip/>}/>
                   <Bar dataKey="count" radius={[0,4,4,0]} onClick={d => setExpanded(ex => ex===d.eventId ? null : d.eventId)}>
                     {chartData.map((_, i) => <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} cursor="pointer"/>)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              <p style={{ color:'#334155', fontSize:11, marginTop:4 }}>Click a bar to expand participant details.</p>
+              <p style={{ color:'var(--text-5)', fontSize:11, marginTop:4 }}>Click a bar to expand participant details.</p>
             </div>
           )}
 
@@ -360,7 +360,7 @@ export default function LeagueScatter({ events = [] }) {
             <div style={{ marginBottom:20 }}>
               {data.buckets.map((b, i) => (
                 <div key={b.eventId} style={{
-                  border:'1px solid #1e2235', borderRadius:8, marginBottom:6,
+                  border:'1px solid var(--surface-1)', borderRadius:8, marginBottom:6,
                   borderLeft: `3px solid ${BAR_COLORS[i % BAR_COLORS.length]}`,
                 }}>
                   <div
@@ -368,11 +368,11 @@ export default function LeagueScatter({ events = [] }) {
                     style={{ display:'flex', justifyContent:'space-between', alignItems:'center',
                       padding:'10px 14px', cursor:'pointer', userSelect:'none' }}>
                     <div>
-                      <span style={{ color:'#e2e8f0', fontSize:13, fontWeight:600 }}>{b.eventName}</span>
+                      <span style={{ color:'var(--text-1)', fontSize:13, fontWeight:600 }}>{b.eventName}</span>
                     </div>
                     <div style={{ display:'flex', gap:12, alignItems:'center' }}>
                       <span style={{ color: BAR_COLORS[i % BAR_COLORS.length], fontSize:20, fontWeight:800 }}>{b.count}</span>
-                      <span style={{ color:'#334155', fontSize:13 }}>{expanded===b.eventId ? '▲':'▼'}</span>
+                      <span style={{ color:'var(--text-5)', fontSize:13 }}>{expanded===b.eventId ? '▲':'▼'}</span>
                     </div>
                   </div>
                   {expanded === b.eventId && (
@@ -387,13 +387,13 @@ export default function LeagueScatter({ events = [] }) {
           )}
 
           {/* Didn't sign up anywhere */}
-          <div style={{ border:'1px solid #3f1a1a', borderRadius:10, background:'#130d0d', padding:'14px 16px' }}>
+          <div style={{ border:'1px solid rgba(239,68,68,0.3)', borderRadius:10, background:'rgba(239,68,68,0.1)', padding:'14px 16px' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, flexWrap:'wrap', gap:8 }}>
               <div>
                 <h3 style={{ color:'#ef4444', margin:'0 0 2px' }}>
                   Didn't Sign Up Anywhere — {data.nowhere.count}
                 </h3>
-                <p style={{ color:'#475569', fontSize:11, margin:0 }}>
+                <p style={{ color:'var(--text-4)', fontSize:11, margin:0 }}>
                   {data.source.name} participants with no matching registration in {yearFilter || 'any other league'}.
                   {' '}These are your best outreach targets.
                 </p>
@@ -417,8 +417,8 @@ export default function LeagueScatter({ events = [] }) {
         <div style={{ marginTop:24 }}>
           <div style={{ marginBottom:12 }}>
             <h2 style={{ margin:'0 0 4px', fontSize:18 }}>Individual Participants Tracker</h2>
-            <p style={{ color:'#475569', fontSize:12, margin:0 }}>
-              Each unique <strong style={{color:'#94a3b8'}}>email address</strong> from {indData.source.name} = one individual player.
+            <p style={{ color:'var(--text-4)', fontSize:12, margin:0 }}>
+              Each unique <strong style={{color:'var(--text-2)'}}>email address</strong> from {indData.source.name} = one individual player.
               Phones are used only for matching, not counted separately. Tracks where each person appeared in {yearFilter || 'any year'} — even as a non-primary team member.
             </p>
           </div>
@@ -426,16 +426,16 @@ export default function LeagueScatter({ events = [] }) {
           {/* Summary */}
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:16 }}>
             {[
-              { label:'Total registrations (teams)',    val: indData.source.totalRegistrations, color:'#94a3b8' },
-              { label:'Unique individual emails',       val: indData.source.totalIndividuals,   color:'#60a5fa', sub:'one row per email address' },
+              { label:'Total registrations (teams)',    val: indData.source.totalRegistrations, color:'var(--text-2)' },
+              { label:'Unique individual emails',       val: indData.source.totalIndividuals,   color:'var(--accent-light)', sub:'one row per email address' },
               { label:`Found in ${yearFilter||'any year'}`, val: indData.stats.found,           color:'#22c55e', sub: `${indData.source.totalIndividuals ? Math.round(indData.stats.found/indData.source.totalIndividuals*100) : 0}% of individuals` },
               { label:'Leagues they joined',            val: indData.buckets.length,            color:'#a855f7' },
               { label:`Didn't sign up anywhere`,        val: indData.stats.nowhere,             color:'#ef4444', sub: `${indData.source.totalIndividuals ? Math.round(indData.stats.nowhere/indData.source.totalIndividuals*100) : 0}% of individuals` },
             ].map(s => (
-              <div key={s.label} style={{ background:'#1e2235', borderRadius:8, padding:'8px 14px', minWidth:100 }}>
-                <div style={{ fontSize:9, color:'#475569', textTransform:'uppercase', letterSpacing:'0.5px' }}>{s.label}</div>
+              <div key={s.label} style={{ background:'var(--surface-1)', borderRadius:8, padding:'8px 14px', minWidth:100 }}>
+                <div style={{ fontSize:9, color:'var(--text-4)', textTransform:'uppercase', letterSpacing:'0.5px' }}>{s.label}</div>
                 <div style={{ fontSize:22, fontWeight:800, color:s.color }}>{s.val}</div>
-                {s.sub && <div style={{ fontSize:9, color:'#334155' }}>{s.sub}</div>}
+                {s.sub && <div style={{ fontSize:9, color:'var(--text-5)' }}>{s.sub}</div>}
               </div>
             ))}
           </div>
@@ -443,43 +443,43 @@ export default function LeagueScatter({ events = [] }) {
           {/* Bar chart */}
           {indData.buckets.length > 0 && (
             <div style={{ marginBottom:16 }}>
-              <h3 style={{ color:'#94a3b8', fontSize:13, margin:'0 0 10px' }}>
+              <h3 style={{ color:'var(--text-2)', fontSize:13, margin:'0 0 10px' }}>
                 Where individual players went {yearFilter ? `in ${yearFilter}` : ''}
               </h3>
               <ResponsiveContainer width="100%" height={Math.max(160, Math.min(indData.buckets.length, 20) * 36)}>
                 <BarChart data={indData.buckets.slice(0,20).map(b => ({ ...b, shortName: b.eventName.length>28 ? b.eventName.slice(0,26)+'…' : b.eventName }))} layout="vertical" margin={{ top:0, right:20, left:8, bottom:0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e2235" horizontal={false}/>
-                  <XAxis type="number" stroke="#334155" tick={{ fill:'#64748b', fontSize:11 }}/>
-                  <YAxis type="category" dataKey="shortName" width={200} tick={{ fill:'#94a3b8', fontSize:11 }} stroke="#334155"/>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-1)" horizontal={false}/>
+                  <XAxis type="number" stroke="var(--text-5)" tick={{ fill:'var(--text-3)', fontSize:11 }}/>
+                  <YAxis type="category" dataKey="shortName" width={200} tick={{ fill:'var(--text-2)', fontSize:11 }} stroke="var(--text-5)"/>
                   <Tooltip content={<CustomTip/>}/>
                   <Bar dataKey="count" radius={[0,4,4,0]} onClick={d => setIndExpanded(ex => ex===d.eventId ? null : d.eventId)}>
                     {indData.buckets.slice(0,20).map((_, i) => <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} cursor="pointer"/>)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              <p style={{ color:'#334155', fontSize:11, marginTop:4 }}>Click a bar to see the email list for that league.</p>
+              <p style={{ color:'var(--text-5)', fontSize:11, marginTop:4 }}>Click a bar to see the email list for that league.</p>
             </div>
           )}
 
           {/* Bucket detail rows */}
           {indData.buckets.map((b, i) => (
             <div key={b.eventId} style={{
-              border:'1px solid #1e2235', borderRadius:8, marginBottom:6,
+              border:'1px solid var(--surface-1)', borderRadius:8, marginBottom:6,
               borderLeft:`3px solid ${BAR_COLORS[i % BAR_COLORS.length]}`,
             }}>
               <div onClick={() => setIndExpanded(ex => ex===b.eventId ? null : b.eventId)}
                 style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 14px', cursor:'pointer', userSelect:'none' }}>
-                <span style={{ color:'#e2e8f0', fontSize:13, fontWeight:600 }}>{b.eventName}</span>
+                <span style={{ color:'var(--text-1)', fontSize:13, fontWeight:600 }}>{b.eventName}</span>
                 <div style={{ display:'flex', gap:12, alignItems:'center' }}>
                   <span style={{ color:BAR_COLORS[i % BAR_COLORS.length], fontSize:20, fontWeight:800 }}>{b.count}</span>
-                  <span style={{ color:'#334155', fontSize:13 }}>{indExpanded===b.eventId ? '▲':'▼'}</span>
+                  <span style={{ color:'var(--text-5)', fontSize:13 }}>{indExpanded===b.eventId ? '▲':'▼'}</span>
                 </div>
               </div>
               {indExpanded === b.eventId && (
                 <div style={{ padding:'0 14px 12px' }}>
                   {b.participants?.length > 0
                     ? <IndParticipantSection participants={b.participants} label={`${indData.source.name.slice(0,20)}-indiv-to-${b.eventName.slice(0,20)}`}/>
-                    : <p style={{ color:'#334155', fontSize:11 }}>No contact data — run backfill to populate emails/phones.</p>
+                    : <p style={{ color:'var(--text-5)', fontSize:11 }}>No contact data — run backfill to populate emails/phones.</p>
                   }
                 </div>
               )}
@@ -487,11 +487,11 @@ export default function LeagueScatter({ events = [] }) {
           ))}
 
           {/* Nowhere */}
-          <div style={{ border:'1px solid #3f1a1a', borderRadius:10, background:'#130d0d', padding:'14px 16px', marginTop:8 }}>
+          <div style={{ border:'1px solid rgba(239,68,68,0.3)', borderRadius:10, background:'rgba(239,68,68,0.1)', padding:'14px 16px', marginTop:8 }}>
             <h3 style={{ color:'#ef4444', margin:'0 0 6px' }}>
               Individuals Who Didn't Sign Up Anywhere — {indData.nowhere.count}
             </h3>
-            <p style={{ color:'#475569', fontSize:11, margin:'0 0 10px' }}>
+            <p style={{ color:'var(--text-4)', fontSize:11, margin:'0 0 10px' }}>
               Individual players from {indData.source.name} with no email match in {yearFilter || 'any'} leagues.
             </p>
             {indData.nowhere.list.length > 0

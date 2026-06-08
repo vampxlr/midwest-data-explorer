@@ -57,7 +57,7 @@ export default function Registrations({ ctx }) {
 
   const statusBadge = (s) => {
     if (s===1) return <span className="badge badge-green">Open</span>;
-    if (s===2) return <span className="badge" style={{background:'#1e2235',color:'#64748b'}}>Closed</span>;
+    if (s===2) return <span className="badge" style={{background:'var(--surface-1)',color:'var(--text-3)'}}>Closed</span>;
     return <span className="badge badge-orange">{s}</span>;
   };
 
@@ -71,19 +71,19 @@ export default function Registrations({ ctx }) {
       <div style={{display:'flex',gap:8,marginBottom:16}}>
         <button onClick={()=>setMode('recent')}
           style={{padding:'8px 18px',borderRadius:8,fontSize:13,fontWeight:700,border:'none',cursor:'pointer',
-            background:mode==='recent'?'#2563eb':'#1e2235',color:mode==='recent'?'#fff':'#64748b'}}>
+            background:mode==='recent'?'#2563eb':'var(--surface-1)',color:mode==='recent'?'#fff':'var(--text-3)'}}>
           {fromYear}+ Events ({recentRegs.length})
         </button>
         <button onClick={()=>setMode('all')}
           style={{padding:'8px 18px',borderRadius:8,fontSize:13,fontWeight:700,border:'none',cursor:'pointer',
-            background:mode==='all'?'#2563eb':'#1e2235',color:mode==='all'?'#fff':'#64748b'}}>
+            background:mode==='all'?'#2563eb':'var(--surface-1)',color:mode==='all'?'#fff':'var(--text-3)'}}>
           All Events (705+)
         </button>
       </div>
 
       <div style={{display:'flex',gap:12,marginBottom:16,alignItems:'center'}}>
         <input type="text" placeholder="Search events…" value={search} onChange={e=>setSearch(e.target.value)}
-          style={{flex:1,background:'#13161f',border:'1px solid #2a2d3e',color:'#e2e8f0',
+          style={{flex:1,background:'var(--surface-2)',border:'1px solid var(--line)',color:'var(--text-1)',
             borderRadius:8,padding:'10px 14px',fontSize:14,outline:'none'}} />
         <button className="btn-secondary" style={{width:'auto',margin:0}} onClick={downloadCSV}>
           Export CSV
@@ -94,7 +94,7 @@ export default function Registrations({ ctx }) {
         <div style={{display:'flex',gap:8,marginBottom:16,alignItems:'center'}}>
           <button className="btn-secondary" style={{width:'auto',margin:0}}
             onClick={()=>loadPage(orgId,page-1)} disabled={page<=1||loading}>Prev</button>
-          <span style={{color:'#64748b',fontSize:13}}>Page {page} / {totalPages}</span>
+          <span style={{color:'var(--text-3)',fontSize:13}}>Page {page} / {totalPages}</span>
           <button className="btn-secondary" style={{width:'auto',margin:0}}
             onClick={()=>loadPage(orgId,page+1)} disabled={page>=totalPages||loading}>Next</button>
         </div>
@@ -112,13 +112,13 @@ export default function Registrations({ ctx }) {
                 <tbody>
                   {filtered.map(r=>(
                     <tr key={r.id}>
-                      <td style={{fontFamily:'monospace',color:'#60a5fa',fontSize:12}}>{r.id}</td>
-                      <td style={{color:'#e2e8f0',maxWidth:320}}>{r.name}</td>
+                      <td style={{fontFamily:'monospace',color:'var(--accent-light)',fontSize:12}}>{r.id}</td>
+                      <td style={{color:'var(--text-1)',maxWidth:320}}>{r.name}</td>
                       <td>{statusBadge(r.status)}</td>
-                      <td style={{color:'#64748b',fontSize:12}}>{r.open?new Date(r.open).toLocaleDateString():'—'}</td>
-                      <td style={{color:'#64748b',fontSize:12}}>{r.close?new Date(r.close).toLocaleDateString():'—'}</td>
+                      <td style={{color:'var(--text-3)',fontSize:12}}>{r.open?new Date(r.open).toLocaleDateString():'—'}</td>
+                      <td style={{color:'var(--text-3)',fontSize:12}}>{r.close?new Date(r.close).toLocaleDateString():'—'}</td>
                       <td><span className="badge badge-orange">{r.resultsCompleted||0}</span></td>
-                      <td>{r.monetary?<span className="badge badge-green">$</span>:<span style={{color:'#475569',fontSize:12}}>Free</span>}</td>
+                      <td>{r.monetary?<span className="badge badge-green">$</span>:<span style={{color:'var(--text-4)',fontSize:12}}>Free</span>}</td>
                     </tr>
                   ))}
                 </tbody>

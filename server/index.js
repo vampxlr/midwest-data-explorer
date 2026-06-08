@@ -9,6 +9,8 @@ const rateLimit  = require('express-rate-limit');
 const store        = require('./store');
 const contactStore = require('./contactStore');
 const blobStorage  = require('./blobStorage');
+const userStore    = require('./userStore');
+const auth         = require('./auth');
 
 // Aggregator only used for local SSE-based flow; on Vercel we use client-driven endpoints
 let aggregator = null;
@@ -35,6 +37,107 @@ app.use(rateLimit({
   max: 200,
   validate: { xForwardedForHeader: false, forwardedHeader: false },
 }));
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+// Custom username/password login. Accounts are created by an admin (via the
+// Users page or the bootstrap script) — there is no public signup.
+//
+// Every /api/* route requires a valid session EXCEPT the ones listed here.
+// SSE endpoints (EventSource can't send custom headers) accept the token via
+// a `?token=` query parameter as a fallback — see auth.requireAuth.
+const PUBLIC_API_PATHS = new Set(['/api/auth/login', '/api/health', '/api/runtime']);
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/') || PUBLIC_API_PATHS.has(req.path)) return next();
+  return auth.requireAuth(req, res, next);
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  try {
+    const user = await userStore.findByUsername(username);
+    if (!user || !(await auth.verifyPassword(password, user.passwordHash))) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    await userStore.recordLogin(user.id);
+    const token = auth.signToken(user);
+    res.json({ token, user: userStore.publicView(user) });
+  } catch (err) {
+    res.status(500).json({ error: 'Login failed: ' + err.message });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  const user = await userStore.findById(req.user.id);
+  if (!user) return res.status(401).json({ error: 'Account no longer exists' });
+  res.json({ user: userStore.publicView(user) });
+});
+
+// ── User management (admin only) ──────────────────────────────────────────────
+
+app.get('/api/users', auth.requireAdmin, async (req, res) => {
+  res.json({ users: await userStore.list() });
+});
+
+app.post('/api/users', auth.requireAdmin, async (req, res) => {
+  const { username, password, role } = req.body || {};
+  if (!username || !password || !role) {
+    return res.status(400).json({ error: 'username, password, and role are required' });
+  }
+  if (!['admin', 'editor'].includes(role)) {
+    return res.status(400).json({ error: 'role must be "admin" or "editor"' });
+  }
+  if (String(password).length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  try {
+    const passwordHash = await auth.hashPassword(password);
+    const user = await userStore.create({ username, passwordHash, role });
+    res.json({ user });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.patch('/api/users/:id', auth.requireAdmin, async (req, res) => {
+  const { role, password } = req.body || {};
+  const patch = {};
+  if (role !== undefined) {
+    if (!['admin', 'editor'].includes(role)) {
+      return res.status(400).json({ error: 'role must be "admin" or "editor"' });
+    }
+    patch.role = role;
+  }
+  if (password !== undefined) {
+    if (String(password).length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+    patch.passwordHash = await auth.hashPassword(password);
+  }
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: 'Nothing to update — provide role and/or password' });
+  }
+  try {
+    const user = await userStore.update(req.params.id, patch);
+    res.json({ user });
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
+app.delete('/api/users/:id', auth.requireAdmin, async (req, res) => {
+  if (req.params.id === req.user.id) {
+    return res.status(400).json({ error: 'You cannot delete your own account' });
+  }
+  try {
+    await userStore.remove(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
 
 const SE_TOKEN_URL = 'https://user.sportsengine.com/oauth/token';
 const SE_GRAPHQL_URL = 'https://api.sportsengine.com/graphql';
@@ -770,7 +873,7 @@ app.get('/api/store/status', async (req, res) => {
 // Client connects via EventSource; server streams live log lines then fires
 // a 'complete' or 'error' event when done.
 
-app.get('/api/store/purge-reload-stream', async (req, res) => {
+app.get('/api/store/purge-reload-stream', auth.requireAdmin, async (req, res) => {
   const { eventId, orgId = '8008' } = req.query;
   if (!eventId) { res.status(400).end(); return; }
 
@@ -909,7 +1012,7 @@ app.get('/api/store/purge-reload-stream', async (req, res) => {
 
 // ── Purge a single event (no reload) ──────────────────────────────────────────
 
-app.post('/api/store/purge', async (req, res) => {
+app.post('/api/store/purge', auth.requireAdmin, async (req, res) => {
   const { eventId } = req.body || {};
   if (!eventId) return res.status(400).json({ error: 'eventId required' });
   const db = await store.load();
@@ -952,7 +1055,7 @@ app.get('/api/store/events', async (req, res) => {
 
 // ── Legacy SSE stream (local dev only — Vercel uses client-driven fetch-event) ─
 
-app.get('/api/aggregate/stream', async (req, res) => {
+app.get('/api/aggregate/stream', auth.requireRole('admin', 'editor'), async (req, res) => {
   if (process.env.VERCEL === '1' || !aggregator) {
     // On Vercel: no persistent SSE — client-driven mode, no stream needed
     res.setHeader('Content-Type', 'text/event-stream');
@@ -973,11 +1076,14 @@ app.get('/api/aggregate/stream', async (req, res) => {
 
 // ── Legacy SSE start (local dev only) ─────────────────────────────────────────
 
-app.post('/api/aggregate/start', async (req, res) => {
+app.post('/api/aggregate/start', auth.requireRole('admin', 'editor'), async (req, res) => {
   if (process.env.VERCEL === '1' || !aggregator) {
     return res.json({ started: false, message: 'Use /api/aggregate/plan + /api/aggregate/fetch-event on Vercel' });
   }
   const { orgId = '8008', delayMs = 1200, events = [], purgeFirst = false } = req.body || {};
+  if (purgeFirst && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can purge data before re-fetching' });
+  }
   if (aggregator.getState().running) return res.json({ started: false, message: 'Already running' });
   cache.del('analytics_agg');
   aggregator.run(graphql, orgId, parseInt(delayMs), events, purgeFirst);
@@ -990,7 +1096,7 @@ app.post('/api/aggregate/start', async (req, res) => {
 //   1. GET /api/aggregate/plan   → list of events that need work
 //   2. POST /api/aggregate/fetch-event → process ONE event, return result
 
-app.get('/api/aggregate/plan', async (req, res) => {
+app.get('/api/aggregate/plan', auth.requireRole('admin', 'editor'), async (req, res) => {
   const { orgId = '8008', year } = req.query;
   try {
     // Discover current events from SE
@@ -1039,7 +1145,7 @@ app.get('/api/aggregate/plan', async (req, res) => {
 // Blob is only written on the FINAL page (hasMore === false) to minimise write operations.
 // Intermediate pages return compact results in the response; the client sends them back
 // in prevCompact on subsequent calls so the server can commit everything at once.
-app.post('/api/aggregate/fetch-event', async (req, res) => {
+app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), async (req, res) => {
   const {
     orgId = '8008', eventId, eventName, eventStatus,
     resultsCompleted: currentCompleted = 0,
@@ -1049,6 +1155,9 @@ app.post('/api/aggregate/fetch-event', async (req, res) => {
     prevCompact = [],      // compact results from earlier pages (client carries them)
   } = req.body || {};
   if (!eventId) return res.status(400).json({ error: 'eventId required' });
+  if (purgeFirst && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can purge data before re-fetching' });
+  }
 
   const isFirstCall = requestedPage == null;
 
@@ -2418,7 +2527,7 @@ app.get('/api/exports', async (req, res) => {
   res.json(list.sort((a,b) => b.createdAt.localeCompare(a.createdAt)));
 });
 
-app.post('/api/exports', async (req, res) => {
+app.post('/api/exports', auth.requireRole('admin', 'editor'), async (req, res) => {
   const meta = req.body;
   if (!meta?.eventId) return res.status(400).json({ error: 'eventId required' });
   const list = await loadExportsMeta();
@@ -2429,7 +2538,7 @@ app.post('/api/exports', async (req, res) => {
   res.json({ id });
 });
 
-app.delete('/api/exports/:id', async (req, res) => {
+app.delete('/api/exports/:id', auth.requireAdmin, async (req, res) => {
   const list = loadExportsMeta().filter(e => e.id !== req.params.id);
   await saveExportsMeta(list);
   res.json({ ok: true });
@@ -2523,7 +2632,7 @@ app.get('/api/export/league-csv', async (req, res) => {
 const EXPORTS_CSV_DIR = path.join(__dirname, 'data', 'exports');
 const exportCache     = new Map(); // token → { filename, expireAt } (fast-path only)
 
-app.get('/api/export/league-csv-stream', async (req, res) => {
+app.get('/api/export/league-csv-stream', auth.requireRole('admin', 'editor'), async (req, res) => {
   // years = comma-separated list of grad years to include
   // genders = comma-separated list of gender strings to include
   const { eventId, orgId: qOrgId = '8008', years, genders } = req.query;
@@ -2709,7 +2818,7 @@ app.get('/api/export/league-csv-download', async (req, res) => {
 });
 
 // Delete an export file + metadata
-app.delete('/api/export/league-csv/:token', async (req, res) => {
+app.delete('/api/export/league-csv/:token', auth.requireAdmin, async (req, res) => {
   const { token } = req.params;
   await blobStorage.deleteFile(`exports/${token}.csv`);
   exportCache.delete(token);
@@ -2806,7 +2915,7 @@ function contactBroadcast(event, data) {
   }
 }
 
-app.get('/api/contacts/stream', async (req, res) => {
+app.get('/api/contacts/stream', auth.requireRole('admin', 'editor'), async (req, res) => {
   res.setHeader('Content-Type',      'text/event-stream');
   res.setHeader('Cache-Control',     'no-cache');
   res.setHeader('Connection',        'keep-alive');
@@ -2818,8 +2927,11 @@ app.get('/api/contacts/stream', async (req, res) => {
   req.on('close', () => contactClients.delete(res));
 });
 
-app.post('/api/contacts/fetch', async (req, res) => {
+app.post('/api/contacts/fetch', auth.requireRole('admin', 'editor'), async (req, res) => {
   const { orgId = '8008', eventIds, purgeFirst = false } = req.body || {};
+  if (purgeFirst && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admins can purge contacts before re-fetching' });
+  }
   if (contactFetchState.running) {
     return res.json({ started: false, message: 'Fetch already in progress' });
   }
@@ -3004,7 +3116,7 @@ app.post('/api/contacts/fetch', async (req, res) => {
 });
 
 // ── Purge contacts for specific events ────────────────────────────────────────
-app.post('/api/contacts/purge', async (req, res) => {
+app.post('/api/contacts/purge', auth.requireAdmin, async (req, res) => {
   const { eventIds = [] } = req.body;
   const db = await contactStore.load();
   let total = 0;
@@ -3076,7 +3188,7 @@ app.get('/api/contacts/export', async (req, res) => {
 
 // ── Clear cache ────────────────────────────────────────────────────────────────
 
-app.post('/api/cache/clear', async (req, res) => {
+app.post('/api/cache/clear', auth.requireRole('admin', 'editor'), async (req, res) => {
   cache.flushAll();
   tokenCache = { token: null, expiresAt: 0 };
   res.json({ message: 'Cache cleared' });

@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { Toaster, toast } from 'react-hot-toast';
 import Dashboard    from './pages/Dashboard.jsx';
 import Analytics    from './pages/Analytics.jsx';
-import Heatmap      from './pages/Heatmap.jsx';
 import QueryExplorer from './pages/QueryExplorer.jsx';
 import SchemaExplorer from './pages/SchemaExplorer.jsx';
 import Registrations from './pages/Registrations.jsx';
@@ -12,18 +11,40 @@ import Reports      from './pages/Reports.jsx';
 import Audiences   from './pages/Audiences.jsx';
 import BootTerminal    from './components/BootTerminal.jsx';
 import DataManagement  from './pages/DataManagement.jsx';
+import Login        from './pages/Login.jsx';
+import Users        from './pages/Users.jsx';
 import { api }      from './api.jsx';
+import { useAuth }  from './AuthContext.jsx';
 import SearchableSelect from './components/SearchableSelect.jsx';
 import './App.css';
 
 const ORG_ID = '8008';
 
+function getInitialTheme() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'light' || saved === 'dark') return saved;
+  return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
 export default function App() {
+  const { user, loading: authLoading, logout } = useAuth();
   const [connected,     setConnected]     = useState(false);
   const [recentRegs,    setRecentRegs]    = useState([]);
   const [selectedReg,   setSelectedReg]   = useState(null);
   const [booting,       setBooting]       = useState(true);
   const [refreshToken,  setRefreshToken]  = useState(0);
+  const [moreOpen,      setMoreOpen]      = useState(false);
+  const [theme,         setTheme]         = useState(getInitialTheme);
+  const [navOpen,       setNavOpen]       = useState(false);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  function toggleTheme() {
+    setTheme(t => t === 'dark' ? 'light' : 'dark');
+  }
 
   function handleBootReady(data) {
     setConnected(true);
@@ -58,10 +79,17 @@ export default function App() {
 
   const ctx = { orgId: ORG_ID, recentRegs, selectedReg, setSelectedReg, refreshToken, onAggComplete };
 
+  if (authLoading) {
+    return <div style={{ minHeight:'100vh', background:'var(--bg-base)' }} />;
+  }
+  if (!user) {
+    return <Login />;
+  }
+
   return (
     <BrowserRouter>
       <Toaster position="top-right" toastOptions={{
-        style: { background:'#1e2235', color:'#e2e8f0', border:'1px solid #3d4660' }
+        style: { background:'var(--bg-card)', color:'var(--text-1)', border:'1px solid var(--border)' }
       }} />
 
       {/* Full-screen boot terminal — shown until SSE says "ready" */}
@@ -71,33 +99,55 @@ export default function App() {
 
       {!booting && (
         <div className="app">
-          <nav className="sidebar">
+          <button className="sidebar-toggle" onClick={()=>setNavOpen(o=>!o)} aria-label="Toggle navigation">
+            {navOpen ? '✕' : '☰'}
+          </button>
+          <div className={`sidebar-scrim${navOpen ? ' show' : ''}`} onClick={()=>setNavOpen(false)} />
+
+          <nav className={`sidebar${navOpen ? ' open' : ''}`}>
             <div className="logo">
               <span className="logo-icon">🏀</span>
               <div>
                 <div className="logo-title">Midwest 3on3</div>
                 <div className="logo-sub">Data Explorer</div>
               </div>
+              <button className="theme-toggle" onClick={toggleTheme} title="Switch theme">
+                <span>{theme === 'dark' ? '🌙' : '☀️'}</span>
+                <span>{theme === 'dark' ? 'Dark' : 'Light'}</span>
+              </button>
             </div>
 
             <div className="nav-section">
               <div className="nav-label">Navigation</div>
-              <NavLink to="/"           end className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📊</span> Dashboard</NavLink>
-              <NavLink to="/analytics"     className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📈</span> Analytics</NavLink>
-              <NavLink to="/heatmap"       className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🗺️</span> Heatmap</NavLink>
-              <NavLink to="/reports"       className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📅</span> Reports</NavLink>
-              <NavLink to="/audiences"     className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🎯</span> FB Audiences</NavLink>
-              <NavLink to="/registrations" className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📝</span> All Events</NavLink>
-              <NavLink to="/query"         className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🔍</span> Query Explorer</NavLink>
-              <NavLink to="/schema"        className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📋</span> Schema</NavLink>
-              <NavLink to="/data"          className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🗄️</span> Data Mgmt</NavLink>
-              <NavLink to="/guide"         className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📖</span> Guide</NavLink>
+              <NavLink to="/"           end onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📊</span> Dashboard</NavLink>
+              <NavLink to="/reports"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📅</span> Reports</NavLink>
+              <NavLink to="/audiences"     onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🎯</span> FB Audiences</NavLink>
+            </div>
+
+            <div className="nav-section">
+              <button className="nav-label nav-more-toggle" onClick={()=>setMoreOpen(o=>!o)}>
+                <span>More</span>
+                <span style={{ transform: moreOpen ? 'rotate(90deg)' : 'none', transition:'transform 0.15s', display:'inline-block' }}>›</span>
+              </button>
+              {moreOpen && (
+                <>
+                  <NavLink to="/analytics"     onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📈</span> Analytics</NavLink>
+                  <NavLink to="/registrations" onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📝</span> All Events</NavLink>
+                  <NavLink to="/query"         onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🔍</span> Query Explorer</NavLink>
+                  <NavLink to="/schema"        onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📋</span> Schema</NavLink>
+                  <NavLink to="/data"          onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🗄️</span> Data Mgmt</NavLink>
+                  {user.role === 'admin' && (
+                    <NavLink to="/users"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>👤</span> Users</NavLink>
+                  )}
+                  <NavLink to="/guide"         onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📖</span> Guide</NavLink>
+                </>
+              )}
             </div>
 
             <div className="nav-section">
               <div className="nav-label" style={{ display:'flex', justifyContent:'space-between' }}>
                 <span>All Events</span>
-                <span style={{ color:'#3b82f6', fontSize:10 }}>{recentRegs.length} events</span>
+                <span style={{ color:'var(--accent)', fontSize:10 }}>{recentRegs.length} events</span>
               </div>
               <div className="filter-group">
                 <label>Event / Registration</label>
@@ -119,6 +169,27 @@ export default function App() {
               <div style={{ fontSize:11, color:'#334155', marginTop:3 }}>
                 All registrations / All time
               </div>
+              <div style={{
+                marginTop:10, paddingTop:10, borderTop:'1px solid var(--border)',
+                display:'flex', alignItems:'center', justifyContent:'space-between', gap:8,
+              }}>
+                <div style={{ overflow:'hidden' }}>
+                  <div style={{ fontSize:12, fontWeight:600, color:'var(--text-1)', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    {user.username}
+                  </div>
+                  <div style={{ fontSize:10, color:'var(--text-3)', textTransform:'capitalize' }}>
+                    {user.role}
+                  </div>
+                </div>
+                <button
+                  className="btn-secondary"
+                  style={{ width:'auto', margin:0, padding:'6px 10px', whiteSpace:'nowrap' }}
+                  onClick={logout}
+                  title="Sign out"
+                >
+                  Sign out
+                </button>
+              </div>
             </div>
           </nav>
 
@@ -126,13 +197,13 @@ export default function App() {
             <Routes>
               <Route path="/"              element={<Dashboard     ctx={ctx} />} />
               <Route path="/analytics"     element={<Analytics     ctx={ctx} />} />
-              <Route path="/heatmap"       element={<Heatmap       ctx={ctx} />} />
               <Route path="/reports"       element={<Reports       ctx={ctx} />} />
               <Route path="/audiences"     element={<Audiences     ctx={ctx} />} />
               <Route path="/registrations" element={<Registrations ctx={ctx} />} />
               <Route path="/query"         element={<QueryExplorer />} />
               <Route path="/schema"        element={<SchemaExplorer />} />
               <Route path="/data"          element={<DataManagement ctx={ctx} />} />
+              {user.role === 'admin' && <Route path="/users" element={<Users />} />}
               <Route path="/guide"         element={<Guide />} />
             </Routes>
           </main>

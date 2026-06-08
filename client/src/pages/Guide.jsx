@@ -9,17 +9,17 @@ const Section = ({ title, children }) => (
 
 const Step = ({ n, title, text }) => (
   <div style={{display:'flex',gap:14,marginBottom:14}}>
-    <div style={{width:30,height:30,borderRadius:'50%',background:'#1e3a5f',color:'#60a5fa',
+    <div style={{width:30,height:30,borderRadius:'50%',background:'var(--chip-bg)',color:'var(--accent-light)',
       display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:14,flexShrink:0}}>{n}</div>
     <div>
-      <div style={{color:'#e2e8f0',fontWeight:600,marginBottom:3}}>{title}</div>
-      <div style={{color:'#64748b',fontSize:13,lineHeight:1.6}}>{text}</div>
+      <div style={{color:'var(--text-1)',fontWeight:600,marginBottom:3}}>{title}</div>
+      <div style={{color:'var(--text-3)',fontSize:13,lineHeight:1.6}}>{text}</div>
     </div>
   </div>
 );
 
 const Tip = ({ children }) => (
-  <div style={{background:'#1e3a5f',border:'1px solid #1e40af',borderRadius:8,padding:'10px 14px',marginBottom:10,fontSize:13,color:'#93c5fd'}}>
+  <div style={{background:'var(--chip-bg)',border:'1px solid var(--info-border)',borderRadius:8,padding:'10px 14px',marginBottom:10,fontSize:13,color:'var(--info-text)'}}>
     {children}
   </div>
 );
@@ -33,7 +33,7 @@ export default function Guide() {
       </div>
 
       <Section title="What This Tool Does">
-        <p style={{color:'#94a3b8',lineHeight:1.7,marginBottom:10}}>
+        <p style={{color:'var(--text-2)',lineHeight:1.7,marginBottom:10}}>
           This explorer connects read-only to the SportsEngine API for the Midwest 3 on 3 organization (ID 8008).
           It automatically loads all registrations from 2025 onwards and lets you analyze:
         </p>
@@ -44,12 +44,11 @@ export default function Guide() {
             ['📍','Geography','What states and cities players come from'],
             ['🏆','Division','What divisions/age groups are most popular'],
             ['📊','Event Rank','Which events have the most registrations'],
-            ['🗺️','Heatmap','Visual map of registrant locations by state'],
           ].map(([icon,title,desc])=>(
-            <div key={title} style={{background:'#1e2235',borderRadius:8,padding:'12px 14px'}}>
+            <div key={title} style={{background:'var(--surface-1)',borderRadius:8,padding:'12px 14px'}}>
               <div style={{fontSize:20,marginBottom:4}}>{icon}</div>
-              <div style={{color:'#e2e8f0',fontWeight:600,fontSize:14}}>{title}</div>
-              <div style={{color:'#475569',fontSize:12,marginTop:4}}>{desc}</div>
+              <div style={{color:'var(--text-1)',fontWeight:600,fontSize:14}}>{title}</div>
+              <div style={{color:'var(--text-4)',fontSize:12,marginTop:4}}>{desc}</div>
             </div>
           ))}
         </div>
@@ -62,9 +61,7 @@ export default function Guide() {
           text='Go to Dashboard → click "Grad Year 2025" or "Grad Year 2026" to instantly see how many players from those graduating classes registered across ALL 2025+ events.' />
         <Step n={3} title="Switch to Aggregate mode in Analytics"
           text='Go to Analytics → click "All 2025+ Events (Aggregate)" → then click "2025 Only" or "2026 Only" scenario to see the full breakdown with bar charts, pie charts, and area charts.' />
-        <Step n={4} title="Check the heatmap for geography"
-          text="Go to Heatmap → it shows a US state bubble map where larger/redder bubbles mean more registrants. Hover for exact counts." />
-        <Step n={5} title="Drill into a single event"
+        <Step n={4} title="Drill into a single event"
           text="Change the event in the sidebar dropdown → Analytics auto-reloads for that specific event so you can compare individual leagues." />
         <Tip>The first aggregate load (all events) takes ~30-60 seconds because it fetches data from every event. After that it is cached for 10 minutes and instant.</Tip>
       </Section>
@@ -76,15 +73,14 @@ export default function Guide() {
             {[
               ['📊 Dashboard','Overview: scenario buttons, aggregate stats, event leaderboard','Quick look + choosing scenarios'],
               ['📈 Analytics','Deep charts: bar, pie, area, horizontal bars — single or aggregate','Grad year analysis with filters'],
-              ['🗺️ Heatmap','US state bubble map sized by registrant count','See geographic spread visually'],
               ['📝 Registrations','Browse all 705 events with search and CSV export','Find specific events, export list'],
               ['🔍 Query Explorer','Run REST or GraphQL queries, see JSON or table, export CSV','Custom data pulls'],
               ['📋 Schema','Browse all GraphQL types and fields','Understand what data is available'],
             ].map(([p,w,b])=>(
               <tr key={p}>
-                <td style={{color:'#60a5fa',fontWeight:600,whiteSpace:'nowrap'}}>{p}</td>
-                <td style={{color:'#94a3b8'}}>{w}</td>
-                <td style={{color:'#64748b',fontSize:12}}>{b}</td>
+                <td style={{color:'var(--accent-light)',fontWeight:600,whiteSpace:'nowrap'}}>{p}</td>
+                <td style={{color:'var(--text-2)'}}>{w}</td>
+                <td style={{color:'var(--text-3)',fontSize:12}}>{b}</td>
               </tr>
             ))}
           </tbody>
@@ -92,7 +88,7 @@ export default function Guide() {
       </Section>
 
       <Section title="Pre-built Query Scenarios (Query Explorer)">
-        <p style={{color:'#64748b',fontSize:13,marginBottom:12}}>
+        <p style={{color:'var(--text-3)',fontSize:13,marginBottom:12}}>
           The Query Explorer has ready-to-run scenarios. Click any item in the left panel and hit Run.
         </p>
         <table className="data-table">
@@ -108,9 +104,9 @@ export default function Guide() {
               ['Profiles Page 1','GraphQL','50 registrant profiles with demographics'],
             ].map(([s,t,w])=>(
               <tr key={s}>
-                <td style={{color:'#e2e8f0',fontWeight:600}}>{s}</td>
+                <td style={{color:'var(--text-1)',fontWeight:600}}>{s}</td>
                 <td><span className={`badge ${t==='REST'?'badge-green':'badge-blue'}`}>{t}</span></td>
-                <td style={{color:'#64748b',fontSize:13}}>{w}</td>
+                <td style={{color:'var(--text-3)',fontSize:13}}>{w}</td>
               </tr>
             ))}
           </tbody>
@@ -118,12 +114,12 @@ export default function Guide() {
       </Section>
 
       <Section title="How Graduation Year Data Works">
-        <p style={{color:'#94a3b8',lineHeight:1.7,marginBottom:10}}>
+        <p style={{color:'var(--text-2)',lineHeight:1.7,marginBottom:10}}>
           SportsEngine does not store graduation year as a profile field for most registrants.
-          Instead, each team registration form has questions like <em style={{color:'#60a5fa'}}>"Player 1 Graduation Year"</em>,
-          <em style={{color:'#60a5fa'}}> "Player 2 Graduation Year"</em>, etc.
+          Instead, each team registration form has questions like <em style={{color:'var(--accent-light)'}}>"Player 1 Graduation Year"</em>,
+          <em style={{color:'var(--accent-light)'}}> "Player 2 Graduation Year"</em>, etc.
         </p>
-        <p style={{color:'#94a3b8',lineHeight:1.7,marginBottom:10}}>
+        <p style={{color:'var(--text-2)',lineHeight:1.7,marginBottom:10}}>
           This app reads those form answers and aggregates them. A single team registration may contribute
           multiple graduation year counts (one per player on the roster, typically 3-5 players per team).
         </p>
@@ -131,19 +127,19 @@ export default function Guide() {
       </Section>
 
       <Section title="Year Filter">
-        <p style={{color:'#94a3b8',lineHeight:1.7}}>
-          Use the <strong style={{color:'#60a5fa'}}>2025+</strong> and <strong style={{color:'#60a5fa'}}>2026+</strong> buttons
+        <p style={{color:'var(--text-2)',lineHeight:1.7}}>
+          Use the <strong style={{color:'var(--accent-light)'}}>2025+</strong> and <strong style={{color:'var(--accent-light)'}}>2026+</strong> buttons
           in the sidebar to change which events are included. "2025+" includes all events named or dated from 2025 onwards.
           "2026+" is narrower — only 2026 events. Switch and the sidebar dropdown and all analytics update automatically.
         </p>
       </Section>
 
       <Section title="Important Notes">
-        <div style={{color:'#94a3b8',fontSize:13,lineHeight:1.8}}>
-          <div style={{marginBottom:6}}>🔒 <strong style={{color:'#e2e8f0'}}>Read-only:</strong> This tool never writes or modifies any data on SportsEngine.</div>
-          <div style={{marginBottom:6}}>⚡ <strong style={{color:'#e2e8f0'}}>Caching:</strong> Data is cached for 5-10 minutes. Click "Refresh Data" in the sidebar to force a reload.</div>
-          <div style={{marginBottom:6}}>⏱️ <strong style={{color:'#e2e8f0'}}>Aggregate speed:</strong> First-time aggregate queries fetch all events sequentially and take 30-60s. Cached thereafter.</div>
-          <div>🔑 <strong style={{color:'#e2e8f0'}}>API:</strong> Uses SportsEngine OAuth2 client_credentials flow. Token auto-refreshes every 24 hours.</div>
+        <div style={{color:'var(--text-2)',fontSize:13,lineHeight:1.8}}>
+          <div style={{marginBottom:6}}>🔒 <strong style={{color:'var(--text-1)'}}>Read-only:</strong> This tool never writes or modifies any data on SportsEngine.</div>
+          <div style={{marginBottom:6}}>⚡ <strong style={{color:'var(--text-1)'}}>Caching:</strong> Data is cached for 5-10 minutes. Click "Refresh Data" in the sidebar to force a reload.</div>
+          <div style={{marginBottom:6}}>⏱️ <strong style={{color:'var(--text-1)'}}>Aggregate speed:</strong> First-time aggregate queries fetch all events sequentially and take 30-60s. Cached thereafter.</div>
+          <div>🔑 <strong style={{color:'var(--text-1)'}}>API:</strong> Uses SportsEngine OAuth2 client_credentials flow. Token auto-refreshes every 24 hours.</div>
         </div>
       </Section>
     </div>

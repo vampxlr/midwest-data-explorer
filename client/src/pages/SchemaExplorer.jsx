@@ -44,8 +44,8 @@ export default function SchemaExplorer() {
         value={search}
         onChange={e => setSearch(e.target.value)}
         style={{
-          width: '100%', background: '#13161f', border: '1px solid #2a2d3e',
-          color: '#e2e8f0', borderRadius: 8, padding: '10px 14px',
+          width: '100%', background: 'var(--surface-2)', border: '1px solid var(--line)',
+          color: 'var(--text-1)', borderRadius: 8, padding: '10px 14px',
           fontSize: 14, outline: 'none', marginBottom: 16,
         }}
       />
@@ -60,9 +60,9 @@ export default function SchemaExplorer() {
               onClick={() => setSelectedType(t)}
               style={{
                 display: 'block', width: '100%', textAlign: 'left',
-                background: selectedType?.name === t.name ? '#1e3a5f' : 'transparent',
+                background: selectedType?.name === t.name ? 'var(--chip-bg)' : 'transparent',
                 border: 'none', borderRadius: 6, padding: '8px 12px',
-                color: selectedType?.name === t.name ? '#60a5fa' : '#94a3b8',
+                color: selectedType?.name === t.name ? 'var(--accent-light)' : 'var(--text-2)',
                 fontSize: 13, cursor: 'pointer', marginBottom: 2,
                 transition: 'all 0.1s',
               }}
@@ -73,7 +73,7 @@ export default function SchemaExplorer() {
                 marginRight: 8,
               }} />
               {t.name}
-              <span style={{ fontSize: 10, color: '#475569', marginLeft: 6 }}>{t.kind}</span>
+              <span style={{ fontSize: 10, color: 'var(--text-4)', marginLeft: 6 }}>{t.kind}</span>
             </button>
           ))}
         </div>
@@ -90,7 +90,7 @@ export default function SchemaExplorer() {
                 <h2>{selectedType.name}</h2>
                 <span className="badge badge-blue" style={{ marginRight: 8 }}>{selectedType.kind}</span>
                 {selectedType.description && (
-                  <p style={{ color: '#64748b', fontSize: 13, marginTop: 8 }}>{selectedType.description}</p>
+                  <p style={{ color: 'var(--text-3)', fontSize: 13, marginTop: 8 }}>{selectedType.description}</p>
                 )}
               </div>
 
@@ -104,9 +104,9 @@ export default function SchemaExplorer() {
                       const typeName = f.type?.name || f.type?.ofType?.name || f.type?.ofType?.ofType?.name || '...';
                       return (
                         <tr key={f.name}>
-                          <td style={{ color: '#60a5fa', fontFamily: 'monospace', fontWeight: 600 }}>{f.name}</td>
+                          <td style={{ color: 'var(--accent-light)', fontFamily: 'monospace', fontWeight: 600 }}>{f.name}</td>
                           <td><span className="badge badge-purple">{typeName}</span></td>
-                          <td style={{ color: '#64748b', fontSize: 12 }}>{f.description || '—'}</td>
+                          <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{f.description || '—'}</td>
                         </tr>
                       );
                     })}

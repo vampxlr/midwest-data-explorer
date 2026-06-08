@@ -1,11 +1,12 @@
 ﻿import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.jsx';
+import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
 
 // ── level colours (same palette as BootTerminal) ────────────────────────────
 const LC = {
-  info:'#64748b', ok:'#22c55e', error:'#ef4444', warn:'#f97316',
-  call:'#60a5fa', response:'#a78bfa', save:'#34d399', skip:'#94a3b8', wait:'#475569',
+  info:'var(--text-3)', ok:'#22c55e', error:'#ef4444', warn:'#f97316',
+  call:'#60a5fa', response:'#a78bfa', save:'#34d399', skip:'var(--text-2)', wait:'var(--text-4)',
 };
 
 // ── Inline terminal for one event ────────────────────────────────────────────
@@ -81,13 +82,13 @@ function EventTerminal({ eventId, orgId, eventName, onDone, onClose }) {
 
   return (
     <div style={{
-      background:'#080a0f', border:'1px solid #1e2235', borderRadius:10,
+      background:'#080a0f', border:'1px solid var(--surface-1)', borderRadius:10,
       fontFamily:'"Cascadia Code","Fira Code","Consolas",monospace',
       overflow:'hidden', marginTop:8,
     }}>
       {/* title bar */}
       <div style={{
-        background:'#0f1117', borderBottom:'1px solid #1e2235',
+        background:'var(--surface-3)', borderBottom:'1px solid var(--surface-1)',
         padding:'8px 14px', display:'flex', alignItems:'center', gap:10,
       }}>
         <div style={{ display:'flex', gap:5 }}>
@@ -95,14 +96,14 @@ function EventTerminal({ eventId, orgId, eventName, onDone, onClose }) {
             <div key={c} style={{ width:10, height:10, borderRadius:'50%', background:c }} />
           ))}
         </div>
-        <span style={{ color:'#475569', fontSize:12, flex:1 }}>
+        <span style={{ color:'var(--text-4)', fontSize:12, flex:1 }}>
           purge-reload — {eventName?.slice(0,60)}
         </span>
         <span style={{ color:statusColor, fontSize:11, fontWeight:700 }}>
           {status==='connecting'?'CONNECTING':status==='running'?'RUNNING':status==='done'?'DONE':'ERROR'}
         </span>
         <button onClick={onClose}
-          style={{ background:'none', border:'none', color:'#475569', cursor:'pointer', fontSize:14, padding:'0 4px' }}>
+          style={{ background:'none', border:'none', color:'var(--text-4)', cursor:'pointer', fontSize:14, padding:'0 4px' }}>
           ✕
         </button>
       </div>
@@ -127,17 +128,17 @@ function EventTerminal({ eventId, orgId, eventName, onDone, onClose }) {
       {/* summary bar */}
       {summary && (
         <div style={{
-          borderTop:'1px solid #1e2235', background:'#0d1f0d',
+          borderTop:'1px solid var(--surface-1)', background:'rgba(34,197,94,0.1)',
           padding:'10px 14px', display:'flex', gap:20, flexWrap:'wrap',
         }}>
           {[
             { label:'Deleted',     val:summary.deleted,     color:'#ef4444' },
-            { label:'Fetched',     val:summary.fetched,     color:'#60a5fa' },
+            { label:'Fetched',     val:summary.fetched,     color:'var(--accent-light)' },
             { label:'Saved (new)', val:summary.added,       color:'#22c55e' },
             { label:'Store total', val:summary.totalInStore,color:'#f97316' },
           ].map(s=>(
             <div key={s.label} style={{ fontSize:12 }}>
-              <span style={{ color:'#475569' }}>{s.label}: </span>
+              <span style={{ color:'var(--text-4)' }}>{s.label}: </span>
               <span style={{ color:s.color, fontWeight:700 }}>{s.val}</span>
             </div>
           ))}
@@ -152,6 +153,7 @@ function EventTerminal({ eventId, orgId, eventName, onDone, onClose }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function DataManagement({ ctx }) {
   const { orgId } = ctx;
+  const { isAdmin } = useAuth();
 
   const [storeEvents, setStoreEvents] = useState([]);
   const [allRegs,     setAllRegs]     = useState([]);
@@ -225,7 +227,7 @@ export default function DataManagement({ ctx }) {
       {/* Stats */}
       <div className="grid-4" style={{ marginBottom:20 }}>
         {[
-          { label:'Saved Results',       val:totalSaved,                    color:'#60a5fa' },
+          { label:'Saved Results',       val:totalSaved,                    color:'var(--accent-light)' },
           { label:'Events in Store',     val:storeEvents.length,            color:'#22c55e' },
           { label:'Total Events (SE)',   val:allRegs.length,                color:'#f97316' },
           { label:'Not Yet Fetched',     val:allRegs.length-storeEvents.length, color:'#a855f7' },
@@ -239,13 +241,13 @@ export default function DataManagement({ ctx }) {
 
       {/* Info */}
       <div style={{
-        background:'#1e2235', border:'1px solid #2a2d3e', borderRadius:10,
-        padding:'12px 16px', marginBottom:20, fontSize:13, color:'#64748b', lineHeight:1.7,
+        background:'var(--surface-1)', border:'1px solid var(--line)', borderRadius:10,
+        padding:'12px 16px', marginBottom:20, fontSize:13, color:'var(--text-3)', lineHeight:1.7,
       }}>
-        <strong style={{color:'#94a3b8'}}>↺ Purge & Reload</strong> — deletes saved results for that
+        <strong style={{color:'var(--text-2)'}}>↺ Purge & Reload</strong> — deletes saved results for that
         league then immediately re-fetches fresh data from SportsEngine. A live terminal appears below
         the row showing every step.&nbsp;&nbsp;
-        <strong style={{color:'#94a3b8'}}>✕ Purge</strong> — removes locally-saved data only (no re-fetch).
+        <strong style={{color:'var(--text-2)'}}>✕ Purge</strong> — removes locally-saved data only (no re-fetch).
         All operations are <strong style={{color:'#22c55e'}}>read-only on SportsEngine</strong> — nothing is
         written to the remote server.
       </div>
@@ -254,8 +256,8 @@ export default function DataManagement({ ctx }) {
       <input type="text" placeholder="Search by name or ID…"
         value={search} onChange={e=>setSearch(e.target.value)}
         style={{
-          width:'100%', background:'#13161f', border:'1px solid #2a2d3e',
-          color:'#e2e8f0', borderRadius:8, padding:'10px 14px', fontSize:14,
+          width:'100%', background:'var(--surface-2)', border:'1px solid var(--line)',
+          color:'var(--text-1)', borderRadius:8, padding:'10px 14px', fontSize:14,
           outline:'none', marginBottom:16,
         }} />
 
@@ -282,66 +284,88 @@ export default function DataManagement({ ctx }) {
 
                   return (
                     <React.Fragment key={reg.id}>
-                      <tr style={{ background: isActive ? '#0d1520' : 'transparent' }}>
+                      <tr style={{ background: isActive ? 'var(--bg-hover)' : 'transparent' }}>
                         {/* Name */}
-                        <td style={{ color:'#e2e8f0', maxWidth:340 }}>
+                        <td style={{ color:'var(--text-1)', maxWidth:340 }}>
                           {reg.name}
                         </td>
 
                         {/* ID */}
-                        <td style={{ fontFamily:'monospace', color:'#60a5fa', fontSize:12 }}>{reg.id}</td>
+                        <td style={{ fontFamily:'monospace', color:'var(--accent-light)', fontSize:12 }}>{reg.id}</td>
 
                         {/* Status */}
                         <td>
                           {reg.status===1
                             ? <span className="badge badge-green">Open</span>
-                            : <span className="badge" style={{background:'#1e2235',color:'#64748b'}}>Closed</span>}
+                            : <span className="badge" style={{background:'var(--surface-1)',color:'var(--text-3)'}}>Closed</span>}
                         </td>
 
                         {/* Saved count */}
                         <td>
                           {reg.inStore
                             ? <span className="badge badge-orange">{reg.savedCount}</span>
-                            : <span style={{color:'#334155',fontSize:12}}>—</span>}
+                            : <span style={{color:'var(--text-5)',fontSize:12}}>—</span>}
                         </td>
 
                         {/* Last fetched */}
-                        <td style={{fontSize:12,color:'#475569',whiteSpace:'nowrap'}}>
+                        <td style={{fontSize:12,color:'var(--text-4)',whiteSpace:'nowrap'}}>
                           {reg.fetchedAt
                             ? new Date(reg.fetchedAt).toLocaleString()
-                            : <span style={{color:'#334155'}}>Never</span>}
+                            : <span style={{color:'var(--text-5)'}}>Never</span>}
                         </td>
 
                         {/* Actions */}
                         <td style={{whiteSpace:'nowrap'}}>
                           <div style={{display:'flex',gap:6}}>
-                            {/* Purge & Reload */}
-                            <button
-                              onClick={() => setActiveTerminal(isActive ? null : String(reg.id))}
-                              title="Purge saved data then re-fetch from SportsEngine with live terminal"
-                              style={{
-                                padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600,
-                                border:'none', cursor:'pointer', transition:'all 0.15s',
-                                background: isActive ? '#1d4ed8' : '#1e3a5f',
-                                color: isActive ? '#fff' : '#60a5fa',
-                              }}>
-                              {isActive ? '▲ Close' : '↺ Purge & Reload'}
-                            </button>
-
-                            {/* Purge only */}
-                            {reg.inStore && (
+                            {/* Purge & Reload — admin only (purges data) */}
+                            {isAdmin ? (
                               <button
-                                onClick={() => handlePurgeOnly(reg)}
-                                disabled={isPurging}
-                                title="Delete cached data only — no re-fetch"
+                                onClick={() => setActiveTerminal(isActive ? null : String(reg.id))}
+                                title="Purge saved data then re-fetch from SportsEngine with live terminal"
                                 style={{
-                                  padding:'5px 10px', borderRadius:6, fontSize:12, fontWeight:600,
-                                  border:'none', cursor: isPurging?'not-allowed':'pointer',
-                                  background:'#1c0505', color: isPurging?'#475569':'#f87171',
-                                  transition:'all 0.15s',
+                                  padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600,
+                                  border:'none', cursor:'pointer', transition:'all 0.15s',
+                                  background: isActive ? '#1d4ed8' : 'var(--chip-bg)',
+                                  color: isActive ? '#fff' : 'var(--accent-light)',
                                 }}>
-                                {isPurging ? '…' : '✕ Purge'}
+                                {isActive ? '▲ Close' : '↺ Purge & Reload'}
                               </button>
+                            ) : (
+                              <span
+                                title="Only admins can purge and reload data"
+                                style={{
+                                  padding:'5px 12px', borderRadius:6, fontSize:12, fontWeight:600,
+                                  background:'var(--surface-1)', color:'var(--text-4)', cursor:'not-allowed',
+                                }}>
+                                ↺ Purge & Reload
+                              </span>
+                            )}
+
+                            {/* Purge only — admin only (purges data) */}
+                            {reg.inStore && (
+                              isAdmin ? (
+                                <button
+                                  onClick={() => handlePurgeOnly(reg)}
+                                  disabled={isPurging}
+                                  title="Delete cached data only — no re-fetch"
+                                  style={{
+                                    padding:'5px 10px', borderRadius:6, fontSize:12, fontWeight:600,
+                                    border:'none', cursor: isPurging?'not-allowed':'pointer',
+                                    background: isPurging?'var(--surface-1)':'rgba(239,68,68,0.12)', color: isPurging?'var(--text-4)':'var(--danger-text)',
+                                    transition:'all 0.15s',
+                                  }}>
+                                  {isPurging ? '…' : '✕ Purge'}
+                                </button>
+                              ) : (
+                                <span
+                                  title="Only admins can purge data"
+                                  style={{
+                                    padding:'5px 10px', borderRadius:6, fontSize:12, fontWeight:600,
+                                    background:'var(--surface-1)', color:'var(--text-4)', cursor:'not-allowed',
+                                  }}>
+                                  ✕ Purge
+                                </span>
+                              )
                             )}
                           </div>
                         </td>

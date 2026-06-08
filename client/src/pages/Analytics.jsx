@@ -12,10 +12,10 @@ const COLORS = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6','#ea
 const ChartTip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background:'#1e2235', border:'1px solid #2a2d3e', borderRadius:8, padding:'8px 12px' }}>
-      <p style={{ color:'#94a3b8', fontSize:12, marginBottom:2 }}>{label}</p>
+    <div style={{ background:'var(--surface-1)', border:'1px solid var(--line)', borderRadius:8, padding:'8px 12px' }}>
+      <p style={{ color:'var(--text-2)', fontSize:12, marginBottom:2 }}>{label}</p>
       {payload.map((p,i) => (
-        <p key={i} style={{ color:p.color||'#60a5fa', fontSize:14, fontWeight:600 }}>{p.name}: {p.value}</p>
+        <p key={i} style={{ color:p.color||'var(--accent-light)', fontSize:14, fontWeight:600 }}>{p.name}: {p.value}</p>
       ))}
     </div>
   );
@@ -118,38 +118,32 @@ export default function Analytics({ ctx }) {
       </div>
 
       {/* ── Data panel (collapsible) ────────────────────────────────────── */}
-      <div className="card" style={{ marginBottom:16, borderLeft:'3px solid #1e3a5f' }}>
+      <div className="card" style={{ marginBottom:16, borderLeft:'3px solid var(--chip-bg)' }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12 }}>
           <div>
             <h3 style={{ margin:'0 0 2px', fontSize:14 }}>Data Fetching</h3>
-            <p style={{ color:'#475569', fontSize:12, margin:0 }}>
+            <p style={{ color:'var(--text-4)', fontSize:12, margin:0 }}>
               Fetch or refresh data from SportsEngine to update analytics.
             </p>
           </div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
-            <button onClick={() => startQuickAgg('open')} disabled={!!quickLoading}
-              style={{ padding:'7px 14px', borderRadius:8, fontSize:12, fontWeight:700, border:'none',
-                cursor:quickLoading?'not-allowed':'pointer',
-                background:'#0d2b1a', color:'#22c55e',
-                opacity:quickLoading&&quickLoading!=='open'?0.4:1 }}>
+            <button className="btn-action-green" onClick={() => startQuickAgg('open')} disabled={!!quickLoading}
+              style={{ opacity:quickLoading&&quickLoading!=='open'?0.4:1 }}>
               {quickLoading==='open' ? '⏳…' : `↺ Re-fetch Open (${recentRegs.filter(r=>r.status===1).length})`}
             </button>
-            <button onClick={() => startQuickAgg('closed')} disabled={!!quickLoading}
-              style={{ padding:'7px 14px', borderRadius:8, fontSize:12, fontWeight:700, border:'none',
-                cursor:quickLoading?'not-allowed':'pointer',
-                background:'#1a1207', color:'#f97316',
-                opacity:quickLoading&&quickLoading!=='closed'?0.4:1 }}>
+            <button className="btn-action-orange" onClick={() => startQuickAgg('closed')} disabled={!!quickLoading}
+              style={{ opacity:quickLoading&&quickLoading!=='closed'?0.4:1 }}>
               {quickLoading==='closed' ? '⏳…' : `↺ Re-fetch Closed (${recentRegs.filter(r=>r.status!==1).length})`}
             </button>
             <button onClick={() => setShowPanel(p=>!p)}
-              style={{ padding:'7px 14px', borderRadius:8, fontSize:12, fontWeight:600, border:'1px solid #2a2d3e',
-                cursor:'pointer', background:'#1e2235', color:'#64748b' }}>
+              style={{ padding:'7px 14px', borderRadius:8, fontSize:12, fontWeight:600, border:'1px solid var(--line)',
+                cursor:'pointer', background:'var(--surface-1)', color:'var(--text-3)' }}>
               {showPanel ? '▲ Hide Panel' : '▼ Full Panel'}
             </button>
           </div>
         </div>
         {showPanel && (
-          <div style={{ marginTop:12, borderTop:'1px solid #1e2235', paddingTop:12 }}>
+          <div style={{ marginTop:12, borderTop:'1px solid var(--surface-1)', paddingTop:12 }}>
             <AggregatePanel
               orgId={orgId}
               recentRegs={recentRegs}
@@ -167,34 +161,34 @@ export default function Analytics({ ctx }) {
       <div style={{display:'flex',gap:8,marginBottom:16}}>
         <button onClick={()=>{setMode('single');if(selectedReg?.id&&orgId)fetchSingle(selectedReg.id,orgId);}}
           style={{padding:'8px 18px',borderRadius:8,fontSize:13,fontWeight:700,border:'none',cursor:'pointer',
-            background:mode==='single'?'#2563eb':'#1e2235',color:mode==='single'?'#fff':'#64748b'}}>
+            background:mode==='single'?'#2563eb':'var(--surface-1)',color:mode==='single'?'#fff':'var(--text-3)'}}>
           Single Event
         </button>
         <button onClick={()=>{setMode('aggregate');fetchAgg(orgId,gradFilter);}}
           style={{padding:'8px 18px',borderRadius:8,fontSize:13,fontWeight:700,border:'none',cursor:'pointer',
-            background:mode==='aggregate'?'#2563eb':'#1e2235',color:mode==='aggregate'?'#fff':'#64748b'}}>
+            background:mode==='aggregate'?'#2563eb':'var(--surface-1)',color:mode==='aggregate'?'#fff':'var(--text-3)'}}>
           All Events (Aggregate)
         </button>
       </div>
 
       {/* Scenario buttons */}
       <div className="card" style={{marginBottom:16}}>
-        <h3 style={{marginBottom:10,color:'#94a3b8'}}>Pre-built Scenarios</h3>
+        <h3 style={{marginBottom:10,color:'var(--text-2)'}}>Pre-built Scenarios</h3>
         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           {SCENARIOS.map(s => (
             <button key={s.id} onClick={()=>runScenario(s)} title={s.desc}
               style={{
                 padding:'7px 14px',borderRadius:6,fontSize:12,fontWeight:600,
                 border:'none',cursor:'pointer',transition:'all 0.15s',
-                background:activeScenario===s.id?'#1d4ed8':'#1e2235',
-                color:activeScenario===s.id?'#fff':'#94a3b8',
+                background:activeScenario===s.id?'#1d4ed8':'var(--surface-1)',
+                color:activeScenario===s.id?'#fff':'var(--text-2)',
                 outline:activeScenario===s.id?'1.5px solid #3b82f6':'none',
               }}>
               {s.label}
             </button>
           ))}
         </div>
-        {aggLoading && <p style={{color:'#475569',fontSize:12,marginTop:8}}>Aggregating {recentRegs.length} events…</p>}
+        {aggLoading && <p style={{color:'var(--text-4)',fontSize:12,marginTop:8}}>Aggregating {recentRegs.length} events…</p>}
       </div>
 
       {/* Tabs */}
@@ -223,9 +217,9 @@ function GradYearTab({ rows, total, label }) {
         <h2>Registrants by Graduation Year — {label}</h2>
         <ResponsiveContainer width="100%" height={360}>
           <BarChart data={sorted} margin={{top:10,right:20,left:0,bottom:24}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3e" />
-            <XAxis dataKey="name" stroke="#475569" tick={{fill:'#64748b',fontSize:12}} angle={-30} textAnchor="end" interval={0} />
-            <YAxis stroke="#475569" tick={{fill:'#64748b',fontSize:12}} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+            <XAxis dataKey="name" stroke="var(--text-4)" tick={{fill:'var(--text-3)',fontSize:12}} angle={-30} textAnchor="end" interval={0} />
+            <YAxis stroke="var(--text-4)" tick={{fill:'var(--text-3)',fontSize:12}} />
             <Tooltip content={<ChartTip />} />
             <Bar dataKey="count" name="Players" radius={[4,4,0,0]}>
               {sorted.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
@@ -257,9 +251,9 @@ function GradYearTab({ rows, total, label }) {
                   <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3e" />
-              <XAxis dataKey="name" stroke="#475569" tick={{fill:'#64748b',fontSize:11}} angle={-30} textAnchor="end" />
-              <YAxis stroke="#475569" tick={{fill:'#64748b',fontSize:12}} />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+              <XAxis dataKey="name" stroke="var(--text-4)" tick={{fill:'var(--text-3)',fontSize:11}} angle={-30} textAnchor="end" />
+              <YAxis stroke="var(--text-4)" tick={{fill:'var(--text-3)',fontSize:12}} />
               <Tooltip content={<ChartTip />} />
               <Area type="monotone" dataKey="count" name="Players" stroke="#3b82f6" fill="url(#gBlue)" />
             </AreaChart>
@@ -275,9 +269,9 @@ function GradYearTab({ rows, total, label }) {
               <tr key={row.name}>
                 <td style={{color:COLORS[i%COLORS.length],fontWeight:700}}>{row.name}</td>
                 <td><span className="badge badge-blue">{row.count}</span></td>
-                <td style={{color:'#64748b'}}>{total>0?((row.count/total)*100).toFixed(2):0}%</td>
+                <td style={{color:'var(--text-3)'}}>{total>0?((row.count/total)*100).toFixed(2):0}%</td>
                 <td style={{width:200}}>
-                  <div style={{background:'#1e2235',borderRadius:4,height:8}}>
+                  <div style={{background:'var(--surface-1)',borderRadius:4,height:8}}>
                     <div style={{background:COLORS[i%COLORS.length],width:`${(row.count/(rows[0]?.count||1))*100}%`,height:'100%',borderRadius:4}} />
                   </div>
                 </td>
@@ -299,9 +293,9 @@ function DivisionTab({ data }) {
         <h2>Teams by Division</h2>
         <ResponsiveContainer width="100%" height={320}>
           <BarChart data={sorted} margin={{top:10,right:20,left:0,bottom:24}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3e" />
-            <XAxis dataKey="name" stroke="#475569" tick={{fill:'#64748b',fontSize:12}} angle={-30} textAnchor="end" interval={0} />
-            <YAxis stroke="#475569" tick={{fill:'#64748b',fontSize:12}} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+            <XAxis dataKey="name" stroke="var(--text-4)" tick={{fill:'var(--text-3)',fontSize:12}} angle={-30} textAnchor="end" interval={0} />
+            <YAxis stroke="var(--text-4)" tick={{fill:'var(--text-3)',fontSize:12}} />
             <Tooltip content={<ChartTip />} />
             <Bar dataKey="count" name="Teams" radius={[4,4,0,0]}>
               {sorted.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
@@ -331,7 +325,7 @@ function DivisionTab({ data }) {
                 <tr key={row.name}>
                   <td style={{color:COLORS[i%COLORS.length],fontWeight:700}}>{row.name}</td>
                   <td><span className="badge badge-blue">{row.count}</span></td>
-                  <td style={{color:'#64748b'}}>{data?.total>0?((row.count/data.total)*100).toFixed(1):0}%</td>
+                  <td style={{color:'var(--text-3)'}}>{data?.total>0?((row.count/data.total)*100).toFixed(1):0}%</td>
                 </tr>
               ))}
             </tbody>
@@ -363,9 +357,9 @@ function GenderTab({ data }) {
         <h2>Gender — Bar</h2>
         <ResponsiveContainer width="100%" height={280}>
           <BarChart data={rows} margin={{top:10,right:20,left:0,bottom:10}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3e" />
-            <XAxis dataKey="name" stroke="#475569" tick={{fill:'#64748b'}} />
-            <YAxis stroke="#475569" tick={{fill:'#64748b'}} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+            <XAxis dataKey="name" stroke="var(--text-4)" tick={{fill:'var(--text-3)'}} />
+            <YAxis stroke="var(--text-4)" tick={{fill:'var(--text-3)'}} />
             <Tooltip content={<ChartTip />} />
             <Bar dataKey="count" name="Teams" radius={[4,4,0,0]}>
               {rows.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
@@ -378,8 +372,8 @@ function GenderTab({ data }) {
             {rows.map((row,i) => (
               <tr key={row.name}>
                 <td style={{color:COLORS[i%COLORS.length]}}>{row.name}</td>
-                <td style={{color:'#e2e8f0'}}>{row.count}</td>
-                <td style={{color:'#64748b'}}>{data?.total>0?((row.count/data.total)*100).toFixed(1):0}%</td>
+                <td style={{color:'var(--text-1)'}}>{row.count}</td>
+                <td style={{color:'var(--text-3)'}}>{data?.total>0?((row.count/data.total)*100).toFixed(1):0}%</td>
               </tr>
             ))}
           </tbody>
@@ -398,9 +392,9 @@ function GeoTab({ data }) {
         <h2>Top 10 States</h2>
         <ResponsiveContainer width="100%" height={300}>
           <BarChart data={top10States} layout="vertical" margin={{top:10,right:30,left:30,bottom:10}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3e" horizontal={false} />
-            <XAxis type="number" stroke="#475569" tick={{fill:'#64748b'}} />
-            <YAxis dataKey="name" type="category" stroke="#475569" tick={{fill:'#94a3b8',fontSize:13}} width={40} />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" horizontal={false} />
+            <XAxis type="number" stroke="var(--text-4)" tick={{fill:'var(--text-3)'}} />
+            <YAxis dataKey="name" type="category" stroke="var(--text-4)" tick={{fill:'var(--text-2)',fontSize:13}} width={40} />
             <Tooltip content={<ChartTip />} />
             <Bar dataKey="count" name="Teams" radius={[0,4,4,0]}>
               {top10States.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
@@ -425,9 +419,9 @@ function GeoTab({ data }) {
           <h2>Top Cities</h2>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={top15Cities} layout="vertical" margin={{top:0,right:20,left:60,bottom:0}}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3e" horizontal={false} />
-              <XAxis type="number" stroke="#475569" tick={{fill:'#64748b',fontSize:11}} />
-              <YAxis dataKey="name" type="category" stroke="#475569" tick={{fill:'#94a3b8',fontSize:11}} width={55} />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" horizontal={false} />
+              <XAxis type="number" stroke="var(--text-4)" tick={{fill:'var(--text-3)',fontSize:11}} />
+              <YAxis dataKey="name" type="category" stroke="var(--text-4)" tick={{fill:'var(--text-2)',fontSize:11}} width={55} />
               <Tooltip content={<ChartTip />} />
               <Bar dataKey="count" name="Teams" fill="#22c55e" radius={[0,4,4,0]} />
             </BarChart>
@@ -438,8 +432,8 @@ function GeoTab({ data }) {
         <h2>All States</h2>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
           {(data?.state||[]).map((row,i) => (
-            <div key={row.name} style={{background:'#1e2235',borderRadius:8,padding:'10px 14px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <span style={{color:'#94a3b8',fontSize:14}}>{row.name}</span>
+            <div key={row.name} style={{background:'var(--surface-1)',borderRadius:8,padding:'10px 14px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{color:'var(--text-2)',fontSize:14}}>{row.name}</span>
               <span style={{color:COLORS[i%COLORS.length],fontWeight:700}}>{row.count}</span>
             </div>
           ))}

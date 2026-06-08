@@ -3,17 +3,18 @@
  * Connects to /api/boot/stream and renders a live terminal log.
  */
 import React, { useEffect, useRef, useState } from 'react';
+import { withToken } from '../api.jsx';
 
 const LEVEL_COLOR = {
-  info:     '#64748b',
+  info:     'var(--text-3)',
   ok:       '#22c55e',
   error:    '#ef4444',
   warn:     '#f97316',
   call:     '#60a5fa',
   response: '#a78bfa',
   save:     '#34d399',
-  skip:     '#94a3b8',
-  wait:     '#475569',
+  skip:     'var(--text-2)',
+  wait:     'var(--text-4)',
 };
 
 export default function BootTerminal({ orgId = '8008', onReady }) {
@@ -23,7 +24,7 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
   const bottomRef = useRef(null);
 
   useEffect(() => {
-    const es = new EventSource(`/api/boot/stream?orgId=${orgId}`);
+    const es = new EventSource(withToken(`/api/boot/stream?orgId=${orgId}`));
 
     es.addEventListener('log', e => {
       const entry = JSON.parse(e.data);
@@ -66,7 +67,7 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
   const statusColor =
     status === 'ready'      ? '#22c55e' :
     status === 'error'      ? '#ef4444' :
-    status === 'connecting' ? '#f97316' : '#60a5fa';
+    status === 'connecting' ? '#f97316' : 'var(--accent-light)';
 
   const statusLabel =
     status === 'ready'      ? 'READY' :
@@ -83,7 +84,7 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
     }}>
       {/* Title bar */}
       <div style={{
-        background: '#0f1117', borderBottom: '1px solid #1e2235',
+        background: 'var(--surface-3)', borderBottom: '1px solid var(--surface-1)',
         padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 12,
       }}>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -91,7 +92,7 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
             <div key={c} style={{ width:12, height:12, borderRadius:'50%', background:c }} />
           ))}
         </div>
-        <span style={{ color: '#475569', fontSize: 13 }}>
+        <span style={{ color: 'var(--text-4)', fontSize: 13 }}>
           Midwest 3on3 Data Explorer — boot log
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -110,7 +111,7 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
         {lines.map((line, i) => (
           <div key={i} style={{ display: 'flex', gap: 12 }}>
             <span style={{ color:'#1e3a5f', flexShrink:0, userSelect:'none', minWidth:64 }}>{line.ts}</span>
-            <span style={{ color: LEVEL_COLOR[line.level] || '#64748b', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            <span style={{ color: LEVEL_COLOR[line.level] || 'var(--text-3)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
               {line.msg}
             </span>
           </div>
@@ -131,7 +132,7 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
             borderRadius: 8, padding: '12px 16px',
           }}>
             <div style={{ color: '#22c55e', fontWeight: 700, marginBottom: 8 }}>✓ BOOT COMPLETE — launching app…</div>
-            <div style={{ color: '#64748b', fontSize: 12 }}>
+            <div style={{ color: 'var(--text-3)', fontSize: 12 }}>
               {summary.recentEvents?.length} events loaded · {summary.storeResults} results in store
             </div>
           </div>
@@ -144,7 +145,7 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
             borderRadius: 8, padding: '12px 16px',
           }}>
             <div style={{ color: '#ef4444', fontWeight: 700, marginBottom: 8 }}>✗ BOOT FAILED</div>
-            <div style={{ color: '#94a3b8', fontSize: 12 }}>Make sure the API server is running: <code>cd server &amp;&amp; node index.js</code></div>
+            <div style={{ color: 'var(--text-2)', fontSize: 12 }}>Make sure the API server is running: <code>cd server &amp;&amp; node index.js</code></div>
           </div>
         )}
 
@@ -153,8 +154,8 @@ export default function BootTerminal({ orgId = '8008', onReady }) {
 
       {/* Stats bar at bottom */}
       <div style={{
-        background: '#0f1117', borderTop: '1px solid #1e2235',
-        padding: '8px 20px', fontSize: 11, color: '#334155',
+        background: 'var(--surface-3)', borderTop: '1px solid var(--surface-1)',
+        padding: '8px 20px', fontSize: 11, color: 'var(--text-5)',
         display: 'flex', gap: 24,
       }}>
         <span>{lines.length} log lines</span>

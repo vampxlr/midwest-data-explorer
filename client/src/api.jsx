@@ -4,7 +4,55 @@ import axios from 'axios';
 // For local dev: vite.config.js proxies '/api' to localhost:3001.
 const BASE = import.meta.env.VITE_API_BASE || '/api';
 
+const TOKEN_STORAGE_KEY = 'mw3-auth-token';
+
+export function getAuthToken() {
+  return localStorage.getItem(TOKEN_STORAGE_KEY) || '';
+}
+
+export function setAuthToken(token) {
+  if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  else localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+// Attaches the session token to every request; SSE/EventSource connections
+// can't set headers, so their URL builders append `?token=` separately (see below).
+axios.interceptors.request.use((config) => {
+  const token = getAuthToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// On a 401 (expired/invalid session), clear the stored token and notify
+// AuthContext so it can drop back to the login screen.
+axios.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401 && getAuthToken()) {
+      setAuthToken(null);
+      window.dispatchEvent(new Event('mw3-auth-expired'));
+    }
+    return Promise.reject(err);
+  }
+);
+
+// Append the auth token as a query param to a streaming (EventSource) URL,
+// since native EventSource can't send an Authorization header.
+export function withToken(url) {
+  const token = getAuthToken();
+  if (!token) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+}
+
 export const api = {
+  login: (username, password) => axios.post(`${BASE}/auth/login`, { username, password }),
+  me:    () => axios.get(`${BASE}/auth/me`),
+
+  listUsers:  ()       => axios.get(`${BASE}/users`),
+  createUser: (body)   => axios.post(`${BASE}/users`, body),
+  updateUser: (id, body) => axios.patch(`${BASE}/users/${id}`, body),
+  deleteUser: (id)     => axios.delete(`${BASE}/users/${id}`),
+
   health:        () => axios.get(`${BASE}/health`),
   schema:        () => axios.get(`${BASE}/schema`),
   organizations: () => axios.get(`${BASE}/organizations`),
@@ -44,7 +92,7 @@ export const api = {
 
   // SSE stream URL for purge+reload (use with EventSource, not axios)
   purgeReloadStreamUrl: (eventId, orgId) =>
-    `${BASE}/store/purge-reload-stream?eventId=${encodeURIComponent(eventId)}&orgId=${encodeURIComponent(orgId)}`,
+    withToken(`${BASE}/store/purge-reload-stream?eventId=${encodeURIComponent(eventId)}&orgId=${encodeURIComponent(orgId)}`),
 
   // Purge only (no re-fetch)
   purge: (eventId) =>
@@ -80,7 +128,7 @@ export const api = {
     const toStr = v => Array.isArray(v) ? v.join(',') : (v || '');
     const ys = toStr(years);   if (ys) p.set('years',   ys);
     const gs = toStr(genders); if (gs) p.set('genders', gs);
-    return `${BASE}/export/league-csv-stream?${p}`;
+    return withToken(`${BASE}/export/league-csv-stream?${p}`);
   },
   leagueCsvDownloadUrl:  (token) => `${BASE}/export/league-csv-download?token=${encodeURIComponent(token)}`,
   leagueCsvDeleteUrl:    (token) => `${BASE}/export/league-csv/${encodeURIComponent(token)}`,

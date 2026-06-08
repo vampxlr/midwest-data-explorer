@@ -164,14 +164,14 @@ function JsonView({ data }) {
     text
       .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?)/g, m =>
         m.endsWith(':')
-          ? `<span style="color:#60a5fa">${m}</span>`
+          ? `<span style="color:var(--accent-light)">${m}</span>`
           : `<span style="color:#22c55e">${m}</span>`)
       .replace(/\b(true|false)\b/g, '<span style="color:#f97316">$1</span>')
       .replace(/\bnull\b/g, '<span style="color:#ef4444">null</span>')
       .replace(/\b(-?\d+\.?\d*)\b/g, '<span style="color:#a855f7">$1</span>');
   return (
-    <pre style={{background:'#0a0c12',padding:16,borderRadius:8,overflow:'auto',fontSize:12,lineHeight:1.6,
-      color:'#e2e8f0',maxHeight:520,fontFamily:'monospace'}}
+    <pre style={{background:'var(--surface-3)',padding:16,borderRadius:8,overflow:'auto',fontSize:12,lineHeight:1.6,
+      color:'var(--text-1)',maxHeight:520,fontFamily:'monospace'}}
       dangerouslySetInnerHTML={{__html:colorize(JSON.stringify(data,null,2))}} />
   );
 }
@@ -202,7 +202,7 @@ function FlatTable({ data }) {
           {flat.map((row,i)=>(
             <tr key={i}>
               {cols.map(c=>(
-                <td key={c} style={{color:'#94a3b8',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                <td key={c} style={{color:'var(--text-2)',maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                   {String(row[c]??'')}
                 </td>
               ))}
@@ -299,7 +299,7 @@ export default function QueryExplorer() {
         <div style={{maxHeight:'85vh',overflowY:'auto'}}>
           {SCENARIOS.map(group => (
             <div key={group.group} className="card" style={{padding:12,marginBottom:12}}>
-              <h3 style={{fontSize:11,textTransform:'uppercase',letterSpacing:1,color:'#475569',marginBottom:10}}>
+              <h3 style={{fontSize:11,textTransform:'uppercase',letterSpacing:1,color:'var(--text-4)',marginBottom:10}}>
                 {group.group}
               </h3>
               {group.items.map((item,i) => (
@@ -308,13 +308,13 @@ export default function QueryExplorer() {
                   style={{
                     display:'block',width:'100%',textAlign:'left',
                     background:'transparent',border:'none',borderRadius:6,
-                    padding:'8px 10px',color:'#64748b',fontSize:13,cursor:'pointer',
+                    padding:'8px 10px',color:'var(--text-3)',fontSize:13,cursor:'pointer',
                     marginBottom:2,transition:'all 0.1s',lineHeight:1.3,
                   }}
-                  onMouseEnter={e=>e.target.style.background='#1e2235'}
+                  onMouseEnter={e=>e.target.style.background='var(--surface-1)'}
                   onMouseLeave={e=>e.target.style.background='transparent'}>
                   <div style={{fontWeight:600}}>{item.label}</div>
-                  <div style={{fontSize:11,color:'#475569',marginTop:2}}>{item.desc}</div>
+                  <div style={{fontSize:11,color:'var(--text-4)',marginTop:2}}>{item.desc}</div>
                 </button>
               ))}
             </div>
@@ -328,12 +328,12 @@ export default function QueryExplorer() {
               <div style={{display:'flex',gap:6}}>
                 <button onClick={()=>setQueryType('graphql')}
                   style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:600,border:'none',cursor:'pointer',
-                    background:queryType==='graphql'?'#1d4ed8':'#1e2235',color:queryType==='graphql'?'#fff':'#64748b'}}>
+                    background:queryType==='graphql'?'#1d4ed8':'var(--surface-1)',color:queryType==='graphql'?'#fff':'var(--text-3)'}}>
                   GraphQL
                 </button>
                 <button onClick={()=>setQueryType('rest')}
                   style={{padding:'6px 14px',borderRadius:6,fontSize:12,fontWeight:600,border:'none',cursor:'pointer',
-                    background:queryType==='rest'?'#1d4ed8':'#1e2235',color:queryType==='rest'?'#fff':'#64748b'}}>
+                    background:queryType==='rest'?'#1d4ed8':'var(--surface-1)',color:queryType==='rest'?'#fff':'var(--text-3)'}}>
                   REST
                 </button>
               </div>
@@ -350,27 +350,27 @@ export default function QueryExplorer() {
             {queryType==='graphql' ? (
               <>
                 <textarea value={query} onChange={e=>setQuery(e.target.value)}
-                  style={{width:'100%',height:200,background:'#0a0c12',border:'1px solid #2a2d3e',
-                    borderRadius:8,padding:14,color:'#e2e8f0',fontSize:13,fontFamily:'monospace',
+                  style={{width:'100%',height:200,background:'var(--surface-3)',border:'1px solid var(--line)',
+                    borderRadius:8,padding:14,color:'var(--text-1)',fontSize:13,fontFamily:'monospace',
                     resize:'vertical',outline:'none',lineHeight:1.6}}
                   placeholder="Select a scenario from the left, or type a GraphQL query…" spellCheck={false} />
                 <div style={{marginTop:10}}>
-                  <label style={{fontSize:11,color:'#64748b',display:'block',marginBottom:4}}>Variables (JSON)</label>
+                  <label style={{fontSize:11,color:'var(--text-3)',display:'block',marginBottom:4}}>Variables (JSON)</label>
                   <textarea value={variables} onChange={e=>setVariables(e.target.value)}
-                    style={{width:'100%',height:50,background:'#0a0c12',border:'1px solid #2a2d3e',
-                      borderRadius:8,padding:10,color:'#e2e8f0',fontSize:12,fontFamily:'monospace',
+                    style={{width:'100%',height:50,background:'var(--surface-3)',border:'1px solid var(--line)',
+                      borderRadius:8,padding:10,color:'var(--text-1)',fontSize:12,fontFamily:'monospace',
                       resize:'none',outline:'none'}}
                     placeholder="{}" spellCheck={false} />
                 </div>
               </>
             ) : (
               <div>
-                <label style={{fontSize:11,color:'#64748b',display:'block',marginBottom:6}}>REST Endpoint URL</label>
+                <label style={{fontSize:11,color:'var(--text-3)',display:'block',marginBottom:6}}>REST Endpoint URL</label>
                 <input value={restUrl} onChange={e=>setRestUrl(e.target.value)}
-                  style={{width:'100%',background:'#0a0c12',border:'1px solid #2a2d3e',borderRadius:8,
-                    padding:'10px 14px',color:'#e2e8f0',fontSize:13,fontFamily:'monospace',outline:'none'}}
+                  style={{width:'100%',background:'var(--surface-3)',border:'1px solid var(--line)',borderRadius:8,
+                    padding:'10px 14px',color:'var(--text-1)',fontSize:13,fontFamily:'monospace',outline:'none'}}
                   placeholder="/api/analytics/aggregate?orgId=8008&fromYear=2025&gradYearFilter=2025" />
-                <p style={{color:'#475569',fontSize:11,marginTop:6}}>
+                <p style={{color:'var(--text-4)',fontSize:11,marginTop:6}}>
                   Available: /api/registrations/recent · /api/analytics/registration · /api/analytics/aggregate · /api/profiles
                 </p>
               </div>
@@ -387,7 +387,7 @@ export default function QueryExplorer() {
                 {execTime && <span style={{fontSize:12,color:'#22c55e'}}>{execTime}ms</span>}
               </div>
               {error && (
-                <div style={{background:'#1c0a0a',border:'1px solid #7f1d1d',borderRadius:8,padding:12,marginBottom:12}}>
+                <div style={{background:'rgba(239,68,68,0.12)',border:'1px solid rgba(239,68,68,0.35)',borderRadius:8,padding:12,marginBottom:12}}>
                   <p style={{color:'#ef4444',fontSize:13}}>Error: {JSON.stringify(error)}</p>
                 </div>
               )}
