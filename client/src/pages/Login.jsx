@@ -15,7 +15,11 @@ export default function Login() {
     try {
       await login(username.trim(), password);
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed');
+      const d = err.response?.data;
+      const msg = typeof d?.error === 'string' ? d.error
+                : typeof d?.message === 'string' ? d.message
+                : 'Login failed';
+      setError(msg);
     } finally {
       setBusy(false);
     }
