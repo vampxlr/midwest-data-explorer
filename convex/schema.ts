@@ -105,4 +105,13 @@ export default defineSchema({
     day: v.number(),    // day-of-year, 1-366 (CDT)
     count: v.number(),  // completed registrations only
   }).index("by_year_type_day", ["year", "type", "day"]),
+
+  users: defineTable({
+    userId: v.string(),
+    username: v.string(),
+    passwordHash: v.string(),
+    role: v.string(),
+    createdAt: v.string(),
+    lastLoginAt: v.optional(v.string()),
+  }).index("by_userId", ["userId"]).index("by_username", ["username"]),
 });
