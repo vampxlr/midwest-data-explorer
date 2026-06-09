@@ -52,8 +52,17 @@ function localSave(users) {
   fs.renameSync(tmp, USERS_FILE);
 }
 
-// ── Strip internal fields; normalise Convex `userId` → `id` ──────────────────
+// ── Normalisation helpers ──────────────────────────────────────────────────────
 
+// Internal: keep passwordHash but map userId→id (for auth/login use)
+function withId(u) {
+  if (!u) return null;
+  // eslint-disable-next-line no-unused-vars
+  const { _id, _creationTime, userId, ...rest } = u;
+  return { ...rest, id: userId ?? rest.id };
+}
+
+// Public API: strip passwordHash + internal Convex fields, normalise userId→id
 function publicView(u) {
   if (!u) return null;
   // eslint-disable-next-line no-unused-vars
@@ -88,7 +97,8 @@ async function findByUsername(username) {
   const needle = String(username || '').trim().toLowerCase();
   if (IS_CONVEX) {
     const users = await convexQuery('users:getAll', {});
-    return users.find(u => u.username.toLowerCase() === needle) || null;
+    const found = users.find(u => u.username.toLowerCase() === needle) || null;
+    return withId(found);
   }
   const users = localLoad();
   return users.find(u => u.username.toLowerCase() === needle) || null;
@@ -97,7 +107,8 @@ async function findByUsername(username) {
 async function findById(id) {
   if (IS_CONVEX) {
     const users = await convexQuery('users:getAll', {});
-    return users.find(u => u.userId === id) || null;
+    const found = users.find(u => u.userId === id) || null;
+    return withId(found);
   }
   const users = localLoad();
   return users.find(u => u.id === id) || null;
@@ -130,9 +141,7 @@ async function update(id, patch) {
   if (IS_CONVEX) {
     const user = await findById(id);
     if (!user) throw new Error('User not found');
-    // Strip Convex internals before merging
-    const { _id, _creationTime, ...clean } = user;
-    const updated = { ...clean, ...patch };
+    const updated = { ...user, ...patch };
     await convexMutation('users:upsertUser', toConvexArgs(updated));
     return publicView(updated);
   }
