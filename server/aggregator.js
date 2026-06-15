@@ -289,6 +289,7 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
     const storedEvent      = db.events[String(ev.id)];
     const storedCompleted  = storedEvent?.resultsCompleted ?? null;   // stored last run
     const currentCompleted = ev.resultsCompleted ?? 0;                // from discovery
+    const storedCount      = storedEvent?.resultCount || 0;           // results we have in store
 
     // Zero completions — skip (but never in selective mode)
     if (!selective && currentCompleted === 0) {
@@ -301,8 +302,10 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
       continue;
     }
 
-    // Count unchanged — nothing new to fetch
-    if (!selective && storedCompleted !== null && currentCompleted === storedCompleted) {
+    // Count unchanged — skip only if we also have enough results stored.
+    // If storedCount < currentCompleted the store is behind (partial fetch or
+    // SE listing lag), so we re-fetch even though the count appears unchanged.
+    if (!selective && storedCompleted !== null && currentCompleted === storedCompleted && storedCount >= currentCompleted) {
       log(`${eventNum} ↷ SKIP — count unchanged (${currentCompleted} completions, already up-to-date)`, 'skip');
       store.upsertEventMeta(db, ev, {
         fetchedAt:        new Date().toISOString(),
@@ -316,12 +319,10 @@ async function run(graphqlFn, orgId, delayMs = 1200, filterEvents = [], purgeFir
       continue;
     }
 
-    // Incremental fetch — count increased, only fetch the new pages
-    // storedCount is how many results we already have on disk.
-    // New records appear on pages after floor(storedCount / PER_PAGE).
-    // We start one page earlier to catch any edge-case stragglers, and
-    // upsertResults deduplicates anything we already have.
-    const storedCount = storedEvent?.resultCount || 0;
+    // Incremental fetch — count increased (or storedCount < currentCompleted),
+    // only fetch the new pages. New records appear on pages after
+    // floor(storedCount / PER_PAGE). We start one page earlier to catch any
+    // edge-case stragglers; upsertResults deduplicates what we already have.
     const startPage   = (!selective && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
       ? Math.max(1, Math.floor(storedCount / PER_PAGE))   // one page back to be safe
       : 1;
