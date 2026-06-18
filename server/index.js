@@ -3056,44 +3056,55 @@ app.post('/api/contacts/fetch', auth.requireRole('admin', 'editor'), async (req,
         clog(`  ↑ Incremental: ${storedCompleted} → ${currentCompleted} — fetching from page ${startPage}`, 'info');
       }
 
-      try {
-        let allResults = [], regMeta = null, page = startPage, knownTotal = null;
-        do {
-          const data = await graphql(ANSWERS_QUERY, {
-            regId: String(ev.id), orgId: parseInt(orgId), page, perPage: PER_PAGE,
-          });
-          const reg = data?.data?.registration;
-          if (!reg) break;
-          regMeta = reg;
-          const batch = reg.registrationResults || [];
-          if (knownTotal === null) knownTotal = reg.resultsTotal ?? null;
-          allResults = allResults.concat(batch);
+      let retries = 0, ok = false;
+      while (retries < 3 && !ok) {
+        try {
+          let allResults = [], regMeta = null, page = startPage, knownTotal = null;
+          do {
+            const data = await graphql(ANSWERS_QUERY, {
+              regId: String(ev.id), orgId: parseInt(orgId), page, perPage: PER_PAGE,
+            });
+            const reg = data?.data?.registration;
+            if (!reg) break;
+            regMeta = reg;
+            const batch = reg.registrationResults || [];
+            if (knownTotal === null) knownTotal = reg.resultsTotal ?? null;
+            allResults = allResults.concat(batch);
 
-          // Progress display: when fetching from page 1, show only newly fetched; when incremental, add stored baseline
-          const fetchedSoFar = startPage > 1 ? storedCount + allResults.length : allResults.length;
-          const totalLabel   = knownTotal != null ? `/${knownTotal}` : '';
-          const estPages     = knownTotal != null ? Math.ceil(knownTotal / PER_PAGE) : '?';
-          clog(`  ← page ${page}/${estPages}: +${batch.length} (${fetchedSoFar}${totalLabel} total)`, 'response');
+            // Progress display: when fetching from page 1, show only newly fetched; when incremental, add stored baseline
+            const fetchedSoFar = startPage > 1 ? storedCount + allResults.length : allResults.length;
+            const totalLabel   = knownTotal != null ? `/${knownTotal}` : '';
+            const estPages     = knownTotal != null ? Math.ceil(knownTotal / PER_PAGE) : '?';
+            clog(`  ← page ${page}/${estPages}: +${batch.length} (${fetchedSoFar}${totalLabel} total)`, 'response');
 
-          if (batch.length < PER_PAGE) break;
-          if (knownTotal !== null && allResults.length >= knownTotal) break;
-          page++;
-          await new Promise(r => setTimeout(r, 300));
-        } while (true);
+            if (batch.length < PER_PAGE) break;
+            if (knownTotal !== null && allResults.length >= knownTotal) break;
+            page++;
+            await new Promise(r => setTimeout(r, 300));
+          } while (true);
 
-        const contacts = allResults
-          .filter(r => r.completed)
-          .map(r => ({ resultId: r.id, ...extractContact(r.answers) }));
+          const contacts = allResults
+            .filter(r => r.completed)
+            .map(r => ({ resultId: r.id, ...extractContact(r.answers) }));
 
-        const saved = contactStore.upsertContacts(db, ev, contacts);
-        if (db.events[String(ev.id)]) {
-          db.events[String(ev.id)].resultsCompleted = regMeta?.resultsCompleted ?? currentCompleted;
-          db.events[String(ev.id)].contactCount     = contacts.length;
+          const saved = contactStore.upsertContacts(db, ev, contacts);
+          if (db.events[String(ev.id)]) {
+            db.events[String(ev.id)].resultsCompleted = regMeta?.resultsCompleted ?? currentCompleted;
+            db.events[String(ev.id)].contactCount     = contacts.length;
+          }
+          await contactStore.save(db);
+          clog(`  ✓ Saved ${contacts.length} contact(s) (${allResults.length} total fetched, ${allResults.length - contacts.length} incomplete)`, 'ok');
+          ok = true;
+        } catch (err) {
+          retries++;
+          const detail = err.response?.data ? JSON.stringify(err.response.data).slice(0, 500) : null;
+          clog(`  ✗ Failed (attempt ${retries}/3): ${err.message}${detail ? ` — ${detail}` : ''}`, 'error');
+          if (retries < 3) {
+            const waitMs = 2000 * retries;
+            clog(`  ⏱ Backing off ${waitMs}ms before retry…`, 'wait');
+            await new Promise(r => setTimeout(r, waitMs));
+          }
         }
-        await contactStore.save(db);
-        clog(`  ✓ Saved ${contacts.length} contact(s) (${allResults.length} total fetched, ${allResults.length - contacts.length} incomplete)`, 'ok');
-      } catch (err) {
-        clog(`  ✗ Failed: ${err.message}`, 'error');
       }
 
       contactFetchState.current++;
