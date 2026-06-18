@@ -257,6 +257,18 @@ function resolveAnswerVal(a) {
   return null;
 }
 
+// Some SE registration forms mislabel the email field (seen as "Middle Name"
+// on several Midwest 3on3 form templates) — when keyword matching finds no
+// email, fall back to scanning all answers for a value shaped like one.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function findEmailFallback(answers) {
+  for (const a of (answers || [])) {
+    const v = resolveAnswerVal(a);
+    if (v && EMAIL_RE.test(String(v).trim())) return String(v).trim().toLowerCase();
+  }
+  return null;
+}
+
 function pickAnswer(answers, ...keys) {
   const lower = keys.map(k => k.toLowerCase());
   for (const a of answers) {
@@ -2690,7 +2702,7 @@ app.get('/api/export/league-csv-stream', auth.requireRole('admin', 'editor'), as
       const pick    = (...keys) => pickAnswer(ans,    ...keys);
       const pickAll = (...keys) => pickAnswerAll(ans, ...keys);
       return {
-        email:      pick('email','contact email','guardian email','parent email','account email','e-mail','family email'),
+        email:      pick('email','contact email','guardian email','parent email','account email','e-mail','family email') || findEmailFallback(ans),
         phone:      pick('phone','mobile','cell','telephone','contact phone'),
         firstName:  pick('first name','contact first','parent first','guardian first','fname'),
         lastName:   pick('last name', 'contact last', 'parent last', 'guardian last', 'lname'),
@@ -2999,6 +3011,10 @@ app.post('/api/contacts/fetch', auth.requireRole('admin', 'editor'), async (req,
         pickAll('email','e-mail','email address','contact email','guardian email','parent email','account email','family email')
           .map(v => String(v).trim().toLowerCase()).filter(v => v.includes('@'))
       )];
+      if (!emails.length) {
+        const fallback = findEmailFallback(ans);
+        if (fallback) emails.push(fallback);
+      }
       const phones = [...new Set(
         pickAll('phone','mobile','cell','telephone','contact phone','contact number')
           .map(v => String(v).replace(/\D/g,'').slice(-10)).filter(v => v.length >= 10)

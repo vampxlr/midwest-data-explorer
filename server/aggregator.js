@@ -61,6 +61,11 @@ function log(msg, level = 'info', extra = {}) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Some SE registration forms mislabel the email field (seen as "Middle Name"
+// on several Midwest 3on3 form templates) — when keyword matching finds no
+// email, fall back to scanning all answers for a value shaped like one.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function extractAnswers(answers) {
   const lower = keys => {
     const k = keys.map(x => x.toLowerCase());
@@ -97,6 +102,12 @@ function extractAnswers(answers) {
     pickAll('email', 'e-mail', 'email address')
       .map(v => String(v).trim().toLowerCase()).filter(v => v.includes('@'))
   )];
+  if (!emails.length) {
+    for (const a of answers) {
+      const v = val(a);
+      if (v && EMAIL_RE.test(String(v).trim())) { emails.push(String(v).trim().toLowerCase()); break; }
+    }
+  }
   const phones = [...new Set(
     pickAll('phone', 'cell', 'mobile', 'contact number', 'telephone')
       .map(v => String(v).replace(/\D/g, '').slice(-10)).filter(v => v.length >= 10)
