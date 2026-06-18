@@ -149,6 +149,6 @@ export const api = {
     if (params.gradYearTo)   p.set('gradYearTo',   params.gradYearTo);
     if (params.genders)      p.set('genders',      params.genders.join(','));
     if (params.label)        p.set('label',        params.label);
-    return `${BASE}/contacts/export?${p}`;
+    return withToken(`${BASE}/contacts/export?${p}`);
   },
 };
