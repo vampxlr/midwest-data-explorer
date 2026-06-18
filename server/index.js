@@ -192,7 +192,7 @@ function inWindow(reg, days = 90) {
 
 const ANSWERS_QUERY = `query($regId: ID!, $orgId: Int!, $page: Int, $perPage: Int!) {
   registration(id: $regId, organizationId: $orgId) {
-    id name resultsCompleted resultsTotal
+    id name resultsCompleted
     registrationResults(page: $page, perPage: $perPage) {
       id profileId completed status created
       answers {
