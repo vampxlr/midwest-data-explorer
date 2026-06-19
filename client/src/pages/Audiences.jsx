@@ -82,6 +82,24 @@ function ContactTerminal({ logs, status, onClose }) {
 }
 
 // ── Left panel: Contact Store ─────────────────────────────────────────────────
+// Mirrors the server's name-based classification (see classifyEvent in
+// server/index.js) so the client can filter the events list without an
+// extra round-trip.
+function classifyEvent(name = '') {
+  const n = name.toLowerCase();
+  if (/\btournament\b|\btourney\b/.test(n)) return 'tournament';
+  if (/\bcamp\b|\bclinic\b|\bshooting\b|\bscoring\b|\bskills?\b|\btraining\b|\bacademy\b|\bdevelopment\b/.test(n)) return 'camp';
+  return 'league';
+}
+function eventYear(reg) { return (reg.close || reg.open || '').slice(0, 4); }
+
+const TYPE_OPTIONS = [
+  { id: '',           label: 'All types' },
+  { id: 'league',     label: 'League' },
+  { id: 'camp',       label: 'Camp' },
+  { id: 'tournament', label: 'Tournament' },
+];
+
 function ContactStorePanel({ recentRegs, onStoreUpdated }) {
   const { isAdmin } = useAuth();
   const [cStatus,    setCStatus]    = useState(null);
@@ -90,7 +108,12 @@ function ContactStorePanel({ recentRegs, onStoreUpdated }) {
   const [termStatus, setTermStatus] = useState('idle');
   const [showTerm,   setShowTerm]   = useState(false);
   const [progress,   setProgress]   = useState({ current:0, total:0 });
+  const [yearFilter, setYearFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
   const esRef = useRef(null);
+
+  const availableYears = [...new Set(recentRegs.map(eventYear).filter(y=>/^20\d{2}$/.test(y)))].sort().reverse();
+  const matchesFilters = r => (!yearFilter || eventYear(r)===yearFilter) && (!typeFilter || classifyEvent(r.name)===typeFilter);
 
   useEffect(()=>{ loadStatus(); }, []);
 
@@ -141,13 +164,15 @@ function ContactStorePanel({ recentRegs, onStoreUpdated }) {
   }
 
   const pct = progress.total>0 ? Math.round(progress.current/progress.total*100) : 0;
-  const openEvents   = recentRegs.filter(r=>r.status===1);
-  const closedEvents = recentRegs.filter(r=>r.status!==1);
+  const filteredRegs  = recentRegs.filter(matchesFilters);
+  const openEvents    = filteredRegs.filter(r=>r.status===1);
+  const closedEvents  = filteredRegs.filter(r=>r.status!==1);
 
   // Events not yet in contact store
   const fetchedIds   = new Set(Object.keys(cStatus?.events||{}));
-  const notFetched   = recentRegs.filter(r=>!fetchedIds.has(String(r.id)));
+  const notFetched   = filteredRegs.filter(r=>!fetchedIds.has(String(r.id)));
   const needsRefresh = openEvents.filter(r=>fetchedIds.has(String(r.id)));
+  const filterLabel  = (yearFilter || typeFilter) ? ` (${[yearFilter, typeFilter].filter(Boolean).join(' ')})` : '';
 
   return (
     <div>
@@ -178,6 +203,30 @@ function ContactStorePanel({ recentRegs, onStoreUpdated }) {
           </div>
         </div>
       )}
+
+      {/* Year / type filter — scopes all fetch & purge actions below */}
+      <div style={{background:'var(--surface-1)',border:'1px solid var(--line)',borderRadius:8,padding:'10px 12px',marginBottom:12}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
+          <span style={{fontSize:11,color:'var(--text-3)',fontWeight:600}}>Year:</span>
+          {['', ...availableYears].map(y=>(
+            <button key={y||'all'} onClick={()=>setYearFilter(y)} disabled={fetching}
+              style={{padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',
+                background:yearFilter===y?'#2563eb':'var(--surface-2)',color:yearFilter===y?'#fff':'var(--text-3)'}}>
+              {y||'All years'}
+            </button>
+          ))}
+        </div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <span style={{fontSize:11,color:'var(--text-3)',fontWeight:600}}>Type:</span>
+          {TYPE_OPTIONS.map(t=>(
+            <button key={t.id||'all'} onClick={()=>setTypeFilter(t.id)} disabled={fetching}
+              style={{padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',
+                background:typeFilter===t.id?'#2563eb':'var(--surface-2)',color:typeFilter===t.id?'#fff':'var(--text-3)'}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Action buttons */}
       <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:12}}>
@@ -211,21 +260,21 @@ function ContactStorePanel({ recentRegs, onStoreUpdated }) {
         {isAdmin ? (
           <button disabled={fetching}
             onClick={()=>{
-              if (!window.confirm(`This will purge and re-fetch ALL ${recentRegs.length} events to rebuild emails for all players. Continue?`)) return;
-              startFetch('all', null, true);
+              if (!window.confirm(`This will purge and re-fetch ${filteredRegs.length} event(s)${filterLabel} to rebuild emails for all players. Continue?`)) return;
+              startFetch('all', filteredRegs, true);
             }}
             style={{padding:'8px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid #3b1f5e',
               cursor:fetching?'not-allowed':'pointer',background:'rgba(124,58,237,0.08)',color:'#a855f7',opacity:fetching?0.4:1}}>
-            ⟳ Force Re-fetch All — Rebuild Player Emails
+            ⟳ Force Re-fetch{filterLabel} ({filteredRegs.length}) — Rebuild Player Emails
             <div style={{fontSize:10,color:'#3b1f5e',fontWeight:400,marginTop:2}}>
-              purges existing contacts · re-fetches every event · captures all player emails per team
+              purges existing contacts · re-fetches{filterLabel ? ' the filtered' : ' every'} event{filteredRegs.length!==1?'s':''} · captures all player emails per team
             </div>
           </button>
         ) : (
           <div title="Only admins can purge contact data"
             style={{padding:'8px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid var(--line)',
               cursor:'not-allowed',background:'var(--surface-1)',color:'var(--text-4)',opacity:0.6}}>
-            ⟳ Force Re-fetch All — Rebuild Player Emails
+            ⟳ Force Re-fetch{filterLabel} ({filteredRegs.length}) — Rebuild Player Emails
             <div style={{fontSize:10,fontWeight:400,marginTop:2}}>
               admin only — this action purges existing contact data
             </div>
