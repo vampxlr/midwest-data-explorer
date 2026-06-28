@@ -11,6 +11,7 @@ import SmartUpdateBar from '../components/SmartUpdateBar.jsx';
 import SmartUpdateLog from '../components/SmartUpdateLog.jsx';
 import Collapsible from '../components/Collapsible.jsx';
 import LeagueYoyCompare from '../components/LeagueYoyCompare.jsx';
+import DailyActivityPanel from '../components/DailyActivityPanel.jsx';
 
 const COLORS = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6','#eab308','#06b6d4','#f43f5e','#84cc16'];
 const YEAR_COLORS = { '2023':'var(--text-3)','2024':'#a855f7','2025':'#f97316','2026':'#3b82f6','2027':'#22c55e','2028':'#ec4899' };
@@ -47,19 +48,16 @@ export default function Dashboard({ ctx }) {
 
   const [yoyDaily, setYoyDaily]   = useState(null);
   const [yoyLoading, setYoyLoading] = useState(false);
-  const [recent, setRecent] = useState(null);
-  const [storeStatus, setStoreStatus] = useState(null);
 
   const smartUpdate = useSmartUpdate({
     orgId, recentRegs,
     onComplete: async (d) => {
       if (onAggComplete) await onAggComplete(d);
       loadYoyDaily();
-      loadRecentStats();
     },
   });
 
-  useEffect(() => { loadYoyDaily(); loadRecentStats(); }, [refreshToken]);
+  useEffect(() => { loadYoyDaily(); }, [refreshToken]);
 
   async function loadYoyDaily() {
     setYoyLoading(true);
@@ -68,14 +66,6 @@ export default function Dashboard({ ctx }) {
       setYoyDaily(res.data);
     } catch (err) { toast.error('Failed to load YoY data: ' + err.message); }
     finally { setYoyLoading(false); }
-  }
-
-  async function loadRecentStats() {
-    try {
-      const [r, s] = await Promise.all([api.reportRecent(), api.storeStatus()]);
-      setRecent(r.data);
-      setStoreStatus(s.data);
-    } catch {}
   }
 
   // ── Most recent leagues (by close/open date, newest first) ──────────────
@@ -142,33 +132,12 @@ export default function Dashboard({ ctx }) {
         <p>Midwest 3 on 3 · registration trends for recent leagues, {yearA || 'this year'} vs {yearB || 'last year'}</p>
       </div>
 
-      {/* ── Quick glance: Smart Update + recent activity ──────────────────── */}
+      {/* ── Quick glance: Smart Update + Daily Activity (same as Reports) ─── */}
       <SmartUpdateBar {...smartUpdate} />
 
-      <div className="grid-4" style={{ marginBottom:20 }}>
-        <div className="stat-card">
-          <div className="stat-label">Today (CDT)</div>
-          <div className="stat-value" style={{color:'#22c55e'}}>{recent?.today ?? '—'}</div>
-          <div className="stat-sub">new registrations</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Yesterday</div>
-          <div className="stat-value" style={{color:'var(--accent-light)'}}>{recent?.yesterday ?? '—'}</div>
-          <div className="stat-sub">registrations</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">This Month</div>
-          <div className="stat-value" style={{color:'#f97316'}}>{recent?.thisMonth ?? '—'}</div>
-          <div className="stat-sub">registrations</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Total in Store</div>
-          <div className="stat-value" style={{color:'#a855f7'}}>{storeStatus?.totalResults ?? '—'}</div>
-          <div className="stat-sub">{storeStatus?.totalEvents ?? '?'} events</div>
-        </div>
-      </div>
+      <DailyActivityPanel recentRegs={recentRegs} refreshToken={refreshToken} />
 
-      <div className="grid-4" style={{ marginBottom:20 }}>
+      <div className="grid-4" style={{ marginBottom:20, marginTop:20 }}>
         <div className="stat-card">
           <div className="stat-label">{yearA || '—'} League Registrations</div>
           <div className="stat-value" style={{color:YEAR_COLORS[yearA]||'var(--accent-light)'}}>{yoyLoading?'…':totalA}</div>
