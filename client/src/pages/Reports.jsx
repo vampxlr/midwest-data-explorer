@@ -7,6 +7,9 @@ import {
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 import AggregatePanel from '../components/AggregatePanel.jsx';
+import useSmartUpdate from '../hooks/useSmartUpdate.js';
+import SmartUpdateBar from '../components/SmartUpdateBar.jsx';
+import Collapsible from '../components/Collapsible.jsx';
 import SearchableSelect from '../components/SearchableSelect.jsx';
 import LeagueDetailPanel from '../components/LeagueDetailPanel.jsx';
 import LeagueOverlap    from '../components/LeagueOverlap.jsx';
@@ -100,6 +103,16 @@ export default function Reports({ ctx }) {
   const [gradYears, setGradYears] = useState([]);
   const [loading,   setLoading]   = useState(false);
   const [quickLoading, setQuickLoading] = useState('');
+
+  const smartUpdate = useSmartUpdate({
+    orgId, recentRegs,
+    onComplete: async (d) => {
+      if (onAggComplete) await onAggComplete(d);
+      await loadAll();
+      if (tab === 'daily-activity') loadActivity(activityDate);
+      if (tab === 'yoy') { setYoyData(null); loadYoY(); }
+    },
+  });
 
   // Date / event filters
   const [tab,         setTab]         = useState('overview');
@@ -361,41 +374,8 @@ export default function Reports({ ctx }) {
         </p>
       </div>
 
-      {/* ── Quick Purge & Re-fetch ────────────────────────────────────────── */}
-      <div className="card" style={{ marginBottom:16, borderLeft:'3px solid var(--chip-bg)' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12 }}>
-          <div>
-            <h3 style={{ margin:'0 0 2px', fontSize:14 }}>Quick Purge & Re-fetch</h3>
-            <p style={{ color:'var(--text-4)', fontSize:12, margin:0 }}>
-              Wipes local data for a group then re-fetches fresh from SportsEngine — progress shows in Aggregation panel below.
-            </p>
-          </div>
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-            <button onClick={() => startQuickAgg('open')} disabled={!!quickLoading}
-              className="btn-action-green">
-              {quickLoading==='open' ? '⏳ Starting…'
-                : `↺ Re-fetch Open (${recentRegs.filter(r=>r.status===1).length})`}
-            </button>
-            <button onClick={() => startQuickAgg('closed')} disabled={!!quickLoading}
-              className="btn-action-orange">
-              {quickLoading==='closed' ? '⏳ Starting…'
-                : `↺ Re-fetch Closed (${recentRegs.filter(r=>r.status!==1).length})`}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Aggregate panel ───────────────────────────────────────────────── */}
-      <AggregatePanel
-        orgId={orgId}
-        recentRegs={recentRegs}
-        onComplete={async (d) => {
-          if (onAggComplete) onAggComplete(d);
-          await loadAll();
-          if (tab === 'daily-activity') loadActivity(activityDate);
-          if (tab === 'yoy') { setYoyData(null); loadYoY(); }
-        }}
-      />
+      {/* ── Quick glance: Smart Update only ───────────────────────────────── */}
+      <SmartUpdateBar {...smartUpdate} />
 
       {/* ── Stats row ─────────────────────────────────────────────────────── */}
       {recent && (
@@ -1739,6 +1719,48 @@ export default function Reports({ ctx }) {
           })()}
         </>
       )}
+
+      {/* ── Advanced / Data Management — collapsed by default ─────────────── */}
+      <Collapsible
+        title="⚙ Data Aggregation & Purge"
+        subtitle="Quick purge-and-refetch, full mode control (year/type/custom selection), and the live console — for maintenance, not day-to-day use."
+      >
+        {/* ── Quick Purge & Re-fetch ──────────────────────────────────────── */}
+        <div className="card" style={{ marginBottom:16, borderLeft:'3px solid var(--chip-bg)' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12 }}>
+            <div>
+              <h3 style={{ margin:'0 0 2px', fontSize:14 }}>Quick Purge & Re-fetch</h3>
+              <p style={{ color:'var(--text-4)', fontSize:12, margin:0 }}>
+                Wipes local data for a group then re-fetches fresh from SportsEngine — progress shows in Aggregation panel below.
+              </p>
+            </div>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+              <button onClick={() => startQuickAgg('open')} disabled={!!quickLoading}
+                className="btn-action-green">
+                {quickLoading==='open' ? '⏳ Starting…'
+                  : `↺ Re-fetch Open (${recentRegs.filter(r=>r.status===1).length})`}
+              </button>
+              <button onClick={() => startQuickAgg('closed')} disabled={!!quickLoading}
+                className="btn-action-orange">
+                {quickLoading==='closed' ? '⏳ Starting…'
+                  : `↺ Re-fetch Closed (${recentRegs.filter(r=>r.status!==1).length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Aggregate panel ─────────────────────────────────────────────── */}
+        <AggregatePanel
+          orgId={orgId}
+          recentRegs={recentRegs}
+          onComplete={async (d) => {
+            if (onAggComplete) onAggComplete(d);
+            await loadAll();
+            if (tab === 'daily-activity') loadActivity(activityDate);
+            if (tab === 'yoy') { setYoyData(null); loadYoY(); }
+          }}
+        />
+      </Collapsible>
     </div>
   );
 }
