@@ -9,19 +9,87 @@ const LC = {
   call:'#60a5fa', response:'#a78bfa', save:'#34d399', skip:'var(--text-2)', wait:'var(--text-4)',
 };
 
+function nowTs() { return new Date().toLocaleTimeString('en-US',{hour12:false}); }
+
 // ── Inline terminal for one event ────────────────────────────────────────────
-function EventTerminal({ eventId, orgId, eventName, onDone, onClose }) {
+// On local dev (SSE), the whole purge+fetch+save runs in one long-lived stream
+// connection — fine since there's no execution time limit.
+// On Vercel, a single request is capped at 60s, which heavy events (lots of
+// pages / answer fields) can exceed — so there we purge, then paginate via
+// repeated short /api/aggregate/fetch-event calls, the same chunked pattern
+// AggregatePanel already uses for bulk Smart Update.
+function EventTerminal({ eventId, orgId, eventName, eventStatus, resultsCompleted, isVercel, onDone, onClose }) {
   const [lines,  setLines]  = useState([]);
   const [status, setStatus] = useState('connecting'); // connecting|running|done|error
   const [summary,setSummary]= useState(null);
   const bottomRef  = useRef(null);
   const esRef      = useRef(null);
+  const abortRef   = useRef(false);
   // Track whether we already received a terminal event (complete/error).
   // EventSource fires onerror on ANY connection close — including a clean
   // res.end() from the server after success — so we must ignore it in that case.
   const finishedRef = useRef(false);
 
+  function addLine(msg, level='info') {
+    setLines(prev => [...prev, { ts: nowTs(), msg, level }]);
+  }
+
+  async function runChunked() {
+    setStatus('running');
+    addLine('STEP 1 — Purging local store…', 'ok');
+    let deleted = 0;
+    try {
+      const res = await api.purge(eventId);
+      deleted = res.data.deleted || 0;
+      addLine(`  ✓ Deleted ${deleted} results`, 'ok');
+    } catch (err) {
+      addLine(`✗ Purge failed: ${err.response?.data?.error || err.message}`, 'error');
+      setStatus('error');
+      return;
+    }
+
+    addLine('STEP 2 — Fetching fresh data from SportsEngine (paginated)…', 'ok');
+    let page, prevCompact = [], added = 0, fetched = 0;
+    try {
+      do {
+        if (abortRef.current) return;
+        const res = await api.aggregateFetchEvent({
+          orgId, eventId, eventName, eventStatus,
+          resultsCompleted: resultsCompleted || 0,
+          ...(page != null ? { page } : {}),
+          ...(prevCompact.length ? { prevCompact } : {}),
+        });
+        fetched = res.data.fetched || fetched;
+        addLine(`  ← page ${res.data.page}: ${fetched} fetched so far`, 'response');
+        if (res.data.hasMore) {
+          page = res.data.nextPage;
+          prevCompact = res.data.compact || [];
+          await new Promise(r => setTimeout(r, 300));
+        } else {
+          added = res.data.added || 0;
+          page = null;
+        }
+      } while (page != null);
+    } catch (err) {
+      addLine(`✗ Fetch failed: ${err.response?.data?.error || err.message}`, 'error');
+      setStatus('error');
+      return;
+    }
+
+    addLine(`✓ Saved ${added} new results`, 'ok');
+    addLine('COMPLETE', 'ok');
+    const d = { deleted, fetched, added, totalInStore: null };
+    setSummary(d);
+    setStatus('done');
+    if (onDone) onDone(d);
+  }
+
   useEffect(() => {
+    if (isVercel) {
+      runChunked();
+      return () => { abortRef.current = true; };
+    }
+
     const url = api.purgeReloadStreamUrl(eventId, orgId);
     const es  = new EventSource(url);
     esRef.current = es;
@@ -163,8 +231,12 @@ export default function DataManagement({ ctx }) {
   const [activeTerminal, setActiveTerminal] = useState(null);
   // Purge-only loading state per event
   const [purging,     setPurging]     = useState({});
+  const [isVercel,    setIsVercel]    = useState(false);
 
   useEffect(() => { loadAll(); }, []);
+  useEffect(() => {
+    fetch('/api/runtime').then(r => r.json()).then(d => setIsVercel(!!d.vercel)).catch(() => {});
+  }, []);
 
   async function loadAll() {
     setLoading(true);
@@ -379,6 +451,9 @@ export default function DataManagement({ ctx }) {
                               eventId={String(reg.id)}
                               orgId={orgId}
                               eventName={reg.name}
+                              eventStatus={reg.status}
+                              resultsCompleted={reg.resultsCompleted}
+                              isVercel={isVercel}
                               onDone={async () => { await refreshStoreList(); }}
                               onClose={() => setActiveTerminal(null)}
                             />
