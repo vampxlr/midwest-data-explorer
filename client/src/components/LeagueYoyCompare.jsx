@@ -199,7 +199,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         })}
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:12, marginTop:18 }}>
+      <div className="grid-3" style={{ marginTop:18 }}>
         {slots.map((slot, i) => {
           if (!slot.currentId || !slot.priorId) return null;
           const currentEv = eventById[slot.currentId];
