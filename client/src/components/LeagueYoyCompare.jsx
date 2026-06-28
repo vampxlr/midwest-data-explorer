@@ -1,48 +1,49 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { api } from '../api.jsx';
-import { toast } from 'react-hot-toast';
+import SearchableSelect from './SearchableSelect.jsx';
 
-function classifyEvent(name = '') {
-  const n = name.toLowerCase();
-  if (/\btournament\b|\btourney\b/.test(n)) return 'tournament';
-  if (/\bcamp\b|\bclinic\b|\bshooting\b|\bscoring\b|\bskills?\b|\btraining\b|\bacademy\b|\bdevelopment\b/.test(n)) return 'camp';
-  return 'league';
-}
-function eventYear(reg) {
-  const m = (reg.name || '').match(/\b(20\d{2})\b/);
-  if (m) return Number(m[1]);
-  const d = (reg.close || reg.open || '').slice(0, 4);
-  return /^20\d{2}$/.test(d) ? Number(d) : null;
-}
-function stripYear(name = '') {
-  return name.replace(/\b20\d{2}\b/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-// Finds the same league/camp/tournament from an earlier year by matching the
-// name with the year token stripped out (e.g. "2026 Blaine League" ~ "2025 Blaine League").
-function findPriorYearMatch(ev, allRegs) {
-  const base = stripYear(ev.name);
-  const year = eventYear(ev);
-  if (!base || !year) return null;
-  let best = null, bestYear = -Infinity;
-  for (const c of allRegs) {
-    if (c.id === ev.id) continue;
-    if (stripYear(c.name) !== base) continue;
-    const cy = eventYear(c);
-    if (!cy || cy >= year) continue;
-    if (cy > bestYear) { bestYear = cy; best = c; }
+const SLOT_COUNT = 5;
+const STORAGE_KEY = 'mw3-dashboard-yoy-slots';
+
+function loadSavedSlots() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    const slots = Array.from({ length: SLOT_COUNT }, (_, i) => parsed[i] || { currentId: '', priorId: '' });
+    return slots;
+  } catch {
+    return Array.from({ length: SLOT_COUNT }, () => ({ currentId: '', priorId: '' }));
   }
-  return best;
 }
+
 function fmtMD(mmdd) {
   if (!mmdd) return '';
   return new Date(`2000-${mmdd}T12:00:00`).toLocaleDateString('en-US', { month:'short', day:'numeric' });
 }
 
-function PairCard({ pair }) {
-  const { current, prior, seriesA, seriesB, loading } = pair;
+function PairChart({ currentEv, priorEv }) {
+  const [seriesA, setSeriesA] = useState([]);
+  const [seriesB, setSeriesB] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([
+      api.reportDaily({ eventId: currentEv.id }),
+      api.reportDaily({ eventId: priorEv.id }),
+    ]).then(([a, b]) => {
+      if (cancelled) return;
+      setSeriesA(a.data.daily || []);
+      setSeriesB(b.data.daily || []);
+      setLoading(false);
+    }).catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [currentEv.id, priorEv.id]);
+
   const chartData = useMemo(() => {
     const map = {};
     for (const r of seriesA) {
@@ -70,13 +71,11 @@ function PairCard({ pair }) {
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:8, marginBottom:6 }}>
         <div style={{ minWidth:0 }}>
           <div style={{ fontSize:13, color:'var(--text-1)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-            {current.name}
+            {currentEv.name}
           </div>
-          <div style={{ fontSize:11, color:'var(--text-4)' }}>
-            {prior ? `vs ${prior.name}` : 'no prior-year match found'}
-          </div>
+          <div style={{ fontSize:11, color:'var(--text-4)' }}>vs {priorEv.name}</div>
         </div>
-        {!loading && prior && (
+        {!loading && (
           <span style={{
             flexShrink:0, fontSize:12, fontWeight:700, borderRadius:14, padding:'2px 9px',
             background: delta>=0 ? 'rgba(34,197,94,0.14)' : 'rgba(239,68,68,0.14)',
@@ -89,7 +88,7 @@ function PairCard({ pair }) {
 
       {loading && <div style={{ height:140, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-5)', fontSize:12 }}>Loading…</div>}
 
-      {!loading && prior && chartData.length > 0 && (
+      {!loading && chartData.length > 0 && (
         <ResponsiveContainer width="100%" height={140}>
           <ComposedChart data={chartData} margin={{ top:4, right:8, left:0, bottom:0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-1)" />
@@ -97,126 +96,99 @@ function PairCard({ pair }) {
               interval={Math.max(1, Math.floor(chartData.length/6))} />
             <YAxis stroke="var(--text-5)" tick={{ fill:'var(--text-4)', fontSize:9 }} width={28} />
             <Tooltip contentStyle={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:6, fontSize:11 }} />
-            <Line type="monotone" dataKey="cumA" name="This year" stroke="#3b82f6" strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="cumB" name="Prior year" stroke="var(--text-4)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
+            <Line type="monotone" dataKey="cumA" name="Selected" stroke="#3b82f6" strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--text-4)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
           </ComposedChart>
         </ResponsiveContainer>
       )}
 
-      {!loading && !prior && (
-        <div style={{ height:140, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--text-5)', fontSize:12 }}>
-          No matching event found from a prior year
-        </div>
-      )}
-
-      {!loading && prior && (
+      {!loading && (
         <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)' }}>
-          <span>This year: <strong style={{ color:'#3b82f6' }}>{totalA}</strong></span>
-          <span>Prior year: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
+          <span>Selected: <strong style={{ color:'#3b82f6' }}>{totalA}</strong></span>
+          <span>Compared: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
         </div>
       )}
     </div>
   );
 }
 
-const N_OPTIONS = [5, 10];
-const TYPE_OPTIONS = [
-  { id: '',           label: 'All types' },
-  { id: 'league',     label: 'League' },
-  { id: 'camp',       label: 'Camp' },
-  { id: 'tournament', label: 'Tournament' },
-];
-
 export default function LeagueYoyCompare({ recentRegs = [] }) {
-  const [n,          setN]          = useState(5);
-  const [customN,    setCustomN]    = useState('');
-  const [typeFilter, setTypeFilter] = useState('league');
-  const [pairs,       setPairs]      = useState(null); // null = not loaded yet
-  const [loading,    setLoading]    = useState(false);
+  const [slots, setSlots] = useState(loadSavedSlots);
 
-  const effectiveN = customN ? Math.max(1, Math.min(50, Number(customN) || 5)) : n;
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(slots));
+  }, [slots]);
 
-  const topEvents = useMemo(() => {
-    const maxDate = `${new Date().getFullYear() + 1}-12-31`;
+  const eventOptions = useMemo(() => {
     return (recentRegs || [])
-      .filter(r => !typeFilter || classifyEvent(r.name) === typeFilter)
-      .filter(r => (r.close || r.open || '0000') <= maxDate)
-      .filter(r => (r.resultsCompleted || 0) > 0)
       .slice()
       .sort((a, b) => (b.close || b.open || '').localeCompare(a.close || a.open || ''))
-      .slice(0, effectiveN);
-  }, [recentRegs, typeFilter, effectiveN]);
+      .map(r => ({ value: String(r.id), label: r.name }));
+  }, [recentRegs]);
 
-  async function loadComparison() {
-    if (!topEvents.length) { toast.error('No events match this filter'); return; }
-    setLoading(true);
-    const initial = topEvents.map(ev => ({
-      current: ev, prior: findPriorYearMatch(ev, recentRegs), seriesA: [], seriesB: [], loading: true,
-    }));
-    setPairs(initial);
+  const eventById = useMemo(() => {
+    const m = {};
+    for (const r of (recentRegs || [])) m[String(r.id)] = r;
+    return m;
+  }, [recentRegs]);
 
-    const resolved = await Promise.all(initial.map(async p => {
-      if (!p.prior) return { ...p, loading: false };
-      try {
-        const [a, b] = await Promise.all([
-          api.reportDaily({ eventId: p.current.id }),
-          api.reportDaily({ eventId: p.prior.id }),
-        ]);
-        return { ...p, seriesA: a.data.daily || [], seriesB: b.data.daily || [], loading: false };
-      } catch {
-        return { ...p, loading: false };
-      }
-    }));
-    setPairs(resolved);
-    setLoading(false);
+  function updateSlot(i, patch) {
+    setSlots(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s));
+  }
+
+  function clearSlot(i) {
+    updateSlot(i, { currentId: '', priorId: '' });
   }
 
   return (
     <div className="card" style={{ marginBottom:20 }}>
-      <h2 style={{ margin:'0 0 4px' }}>Year-over-Year Comparison — Top Leagues/Tournaments</h2>
+      <h2 style={{ margin:'0 0 4px' }}>Year-over-Year Comparison</h2>
       <p style={{ color:'var(--text-4)', fontSize:12, margin:'0 0 14px' }}>
-        Pick how many of the most recent events to compare against their prior-year counterpart.
+        Pick a league/camp/tournament, then pick what to compare it against. Your selections are saved.
       </p>
 
-      <div style={{ display:'flex', gap:16, flexWrap:'wrap', alignItems:'center', marginBottom:14 }}>
-        <div style={{ display:'flex', gap:6, alignItems:'center' }}>
-          <span style={{ fontSize:11, color:'var(--text-3)', fontWeight:600 }}>Show top:</span>
-          {N_OPTIONS.map(opt => (
-            <button key={opt} onClick={() => { setN(opt); setCustomN(''); }}
-              style={{ padding:'4px 12px', borderRadius:20, fontSize:11, fontWeight:700, border:'none', cursor:'pointer',
-                background: !customN && n===opt ? '#2563eb' : 'var(--surface-1)', color: !customN && n===opt ? '#fff' : 'var(--text-3)' }}>
-              {opt}
-            </button>
-          ))}
-          <input type="number" min={1} max={50} placeholder="custom N" value={customN}
-            onChange={e => setCustomN(e.target.value)}
-            style={{ width:80, padding:'4px 8px', borderRadius:20, fontSize:11, border:'1px solid var(--line)',
-              background: customN ? '#2563eb22' : 'var(--surface-1)', color:'var(--text-2)', outline:'none' }} />
-        </div>
-
-        <div style={{ display:'flex', gap:6, alignItems:'center' }}>
-          <span style={{ fontSize:11, color:'var(--text-3)', fontWeight:600 }}>Type:</span>
-          {TYPE_OPTIONS.map(t => (
-            <button key={t.id||'all'} onClick={() => setTypeFilter(t.id)}
-              style={{ padding:'4px 12px', borderRadius:20, fontSize:11, fontWeight:700, border:'none', cursor:'pointer',
-                background: typeFilter===t.id ? '#2563eb' : 'var(--surface-1)', color: typeFilter===t.id ? '#fff' : 'var(--text-3)' }}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <button className="btn-secondary" onClick={loadComparison} disabled={loading}>
-          {loading ? '⏳ Loading…' : `📊 Compare ${topEvents.length} Event${topEvents.length!==1?'s':''}`}
-        </button>
+      <div style={{ display:'grid', gridTemplateColumns:`repeat(${SLOT_COUNT}, 1fr)`, gap:10 }}>
+        {slots.map((slot, i) => {
+          const compareOptions = eventOptions.filter(o => o.value !== slot.currentId);
+          return (
+            <div key={i} style={{ display:'flex', flexDirection:'column', gap:6 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+                <SearchableSelect
+                  value={slot.currentId}
+                  onChange={v => updateSlot(i, { currentId: v, priorId: '' })}
+                  options={eventOptions}
+                  placeholder={`Slot ${i+1}…`}
+                  style={{ flex:1 }}
+                />
+                {slot.currentId && (
+                  <button onClick={() => clearSlot(i)} title="Clear this slot"
+                    style={{ background:'none', border:'none', color:'var(--text-4)', cursor:'pointer', fontSize:14, padding:'0 2px' }}>
+                    ×
+                  </button>
+                )}
+              </div>
+              {slot.currentId && (
+                <SearchableSelect
+                  value={slot.priorId}
+                  onChange={v => updateSlot(i, { priorId: v })}
+                  options={compareOptions}
+                  placeholder="Compare with…"
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
 
-      {pairs === null && <div className="no-data">Choose your filters and click Compare to load charts.</div>}
-
-      {pairs !== null && (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:12 }}>
-          {pairs.map(p => <PairCard key={p.current.id} pair={p} />)}
-        </div>
-      )}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:12, marginTop:18 }}>
+        {slots.map((slot, i) => {
+          if (!slot.currentId || !slot.priorId) return null;
+          const currentEv = eventById[slot.currentId];
+          const priorEv = eventById[slot.priorId];
+          if (!currentEv || !priorEv) return null;
+          return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} />;
+        })}
+      </div>
     </div>
   );
 }
