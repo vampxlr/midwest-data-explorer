@@ -5,17 +5,27 @@ import {
 import { api } from '../api.jsx';
 import SearchableSelect from './SearchableSelect.jsx';
 
-const SLOT_COUNT = 5;
-const STORAGE_KEY = 'mw3-dashboard-yoy-slots';
+const MAX_SLOTS     = 10;
+const DEFAULT_COUNT = 5;
+const COUNT_OPTIONS = Array.from({ length: MAX_SLOTS }, (_, i) => i + 1); // 1..10
+const STORAGE_KEY   = 'mw3-dashboard-yoy-slots';
 
-function loadSavedSlots() {
+const emptySlot = () => ({ currentId: '', priorId: '' });
+
+function loadSaved() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    const slots = Array.from({ length: SLOT_COUNT }, (_, i) => parsed[i] || { currentId: '', priorId: '' });
-    return slots;
+    if (!raw) return { count: DEFAULT_COUNT, slots: Array.from({ length: DEFAULT_COUNT }, emptySlot) };
+    const parsed = JSON.parse(raw);
+    // Legacy format was a plain array of slots (always 5) — migrate gracefully.
+    if (Array.isArray(parsed)) {
+      const count = Math.min(MAX_SLOTS, Math.max(parsed.length, DEFAULT_COUNT));
+      return { count, slots: Array.from({ length: count }, (_, i) => parsed[i] || emptySlot()) };
+    }
+    const count = Math.min(MAX_SLOTS, Math.max(1, parsed.count || DEFAULT_COUNT));
+    return { count, slots: Array.from({ length: count }, (_, i) => (parsed.slots && parsed.slots[i]) || emptySlot()) };
   } catch {
-    return Array.from({ length: SLOT_COUNT }, () => ({ currentId: '', priorId: '' }));
+    return { count: DEFAULT_COUNT, slots: Array.from({ length: DEFAULT_COUNT }, emptySlot) };
   }
 }
 
@@ -132,11 +142,19 @@ function PairChart({ currentEv, priorEv }) {
 }
 
 export default function LeagueYoyCompare({ recentRegs = [] }) {
-  const [slots, setSlots] = useState(loadSavedSlots);
+  const [state, setState] = useState(loadSaved);
+  const { count, slots } = state;
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(slots));
-  }, [slots]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }, [state]);
+
+  function setCount(newCount) {
+    setState(prev => ({
+      count: newCount,
+      slots: Array.from({ length: newCount }, (_, i) => prev.slots[i] || emptySlot()),
+    }));
+  }
 
   const eventOptions = useMemo(() => {
     return (recentRegs || [])
@@ -152,7 +170,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
   }, [recentRegs]);
 
   function updateSlot(i, patch) {
-    setSlots(prev => prev.map((s, idx) => idx === i ? { ...s, ...patch } : s));
+    setState(prev => ({ ...prev, slots: prev.slots.map((s, idx) => idx === i ? { ...s, ...patch } : s) }));
   }
 
   function clearSlot(i) {
@@ -161,12 +179,21 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
 
   return (
     <div className="card" style={{ marginBottom:20 }}>
-      <h2 style={{ margin:'0 0 4px' }}>Year-over-Year Comparison</h2>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap', marginBottom:4 }}>
+        <h2 style={{ margin:0 }}>Year-over-Year Comparison</h2>
+        <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-3)', fontWeight:600 }}>
+          Slots:
+          <select value={count} onChange={e => setCount(Number(e.target.value))}
+            style={{ background:'var(--surface-1)', border:'1px solid var(--line)', color:'var(--text-1)', borderRadius:6, padding:'4px 8px', fontSize:12 }}>
+            {COUNT_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+      </div>
       <p style={{ color:'var(--text-4)', fontSize:12, margin:'0 0 14px' }}>
         Pick a league/camp/tournament, then pick what to compare it against. Your selections are saved.
       </p>
 
-      <div style={{ display:'grid', gridTemplateColumns:`repeat(${SLOT_COUNT}, 1fr)`, gap:10 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:10 }}>
         {slots.map((slot, i) => {
           const compareOptions = eventOptions.filter(o => o.value !== slot.currentId);
           return (
