@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import { api } from '../api.jsx';
 import SearchableSelect from './SearchableSelect.jsx';
@@ -22,6 +22,14 @@ function loadSavedSlots() {
 function fmtMD(mmdd) {
   if (!mmdd) return '';
   return new Date(`2000-${mmdd}T12:00:00`).toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+function todayCDT() {
+  return new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10);
+}
+function shiftDay(dateStr, delta) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
 }
 
 function PairChart({ currentEv, priorEv }) {
@@ -62,15 +70,22 @@ function PairChart({ currentEv, priorEv }) {
     return sorted;
   }, [seriesA, seriesB]);
 
-  const totalA = chartData.length ? chartData[chartData.length - 1].cumA : 0;
-  const totalB = chartData.length ? chartData[chartData.length - 1].cumB : 0;
+  // "As of today" — clip the comparison to the same calendar day so a fully-
+  // completed prior season isn't compared against a still-in-progress one.
+  const todayMD     = todayCDT().slice(5);
+  const yesterdayMD = shiftDay(todayCDT(), -1).slice(5);
+  const asOfToday     = [...chartData].filter(d => d.mmdd <= todayMD).pop()     || null;
+  const asOfYesterday = [...chartData].filter(d => d.mmdd <= yesterdayMD).pop() || null;
+
+  const totalA = asOfToday ? asOfToday.cumA : 0;
+  const totalB = asOfToday ? asOfToday.cumB : 0;
   const delta  = totalA - totalB;
 
   return (
     <div style={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:'12px 14px' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:8, marginBottom:6 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8, marginBottom:6 }}>
         <div style={{ minWidth:0 }}>
-          <div style={{ fontSize:13, color:'var(--text-1)', fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+          <div style={{ fontSize:13, color:'var(--text-1)', fontWeight:600, lineHeight:1.3 }}>
             {currentEv.name}
           </div>
           <div style={{ fontSize:11, color:'var(--text-4)' }}>vs {priorEv.name}</div>
@@ -96,6 +111,10 @@ function PairChart({ currentEv, priorEv }) {
               interval={Math.max(1, Math.floor(chartData.length/6))} />
             <YAxis stroke="var(--text-5)" tick={{ fill:'var(--text-4)', fontSize:9 }} width={28} />
             <Tooltip contentStyle={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:6, fontSize:11 }} />
+            {asOfYesterday && (
+              <ReferenceLine x={asOfYesterday.label} stroke="#f97316" strokeDasharray="3 3"
+                label={{ value:'Yesterday', position:'insideTopRight', fill:'#f97316', fontSize:9 }} />
+            )}
             <Line type="monotone" dataKey="cumA" name="Selected" stroke="#3b82f6" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--text-4)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
           </ComposedChart>
@@ -104,8 +123,8 @@ function PairChart({ currentEv, priorEv }) {
 
       {!loading && (
         <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)' }}>
-          <span>Selected: <strong style={{ color:'#3b82f6' }}>{totalA}</strong></span>
-          <span>Compared: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
+          <span>Through today: <strong style={{ color:'#3b82f6' }}>{totalA}</strong></span>
+          <span>Same day last yr: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
         </div>
       )}
     </div>
