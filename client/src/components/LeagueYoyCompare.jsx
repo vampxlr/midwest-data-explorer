@@ -4,6 +4,7 @@ import {
 } from 'recharts';
 import { api } from '../api.jsx';
 import SearchableSelect from './SearchableSelect.jsx';
+import Collapsible from './Collapsible.jsx';
 
 const MAX_SLOTS     = 10;
 const DEFAULT_COUNT = 5;
@@ -178,62 +179,78 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
   }
 
   return (
-    <div className="card" style={{ marginBottom:20 }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap', marginBottom:4 }}>
-        <h2 style={{ margin:0 }}>Year-over-Year Comparison</h2>
-        <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-3)', fontWeight:600 }}>
-          Slots:
-          <select value={count} onChange={e => setCount(Number(e.target.value))}
-            style={{ background:'var(--surface-1)', border:'1px solid var(--line)', color:'var(--text-1)', borderRadius:6, padding:'4px 8px', fontSize:12 }}>
-            {COUNT_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
-        </label>
-      </div>
-      <p style={{ color:'var(--text-4)', fontSize:12, margin:'0 0 14px' }}>
-        Pick a league/camp/tournament, then pick what to compare it against. Your selections are saved.
-      </p>
+    <div style={{ marginBottom:20 }}>
+      <h2 style={{ fontSize:15, fontWeight:700, color:'var(--text-1)', letterSpacing:'-0.2px', margin:'0 0 12px' }}>
+        Year-over-Year Comparison
+      </h2>
 
-      <div className="yoy-slot-grid">
-        {slots.map((slot, i) => {
-          const compareOptions = eventOptions.filter(o => o.value !== slot.currentId);
-          return (
-            <div key={i} style={{ display:'flex', flexDirection:'column', gap:6 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+      <Collapsible
+        title="Select Leagues to Compare"
+        subtitle="Pick a league/camp/tournament, then pick what to compare it against. Your selections are saved."
+        defaultOpen
+      >
+        <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+          <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-3)', fontWeight:600 }}>
+            Slots:
+            <select value={count} onChange={e => setCount(Number(e.target.value))}
+              style={{ background:'var(--surface-1)', border:'1px solid var(--line)', color:'var(--text-1)', borderRadius:6, padding:'4px 8px', fontSize:12 }}>
+              {COUNT_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="yoy-slot-grid">
+          {slots.map((slot, i) => {
+            const compareOptions = eventOptions.filter(o => o.value !== slot.currentId);
+            return (
+              <div key={i} style={{
+                display:'flex', flexDirection:'column', gap:8,
+                background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:'10px 12px',
+              }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <span style={{ fontSize:10, color:'var(--text-4)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.5px' }}>
+                    Slot {i+1}
+                  </span>
+                  {slot.currentId && (
+                    <button onClick={() => clearSlot(i)} title="Clear this slot"
+                      style={{ background:'none', border:'none', color:'var(--text-4)', cursor:'pointer', fontSize:14, padding:'0 2px' }}>
+                      ×
+                    </button>
+                  )}
+                </div>
                 <SearchableSelect
                   value={slot.currentId}
                   onChange={v => updateSlot(i, { currentId: v, priorId: '' })}
                   options={eventOptions}
-                  placeholder={`Slot ${i+1}…`}
-                  style={{ flex:1 }}
+                  placeholder="Select league…"
                 />
                 {slot.currentId && (
-                  <button onClick={() => clearSlot(i)} title="Clear this slot"
-                    style={{ background:'none', border:'none', color:'var(--text-4)', cursor:'pointer', fontSize:14, padding:'0 2px' }}>
-                    ×
-                  </button>
+                  <SearchableSelect
+                    value={slot.priorId}
+                    onChange={v => updateSlot(i, { priorId: v })}
+                    options={compareOptions}
+                    placeholder="Compare with…"
+                  />
                 )}
               </div>
-              {slot.currentId && (
-                <SearchableSelect
-                  value={slot.priorId}
-                  onChange={v => updateSlot(i, { priorId: v })}
-                  options={compareOptions}
-                  placeholder="Compare with…"
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </Collapsible>
 
-      <div className="grid-3" style={{ marginTop:18 }}>
-        {slots.map((slot, i) => {
-          if (!slot.currentId || !slot.priorId) return null;
-          const currentEv = eventById[slot.currentId];
-          const priorEv = eventById[slot.priorId];
-          if (!currentEv || !priorEv) return null;
-          return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} />;
-        })}
+      <div className="card" style={{ marginTop:16 }}>
+        <div className="grid-3">
+          {slots.map((slot, i) => {
+            if (!slot.currentId || !slot.priorId) return null;
+            const currentEv = eventById[slot.currentId];
+            const priorEv = eventById[slot.priorId];
+            if (!currentEv || !priorEv) return null;
+            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} />;
+          })}
+        </div>
+        {slots.every(s => !s.currentId || !s.priorId) && (
+          <div className="no-data">Select leagues above to see comparison charts.</div>
+        )}
       </div>
     </div>
   );
