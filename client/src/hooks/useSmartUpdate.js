@@ -1,17 +1,26 @@
 /**
  * useSmartUpdate — minimal "Smart Update" runner shared by the Dashboard's
  * top quick-glance bar and Reports' top bar. Only runs SMART mode (fetch
- * events whose registration count changed since last run) — no purge, no
- * year/type filters, no mode switching. Full control over those lives in
- * <AggregatePanel/> (Reports' collapsible Data Aggregation section).
+ * events whose registration count changed since last run), scoped to the
+ * current calendar year — no purge, no type filter, no mode switching.
+ * Full control over those lives in <AggregatePanel/> (Reports' collapsible
+ * Data Aggregation section).
  *
- * Mirrors the smart-mode logic in components/AggregatePanel.jsx so both
- * stay behaviorally identical; kept separate (rather than shared) since the
- * panel's full mode-switching logic would be dead weight here.
+ * Mirrors the smart-mode logic in components/AggregatePanel.jsx (which
+ * also defaults its year filter to the current year) so both stay
+ * behaviorally consistent; kept separate since the panel's full
+ * mode-switching logic would be dead weight here.
  */
 import { useEffect, useRef, useState } from 'react';
 import { api, withToken } from '../api.jsx';
 import { toast } from 'react-hot-toast';
+
+function eventYear(reg) {
+  const m = (reg.name || '').match(/\b(20\d{2})\b/);
+  if (m) return Number(m[1]);
+  const d = (reg.close || reg.open || '').slice(0, 4);
+  return /^20\d{2}$/.test(d) ? Number(d) : null;
+}
 
 export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComplete } = {}) {
   const [isVercel, setIsVercel] = useState(null);
@@ -61,8 +70,10 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
   }
 
   function computeNeeds() {
+    const thisYear = new Date().getFullYear();
     const needs = [];
     for (const reg of recentRegs) {
+      if (eventYear(reg) !== thisYear) continue; // current year only
       const stored = storedMap[String(reg.id)];
       const current = reg.resultsCompleted || 0;
       if (!stored) { needs.push(reg); continue; }
