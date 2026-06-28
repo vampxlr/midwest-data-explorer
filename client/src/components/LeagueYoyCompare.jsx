@@ -193,7 +193,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         Pick a league/camp/tournament, then pick what to compare it against. Your selections are saved.
       </p>
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:10 }}>
+      <div className="yoy-slot-grid">
         {slots.map((slot, i) => {
           const compareOptions = eventOptions.filter(o => o.value !== slot.currentId);
           return (
