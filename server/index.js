@@ -3174,6 +3174,19 @@ app.get('/api/contacts/export', async (req, res) => {
     return '';
   }
 
+  // All Midwest 3on3 registrants are US-based — Facebook Custom Audience
+  // phone matching needs a country code, so normalize every number to
+  // E.164 (+1XXXXXXXXXX). Without this, raw 10-digit numbers from SE never
+  // match FB's hashed phone lookups for some contacts.
+  function fmtPhone(p) {
+    if (!p) return '';
+    let digits = String(p).replace(/\D/g, '');
+    if (digits.length === 13 && digits.startsWith('001')) digits = digits.slice(2); // "001" intl prefix
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    return digits ? `+${digits}` : '';
+  }
+
   const slug = label.replace(/[^a-z0-9]/gi,'_').replace(/_+/g,'_').slice(0,40);
   const date = store.todayCDT();
 
@@ -3198,13 +3211,13 @@ app.get('/api/contacts/export', async (req, res) => {
       const em = (email || '').toLowerCase().trim();
       if (!em || seenEmails.has(em)) return;
       seenEmails.add(em);
-      const ph = allPhones[idx] || allPhones[0] || '';
+      const ph = fmtPhone(allPhones[idx] || allPhones[0]);
       rows.push([em, ph, fn, ln, zip, cit, st, 'US', gen, gys, ev].join(','));
     });
 
     // Registration with no emails — still include one row with phone/name for completeness
     if (!allEmails.some(e => e)) {
-      const ph = allPhones[0] || r.phone || '';
+      const ph = fmtPhone(allPhones[0] || r.phone);
       rows.push(['', ph, fn, ln, zip, cit, st, 'US', gen, gys, ev].join(','));
     }
   }
