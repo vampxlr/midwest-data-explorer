@@ -1183,8 +1183,10 @@ app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), asyn
     const storedCompleted = storedEvent?.resultsCompleted ?? null;
     const storedCount     = storedEvent?.resultCount     || 0;
 
-    // Skip when count unchanged — but never skip in backfill or purge mode
-    if (isFirstCall && !purgeFirst && !backfill && storedCompleted !== null && currentCompleted === storedCompleted) {
+    // Skip when count unchanged — but never skip in backfill or purge mode, and
+    // never skip if the store is behind what the API already reported (e.g. a
+    // prior fetch attempt was interrupted) — otherwise the gap never closes.
+    if (isFirstCall && !purgeFirst && !backfill && storedCompleted !== null && currentCompleted === storedCompleted && storedCount >= currentCompleted) {
       return res.json({ added: 0, skipped: true, reason: 'count_unchanged', eventId });
     }
 
