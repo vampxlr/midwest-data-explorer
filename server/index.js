@@ -3215,10 +3215,12 @@ app.get('/api/contacts/export', async (req, res) => {
       rows.push([em, ph, fn, ln, zip, cit, st, 'US', gen, gys, ev].join(','));
     });
 
-    // Registration with no emails — still include one row with phone/name for completeness
+    // Registration with no emails — still include a row, but only if there's a
+    // phone to match on. Facebook rejects rows with zero identifiers (no email
+    // AND no phone), so a row with neither would break the whole import.
     if (!allEmails.some(e => e)) {
       const ph = fmtPhone(allPhones[0] || r.phone);
-      rows.push(['', ph, fn, ln, zip, cit, st, 'US', gen, gys, ev].join(','));
+      if (ph) rows.push(['', ph, fn, ln, zip, cit, st, 'US', gen, gys, ev].join(','));
     }
   }
 
