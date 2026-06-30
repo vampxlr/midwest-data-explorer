@@ -1,15 +1,12 @@
 /**
- * FB Audiences page — two-panel layout:
- *   Left:  Contact Store (fetch contacts from SE, event-by-event status)
- *   Right: Audience Builder (filter by leagues/year/gender → instant CSV export)
+ * FB Audiences page — Audience Builder: filter by leagues/year/gender → instant
+ * CSV export, read straight from the main results store (Convex/local).
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
-  PieChart, Pie,
+  BarChart, Bar, XAxis, Tooltip, ResponsiveContainer,
 } from 'recharts';
-import { api, withToken } from '../api.jsx';
-import { useAuth } from '../AuthContext.jsx';
+import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 
 function fmt10(phone) {
@@ -21,7 +18,6 @@ function fmt10(phone) {
 import SearchableSelect from '../components/SearchableSelect.jsx';
 
 const PIE_COLORS  = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6'];
-const LOG_COLOR   = { info:'var(--text-3)', ok:'#22c55e', error:'#ef4444', warn:'#f97316', response:'#a78bfa', skip:'var(--text-2)' };
 const curYear     = new Date().getFullYear().toString();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -35,289 +31,8 @@ const Tip = ({ active, payload, label }) => {
   );
 };
 
-function StatCard({ label, value, sub, color='var(--accent-light)' }) {
-  return (
-    <div className="stat-card">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value" style={{ color, fontSize:28 }}>{value ?? '—'}</div>
-      {sub && <div className="stat-sub">{sub}</div>}
-    </div>
-  );
-}
-
-// ── SSE Log Terminal ──────────────────────────────────────────────────────────
-function ContactTerminal({ logs, status, onClose }) {
-  const bottomRef = useRef(null);
-  useEffect(()=>{ bottomRef.current?.scrollIntoView({behavior:'smooth'}); }, [logs]);
-
-  const statusColor = status==='done'?'#22c55e':status==='error'?'#ef4444':status==='idle'?'var(--text-5)':'#3b82f6';
-  return (
-    <div style={{ background:'#080a0f', border:'1px solid var(--surface-1)', borderRadius:10, overflow:'hidden', fontFamily:'monospace', marginTop:12 }}>
-      <div style={{ background:'var(--surface-3)', borderBottom:'1px solid var(--surface-1)', padding:'7px 14px', display:'flex', alignItems:'center', gap:10 }}>
-        <div style={{ display:'flex', gap:4 }}>
-          {['#ef4444','#f97316','#22c55e'].map(c=><div key={c} style={{width:10,height:10,borderRadius:'50%',background:c}}/>)}
-        </div>
-        <span style={{ color:'var(--text-4)', fontSize:11, flex:1 }}>Contact Fetch — SportsEngine</span>
-        <span style={{ color:statusColor, fontSize:11, fontWeight:700 }}>
-          {status==='done'?'DONE':status==='error'?'ERROR':status==='idle'?'IDLE':'RUNNING'}
-        </span>
-        {status!=='running'&&onClose&&(
-          <button onClick={onClose} style={{background:'none',border:'none',color:'var(--text-4)',cursor:'pointer',fontSize:14}}>✕</button>
-        )}
-      </div>
-      <div style={{ padding:'10px 14px', maxHeight:240, overflowY:'auto', fontSize:11, lineHeight:1.7 }}>
-        {logs.length===0 && <span style={{color:'var(--text-5)'}}>Waiting to start…</span>}
-        {logs.map((l,i)=>(
-          <div key={i} style={{display:'flex',gap:8}}>
-            <span style={{color:'#1e3a5f',flexShrink:0,minWidth:52}}>{l.ts}</span>
-            <span style={{color:LOG_COLOR[l.level]||'var(--text-3)',whiteSpace:'pre-wrap',wordBreak:'break-all'}}>{l.msg}</span>
-          </div>
-        ))}
-        {status==='running'&&<div style={{color:'#22c55e',animation:'blink 1s step-end infinite'}}>█</div>}
-        <div ref={bottomRef}/>
-      </div>
-      <style>{`@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}`}</style>
-    </div>
-  );
-}
-
-// ── Left panel: Contact Store ─────────────────────────────────────────────────
-// Mirrors the server's name-based classification (see classifyEvent in
-// server/index.js) so the client can filter the events list without an
-// extra round-trip.
-function classifyEvent(name = '') {
-  const n = name.toLowerCase();
-  if (/\btournament\b|\btourney\b/.test(n)) return 'tournament';
-  if (/\bcamp\b|\bclinic\b|\bshooting\b|\bscoring\b|\bskills?\b|\btraining\b|\bacademy\b|\bdevelopment\b/.test(n)) return 'camp';
-  return 'league';
-}
-function eventYear(reg) { return (reg.close || reg.open || '').slice(0, 4); }
-
-const TYPE_OPTIONS = [
-  { id: '',           label: 'All types' },
-  { id: 'league',     label: 'League' },
-  { id: 'camp',       label: 'Camp' },
-  { id: 'tournament', label: 'Tournament' },
-];
-
-function ContactStorePanel({ recentRegs, onStoreUpdated }) {
-  const { isAdmin } = useAuth();
-  const [cStatus,    setCStatus]    = useState(null);
-  const [fetching,   setFetching]   = useState(false);
-  const [logs,       setLogs]       = useState([]);
-  const [termStatus, setTermStatus] = useState('idle');
-  const [showTerm,   setShowTerm]   = useState(false);
-  const [progress,   setProgress]   = useState({ current:0, total:0 });
-  const [yearFilter, setYearFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
-  const esRef = useRef(null);
-
-  const availableYears = [...new Set(recentRegs.map(eventYear).filter(y=>/^20\d{2}$/.test(y)))].sort().reverse();
-  const matchesFilters = r => (!yearFilter || eventYear(r)===yearFilter) && (!typeFilter || classifyEvent(r.name)===typeFilter);
-
-  useEffect(()=>{ loadStatus(); }, []);
-
-  async function loadStatus() {
-    try { const r = await api.contactsStatus(); setCStatus(r.data); } catch {}
-  }
-
-  function connectSSE() {
-    if (esRef.current) esRef.current.close();
-    const es = new EventSource(withToken('/api/contacts/stream'));
-    esRef.current = es;
-    es.addEventListener('state', e => {
-      const s = JSON.parse(e.data);
-      setProgress({ current:s.current||0, total:s.total||0 });
-      setFetching(s.running||false);
-    });
-    es.addEventListener('log', e => {
-      setLogs(prev=>[...prev,JSON.parse(e.data)].slice(-100));
-    });
-    es.addEventListener('complete', e => {
-      setFetching(false);
-      setTermStatus('done');
-      loadStatus();
-      if (onStoreUpdated) onStoreUpdated();
-    });
-    es.onerror = ()=>{};
-    return es;
-  }
-
-  useEffect(()=>{
-    const es = connectSSE();
-    return ()=>es.close();
-  }, []);
-
-  async function startFetch(which, events, purgeFirst = false) {
-    setLogs([]); setTermStatus('running'); setShowTerm(true);
-    try {
-      const eventObjs = events ? events.map(r => ({
-        id: r.id, name: r.name, status: r.status,
-        open: r.open, close: r.close, sport: r.sport,
-        resultsCompleted: r.resultsCompleted,
-      })) : null;
-      const payload = { orgId:'8008', purgeFirst };
-      if (eventObjs) payload.eventIds = eventObjs;
-      const r = await api.contactsFetch(payload);
-      if (!r.data.started) toast.error(r.data.message);
-    } catch (err) { toast.error('Failed: '+err.message); setTermStatus('error'); }
-  }
-
-  const pct = progress.total>0 ? Math.round(progress.current/progress.total*100) : 0;
-  const filteredRegs  = recentRegs.filter(matchesFilters);
-  const openEvents    = filteredRegs.filter(r=>r.status===1);
-  const closedEvents  = filteredRegs.filter(r=>r.status!==1);
-
-  // Events not yet in contact store
-  const fetchedIds   = new Set(Object.keys(cStatus?.events||{}));
-  const notFetched   = filteredRegs.filter(r=>!fetchedIds.has(String(r.id)));
-  const needsRefresh = openEvents.filter(r=>fetchedIds.has(String(r.id)));
-  const filterLabel  = (yearFilter || typeFilter) ? ` (${[yearFilter, typeFilter].filter(Boolean).join(' ')})` : '';
-
-  return (
-    <div>
-      <h2 style={{marginBottom:16}}>Contact Store</h2>
-      <p style={{color:'var(--text-3)',fontSize:12,marginBottom:16,lineHeight:1.6}}>
-        Stores registrant contact details (email, name, phone) locally.
-        <br/><strong style={{color:'var(--text-2)'}}>Closed events</strong> are fetched once and never re-fetched.
-        <strong style={{color:'var(--text-2)'}}> Open events</strong> can be refreshed to pick up new registrations.
-      </p>
-
-      {/* Stats */}
-      <div className="grid-2" style={{gap:12,marginBottom:16}}>
-        <StatCard label="Total Contacts" value={cStatus?.totalContacts??0} color="var(--accent-light)" sub="emails + location"/>
-        <StatCard label="Events Covered" value={cStatus?.totalEvents??0}   color="#22c55e" sub={`of ${recentRegs.length} total`}/>
-        <StatCard label="Closed (cached)" value={cStatus?.closedFetched??0} color="var(--text-2)" sub="won't change"/>
-        <StatCard label="Open (live)"     value={cStatus?.openFetched??0}   color="#f97316" sub="refresh anytime"/>
-      </div>
-
-      {/* Progress bar (shown when running) */}
-      {fetching && (
-        <div style={{marginBottom:12}}>
-          <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'var(--text-3)',marginBottom:4}}>
-            <span>Fetching contacts…</span>
-            <span>{progress.current}/{progress.total} events ({pct}%)</span>
-          </div>
-          <div style={{background:'var(--surface-1)',borderRadius:8,height:10,overflow:'hidden'}}>
-            <div style={{width:`${pct}%`,height:'100%',background:'#3b82f6',borderRadius:8,transition:'width 0.3s'}}/>
-          </div>
-        </div>
-      )}
-
-      {/* Year / type filter — scopes all fetch & purge actions below */}
-      <div style={{background:'var(--surface-1)',border:'1px solid var(--line)',borderRadius:8,padding:'10px 12px',marginBottom:12}}>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:8}}>
-          <span style={{fontSize:11,color:'var(--text-3)',fontWeight:600}}>Year:</span>
-          {['', ...availableYears].map(y=>(
-            <button key={y||'all'} onClick={()=>setYearFilter(y)} disabled={fetching}
-              style={{padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',
-                background:yearFilter===y?'#2563eb':'var(--surface-2)',color:yearFilter===y?'#fff':'var(--text-3)'}}>
-              {y||'All years'}
-            </button>
-          ))}
-        </div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-          <span style={{fontSize:11,color:'var(--text-3)',fontWeight:600}}>Type:</span>
-          {TYPE_OPTIONS.map(t=>(
-            <button key={t.id||'all'} onClick={()=>setTypeFilter(t.id)} disabled={fetching}
-              style={{padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',
-                background:typeFilter===t.id?'#2563eb':'var(--surface-2)',color:typeFilter===t.id?'#fff':'var(--text-3)'}}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Action buttons */}
-      <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:12}}>
-        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-          <button disabled={fetching}
-            onClick={()=>startFetch('all-closed', closedEvents)}
-            style={{flex:1,padding:'10px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid #14532d',
-              cursor:fetching?'not-allowed':'pointer',background:'rgba(34,197,94,0.08)',color:'#22c55e',opacity:fetching?0.4:1}}>
-            ↺ Fetch All Closed ({closedEvents.length})
-            <div style={{fontSize:10,color:'#14532d',fontWeight:400,marginTop:2}}>fetch once, cached permanently</div>
-          </button>
-          <button disabled={fetching}
-            onClick={()=>startFetch('all-open', openEvents)}
-            style={{flex:1,padding:'10px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid #431407',
-              cursor:fetching?'not-allowed':'pointer',background:'rgba(249,115,22,0.08)',color:'#f97316',opacity:fetching?0.4:1}}>
-            ↺ Refresh Open ({openEvents.length})
-            <div style={{fontSize:10,color:'#431407',fontWeight:400,marginTop:2}}>pick up new registrations</div>
-          </button>
-        </div>
-
-        {notFetched.length > 0 && (
-          <button disabled={fetching}
-            onClick={()=>startFetch('not-fetched', notFetched)}
-            style={{padding:'8px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid var(--line)',
-              cursor:fetching?'not-allowed':'pointer',background:'var(--surface-1)',color:'var(--text-2)',opacity:fetching?0.4:1}}>
-            ↺ Fetch {notFetched.length} not-yet-fetched events
-          </button>
-        )}
-
-        {/* Force re-fetch — purges stored contacts first so count-unchanged skip is bypassed. Admin only (purges data). */}
-        {isAdmin ? (
-          <button disabled={fetching}
-            onClick={()=>{
-              if (!window.confirm(`This will purge and re-fetch ${filteredRegs.length} event(s)${filterLabel} to rebuild emails for all players. Continue?`)) return;
-              startFetch('all', filteredRegs, true);
-            }}
-            style={{padding:'8px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid #3b1f5e',
-              cursor:fetching?'not-allowed':'pointer',background:'rgba(124,58,237,0.08)',color:'#a855f7',opacity:fetching?0.4:1}}>
-            ⟳ Force Re-fetch{filterLabel} ({filteredRegs.length}) — Rebuild Player Emails
-            <div style={{fontSize:10,color:'#3b1f5e',fontWeight:400,marginTop:2}}>
-              purges existing contacts · re-fetches{filterLabel ? ' the filtered' : ' every'} event{filteredRegs.length!==1?'s':''} · captures all player emails per team
-            </div>
-          </button>
-        ) : (
-          <div title="Only admins can purge contact data"
-            style={{padding:'8px 14px',borderRadius:8,fontSize:12,fontWeight:700,border:'1px solid var(--line)',
-              cursor:'not-allowed',background:'var(--surface-1)',color:'var(--text-4)',opacity:0.6}}>
-            ⟳ Force Re-fetch{filterLabel} ({filteredRegs.length}) — Rebuild Player Emails
-            <div style={{fontSize:10,fontWeight:400,marginTop:2}}>
-              admin only — this action purges existing contact data
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Terminal */}
-      {(showTerm || logs.length>0) && (
-        <ContactTerminal logs={logs} status={fetching?'running':termStatus} onClose={()=>setShowTerm(false)}/>
-      )}
-
-      {/* Event list */}
-      {cStatus?.events?.length > 0 && (
-        <div style={{marginTop:16}}>
-          <p style={{margin:'0 0 8px',fontSize:10,color:'var(--text-3)',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px'}}>
-            Fetched Events
-          </p>
-          <div style={{maxHeight:280,overflowY:'auto'}}>
-            {cStatus.events.map(ev=>(
-              <div key={ev.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 10px',
-                background:'var(--surface-2)',border:'1px solid var(--line)',borderRadius:8,marginBottom:4}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:11,color:'#cbd5e1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.name}</div>
-                  <div style={{fontSize:10,color:'var(--text-4)'}}>
-                    {ev.status===1
-                      ? <span style={{color:'#22c55e'}}>Open</span>
-                      : <span style={{color:'var(--text-3)'}}>Closed</span>}
-                    {' · '}fetched {new Date(ev.fetchedAt).toLocaleString()}
-                  </div>
-                </div>
-                <span style={{color:'var(--accent-light)',fontWeight:700,fontSize:13,flexShrink:0}}>{ev.contactCount}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Right panel: Audience Builder ─────────────────────────────────────────────
-function AudienceBuilder({ recentRegs, contactStatus }) {
+// ── Audience Builder ──────────────────────────────────────────────────────────
+function AudienceBuilder({ recentRegs }) {
   const [step,          setStep]          = useState(1);
   // Step 1: league selection mode
   const [leagueMode,    setLeagueMode]    = useState('all');        // 'all' | 'year' | 'custom'
@@ -338,13 +53,6 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
   const availableYears = [...new Set(
     recentRegs.map(r=>(r.close||r.open||'').slice(0,4)).filter(y=>/^20\d{2}$/.test(y))
   )].sort().reverse();
-
-  // All unique grad years from contact store
-  const allGradYears = contactStatus
-    ? [...new Set(
-        (contactStatus.events||[]).flatMap(()=>[]) // we'd need aggregate data
-      )]
-    : [];
 
   // Compute selected eventIds based on league mode
   function getEventIds() {
@@ -432,15 +140,8 @@ function AudienceBuilder({ recentRegs, contactStatus }) {
     <div>
       <h2 style={{marginBottom:4}}>Audience Builder</h2>
       <p style={{color:'var(--text-3)',fontSize:12,marginBottom:16,lineHeight:1.6}}>
-        Build a Facebook Custom Audience CSV from your stored contacts. Instant — no API calls.
-        {contactStatus && <span style={{color:'var(--accent-light)',fontWeight:700}}> {contactStatus.totalContacts} contacts available.</span>}
+        Build a Facebook Custom Audience CSV. Instant — reads straight from the main data store, no API calls needed.
       </p>
-
-      {(!contactStatus||contactStatus.totalContacts===0) && (
-        <div style={{background:'rgba(249,115,22,0.12)',border:'1px solid rgba(249,115,22,0.35)',borderRadius:10,padding:'14px 16px',marginBottom:16,fontSize:13,color:'var(--accent-2)'}}>
-          ⚠ No contacts stored yet. Use the Contact Store panel to fetch contact details from SportsEngine first.
-        </div>
-      )}
 
       <StepBar/>
 
@@ -1082,37 +783,16 @@ function LapsedContactsPanel({ recentRegs }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function Audiences({ ctx }) {
   const { recentRegs = [] } = ctx;
-  const [cStatus, setCStatus] = useState(null);
-
-  async function loadCStatus() {
-    try { const r = await api.contactsStatus(); setCStatus(r.data); } catch {}
-  }
-
-  useEffect(()=>{ loadCStatus(); }, []);
 
   return (
     <div>
       <div className="page-header">
         <h1>FB Audiences</h1>
-        <p>Store registrant contact details locally, then build targeted Facebook Custom Audience exports — no repeated API calls.</p>
+        <p>Build targeted Facebook Custom Audience CSV exports from your aggregated data — no extra API calls.</p>
       </div>
 
-      <div className="grid-2" style={{ gap:24, alignItems:'start' }}>
-        {/* Left: Contact Store */}
-        <div className="card" style={{ position:'sticky', top:20 }}>
-          <ContactStorePanel
-            recentRegs={recentRegs}
-            onStoreUpdated={loadCStatus}
-          />
-        </div>
-
-        {/* Right: Audience Builder */}
-        <div className="card">
-          <AudienceBuilder
-            recentRegs={recentRegs}
-            contactStatus={cStatus}
-          />
-        </div>
+      <div className="card">
+        <AudienceBuilder recentRegs={recentRegs} />
       </div>
 
       {/* Lapsed Contacts — full width below */}

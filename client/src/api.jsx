@@ -137,11 +137,8 @@ export const api = {
   saveExport:    (meta)    => axios.post(`${BASE}/exports`, meta),
   deleteExport:  (id)      => axios.delete(`${BASE}/exports/${id}`),
 
-  // ── Contact store (FB Audiences page) ─────────────────────────────────────
-  contactsStatus:  ()       => axios.get(`${BASE}/contacts/status`),
+  // ── Audience export (FB Audiences page) — reads straight from main store ──
   contactsPreview: (params) => axios.get(`${BASE}/contacts/preview`, { params }),
-  contactsFetch:   (body)   => axios.post(`${BASE}/contacts/fetch`, body),
-  contactsPurge:   (body)   => axios.post(`${BASE}/contacts/purge`, body),
   contactsExportUrl: (params) => {
     const p = new URLSearchParams();
     if (params.eventIds)     p.set('eventIds',     params.eventIds.join(','));
