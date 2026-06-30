@@ -137,6 +137,8 @@ export const api = {
   saveExport:    (meta)    => axios.post(`${BASE}/exports`, meta),
   deleteExport:  (id)      => axios.delete(`${BASE}/exports/${id}`),
 
+  recomputeStats: () => axios.post(`${BASE}/admin/recompute-stats`),
+
   // ── Audience export (FB Audiences page) — reads straight from main store ──
   contactsPreview: (params) => axios.get(`${BASE}/contacts/preview`, { params }),
   contactsExportUrl: (params) => {

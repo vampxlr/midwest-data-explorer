@@ -287,10 +287,93 @@ export const purgeEventResults = mutation({
     const batch = await ctx.db
       .query("results")
       .withIndex("by_eventId", (q) => q.eq("eventId", eventId))
-      .take(500);
+      .collect();
+
+    // Track stats to decrement — mirrors what batchUpsertResults increments on insert
+    const dailyDelta: Record<string, number> = {};
+    const gradYearDelta: Record<string, number> = {};
+    const genderDelta: Record<string, number> = {};
+    const stateDelta: Record<string, number> = {};
+    const cityDelta: Record<string, number> = {};
+    const zipDelta: Record<string, number> = {};
+    const yoyDailyDelta: Record<string, number> = {};
+
+    const eventDoc = await ctx.db
+      .query("events")
+      .withIndex("by_seId", (q) => q.eq("seId", eventId))
+      .first();
+
     for (const r of batch) {
       await ctx.db.delete(r._id);
+
+      if (r.created) {
+        const date = toCDTDate(r.created);
+        dailyDelta[date] = (dailyDelta[date] || 0) + 1;
+      }
+      if (r.completed) {
+        for (const gy of r.gradYears ?? []) {
+          if (/^\d{4}$/.test(gy)) gradYearDelta[gy] = (gradYearDelta[gy] || 0) + 1;
+        }
+        if (r.gender) genderDelta[r.gender] = (genderDelta[r.gender] || 0) + 1;
+        const st = r.state?.trim();
+        if (st) stateDelta[st] = (stateDelta[st] || 0) + 1;
+        const ci = r.city?.trim();
+        if (ci) cityDelta[ci] = (cityDelta[ci] || 0) + 1;
+        if (r.zip) {
+          const z = String(r.zip).slice(0, 5);
+          zipDelta[z] = (zipDelta[z] || 0) + 1;
+        }
+        if (r.created) {
+          const date = toCDTDate(r.created);
+          const day = dayOfYear(date);
+          if (day) {
+            const name = eventDoc?.name || r.eventName;
+            const year = seasonYear(name, eventDoc?.close, eventDoc?.open);
+            if (/^20\d{2}$/.test(year)) {
+              const type = classifyEvent(name);
+              const key = `${year}|${type}|${day}`;
+              yoyDailyDelta[key] = (yoyDailyDelta[key] || 0) + 1;
+            }
+          }
+        }
+      }
     }
+
+    // Decrement all affected stats tables
+    for (const [date, delta] of Object.entries(dailyDelta)) {
+      const stat = await ctx.db.query("statsDaily").withIndex("by_date", (q) => q.eq("date", date)).first();
+      if (stat) await ctx.db.patch(stat._id, { count: Math.max(0, stat.count - delta) });
+    }
+    for (const [year, delta] of Object.entries(gradYearDelta)) {
+      const stat = await ctx.db.query("statsGradYear").withIndex("by_year", (q) => q.eq("year", year)).first();
+      if (stat) await ctx.db.patch(stat._id, { count: Math.max(0, stat.count - delta) });
+    }
+    for (const [gender, delta] of Object.entries(genderDelta)) {
+      const stat = await ctx.db.query("statsGender").withIndex("by_gender", (q) => q.eq("gender", gender)).first();
+      if (stat) await ctx.db.patch(stat._id, { count: Math.max(0, stat.count - delta) });
+    }
+    for (const [state, delta] of Object.entries(stateDelta)) {
+      const stat = await ctx.db.query("statsState").withIndex("by_state", (q) => q.eq("state", state)).first();
+      if (stat) await ctx.db.patch(stat._id, { count: Math.max(0, stat.count - delta) });
+    }
+    for (const [city, delta] of Object.entries(cityDelta)) {
+      const stat = await ctx.db.query("statsCity").withIndex("by_city", (q) => q.eq("city", city)).first();
+      if (stat) await ctx.db.patch(stat._id, { count: Math.max(0, stat.count - delta) });
+    }
+    for (const [zip, delta] of Object.entries(zipDelta)) {
+      const stat = await ctx.db.query("statsZip").withIndex("by_zip", (q) => q.eq("zip", zip)).first();
+      if (stat) await ctx.db.patch(stat._id, { count: Math.max(0, stat.count - delta) });
+    }
+    for (const [key, delta] of Object.entries(yoyDailyDelta)) {
+      const [year, type, dayStr] = key.split("|");
+      const day = parseInt(dayStr);
+      const stat = await ctx.db
+        .query("statsYoyDaily")
+        .withIndex("by_year_type_day", (q) => q.eq("year", year).eq("type", type).eq("day", day))
+        .first();
+      if (stat) await ctx.db.patch(stat._id, { count: Math.max(0, stat.count - delta) });
+    }
+
     return batch.length;
   },
 });

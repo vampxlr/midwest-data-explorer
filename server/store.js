@@ -42,6 +42,17 @@ async function convexMutation(fnPath, args = {}) {
   return data.value;
 }
 
+async function convexAction(fnPath, args = {}) {
+  const r = await fetch(`${CONVEX_URL}/api/action`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Convex action ${fnPath} failed: ${JSON.stringify(data)}`);
+  return data.value;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function emptyStore() {
@@ -275,6 +286,7 @@ function gradYearStats(store, { fromDate, toDate, eventId } = {}) {
 module.exports = {
   IS_CONVEX,
   convexQuery,
+  convexAction,
   load, save, emptyStore,
   pendingEvents, upsertEventMeta, upsertResults, purgeEvent,
   dailyStats, gradYearStats,

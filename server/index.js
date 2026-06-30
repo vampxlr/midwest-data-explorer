@@ -2981,6 +2981,16 @@ app.post('/api/cache/clear', auth.requireRole('admin', 'editor'), async (req, re
   res.json({ message: 'Cache cleared' });
 });
 
+// ── Recompute all dashboard stats from Convex results (fixes double-counting after purge) ──
+app.post('/api/admin/recompute-stats', auth.requireAdmin, async (req, res) => {
+  if (!store.IS_CONVEX) return res.status(400).json({ error: 'Only available when connected to Convex' });
+  // Fire-and-forget — action can take 1-2 min; respond immediately so Vercel doesn't time out
+  store.convexAction('reports:backfillStats', {})
+    .then(() => console.log('[admin] backfillStats completed'))
+    .catch(err => console.error('[admin] backfillStats failed:', err.message));
+  res.json({ ok: true, message: 'Stats recompute started — takes ~1–2 minutes. Refresh the dashboard afterward.' });
+});
+
 // Export for Vercel (api/index.js imports this)
 // Also start the server when run directly (local dev)
 // ── Runtime info — lets the client know if it's talking to Vercel ────────────

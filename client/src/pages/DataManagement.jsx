@@ -232,6 +232,7 @@ export default function DataManagement({ ctx }) {
   // Purge-only loading state per event
   const [purging,     setPurging]     = useState({});
   const [isVercel,    setIsVercel]    = useState(false);
+  const [recomputing, setRecomputing] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
   useEffect(() => {
@@ -257,6 +258,19 @@ export default function DataManagement({ ctx }) {
   async function refreshStoreList() {
     const se = await api.storeEvents();
     setStoreEvents(se.data.events || []);
+  }
+
+  async function handleRecomputeStats() {
+    if (!window.confirm('Recompute all dashboard stats from the Convex results table? This takes ~1–2 minutes and fixes double-counted data after a purge+refetch.')) return;
+    setRecomputing(true);
+    try {
+      const res = await api.recomputeStats();
+      toast.success(res.data.message);
+    } catch (err) {
+      toast.error('Failed: ' + err.message);
+    } finally {
+      setRecomputing(false);
+    }
   }
 
   async function handlePurgeOnly(reg) {
@@ -466,6 +480,26 @@ export default function DataManagement({ ctx }) {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Admin: Recompute dashboard stats (fixes double-counting after purge+refetch on Vercel) */}
+      {isAdmin && isVercel && (
+        <div className="card" style={{ marginTop:20 }}>
+          <h2 style={{ marginBottom:6 }}>Recompute Dashboard Stats</h2>
+          <p style={{ color:'var(--text-3)', fontSize:12, marginBottom:14, lineHeight:1.6 }}>
+            Fixes inaccurate "This Week — Day by Day" and other dashboard charts on Vercel.
+            Purging and re-fetching an event can double-count daily registration stats — this
+            recomputes everything from the actual data in Convex. Takes ~1–2 minutes.
+          </p>
+          <button
+            disabled={recomputing}
+            onClick={handleRecomputeStats}
+            style={{ padding:'10px 20px', borderRadius:8, fontSize:13, fontWeight:700,
+              border:'1px solid #1e3a5f', cursor:recomputing?'not-allowed':'pointer',
+              background:'rgba(59,130,246,0.08)', color:'#3b82f6', opacity:recomputing?0.5:1 }}>
+            {recomputing ? '⟳ Starting recompute…' : '⟳ Recompute Stats from Convex Data'}
+          </button>
         </div>
       )}
     </div>
