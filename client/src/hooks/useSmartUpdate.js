@@ -73,7 +73,10 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
     const thisYear = new Date().getFullYear();
     const needs = [];
     for (const reg of recentRegs) {
-      if (eventYear(reg) !== thisYear) continue; // current year only
+      // Include current-year events AND any open/active events (status=1 means still
+      // accepting registrations regardless of the year in the event name/date).
+      const ey = eventYear(reg);
+      if (ey !== thisYear && ey !== thisYear - 1 && reg.status !== 1) continue;
       const stored = storedMap[String(reg.id)];
       const current = reg.resultsCompleted || 0;
       if (!stored) { needs.push(reg); continue; }

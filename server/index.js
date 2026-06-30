@@ -1043,23 +1043,37 @@ app.post('/api/store/purge', auth.requireAdmin, async (req, res) => {
 
 app.get('/api/store/events', async (req, res) => {
   const db = await store.load();
-  const byEvent = {};
-  for (const r of db.results) {
-    if (!byEvent[r.eventId]) byEvent[r.eventId] = { id: r.eventId, name: r.eventName, count: 0 };
-    byEvent[r.eventId].count++;
+
+  let events, totalResults;
+  if (store.IS_CONVEX) {
+    // db.results is always [] in Convex mode — use db.events which has full metadata
+    events = Object.values(db.events).map(ev => ({
+      id:               ev.id,
+      name:             ev.name,
+      count:            ev.resultCount    ?? 0,
+      meta:             ev,
+      resultsCompleted: ev.resultsCompleted ?? null,
+      fetchedAt:        ev.fetchedAt        ?? null,
+    })).sort((a, b) => (b.fetchedAt || '').localeCompare(a.fetchedAt || ''));
+    totalResults = db.meta.totalResults ?? 0;
+  } else {
+    const byEvent = {};
+    for (const r of db.results) {
+      if (!byEvent[r.eventId]) byEvent[r.eventId] = { id: r.eventId, name: r.eventName, count: 0 };
+      byEvent[r.eventId].count++;
+    }
+    events = Object.values(byEvent).map(ev => {
+      const meta = db.events[ev.id] || {};
+      return {
+        ...ev,
+        meta,
+        resultsCompleted: meta.resultsCompleted ?? null,
+        fetchedAt:        meta.fetchedAt        ?? null,
+      };
+    }).sort((a, b) => (b.fetchedAt || '').localeCompare(a.fetchedAt || ''));
+    totalResults = db.results.length;
   }
-  const events = Object.values(byEvent).map(ev => {
-    const meta = db.events[ev.id] || {};
-    return {
-      ...ev,
-      meta,
-      // Expose resultsCompleted at top level for easy client cross-reference
-      // with the live recentRegs list (which also has resultsCompleted from the API).
-      resultsCompleted: meta.resultsCompleted ?? null,
-      fetchedAt:        meta.fetchedAt        ?? null,
-    };
-  }).sort((a, b) => (b.fetchedAt || '').localeCompare(a.fetchedAt || ''));
-  res.json({ events, totalResults: db.results.length });
+  res.json({ events, totalResults });
 });
 
 // ── SSE — aggregation progress stream ─────────────────────────────────────────
