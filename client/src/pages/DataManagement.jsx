@@ -261,7 +261,7 @@ export default function DataManagement({ ctx }) {
   }
 
   async function handleRecomputeStats() {
-    if (!window.confirm('Recompute all dashboard stats from the Convex results table? This takes ~1–2 minutes and fixes double-counted data after a purge+refetch.')) return;
+    if (!window.confirm('Recompute per-event sync counts and dashboard stats from the actual Convex data? Fixes Smart Update skipping events that are missing rows, and double-counted daily stats. Takes ~1–2 minutes; run Smart Update afterward to pull any missing rows.')) return;
     setRecomputing(true);
     try {
       const res = await api.recomputeStats();
@@ -486,11 +486,13 @@ export default function DataManagement({ ctx }) {
       {/* Admin: Recompute dashboard stats (fixes double-counting after purge+refetch on Vercel) */}
       {isAdmin && isVercel && (
         <div className="card" style={{ marginTop:20 }}>
-          <h2 style={{ marginBottom:6 }}>Recompute Dashboard Stats</h2>
+          <h2 style={{ marginBottom:6 }}>Recompute Stats & Sync Counts</h2>
           <p style={{ color:'var(--text-3)', fontSize:12, marginBottom:14, lineHeight:1.6 }}>
-            Fixes inaccurate "This Week — Day by Day" and other dashboard charts on Vercel.
-            Purging and re-fetching an event can double-count daily registration stats — this
-            recomputes everything from the actual data in Convex. Takes ~1–2 minutes.
+            Fixes two Convex-only issues: (1) Smart Update skipping events that are actually
+            missing rows (stale/inflated per-event counts), and (2) inaccurate "This Week — Day
+            by Day" and other dashboard charts. Recomputes everything from the real data in
+            Convex. Takes ~1–2 minutes — then run <strong>Smart Update</strong> to pull any
+            rows that were missing.
           </p>
           <button
             disabled={recomputing}

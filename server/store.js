@@ -166,7 +166,7 @@ async function save(store) {
         lastUpdatedAt: now,
       });
     }
-    return;
+    return { inserted };
   }
 
   // Local FS

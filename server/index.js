@@ -1204,8 +1204,14 @@ app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), asyn
     }
 
     const PER_PAGE = 25;
+    const isConvex = store.IS_CONVEX;
+    // In Convex mode the incremental page-offset optimization is UNSAFE: db.results is
+    // always [] so we can't recompute an accurate storedCount, and an inflated/stale
+    // count makes the fetch start beyond the real data and silently miss rows (this is
+    // what left events like Chanhassen permanently 7 rows short). Convex dedups by seId
+    // on save, so re-fetching from page 1 every time is idempotent and never misses.
     const fetchPage = isFirstCall
-      ? ((!purgeFirst && !backfill && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
+      ? ((!isConvex && !purgeFirst && !backfill && storedCompleted !== null && currentCompleted > storedCompleted && storedCount > 0)
           ? Math.max(1, Math.floor(storedCount / PER_PAGE))
           : 1)
       : requestedPage;
@@ -1241,14 +1247,27 @@ app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), asyn
 
     if (!hasMore) {
       // Final page — commit everything to blob (1 write per event, not per page)
-      const added = store.upsertResults(db, String(eventId), evObj.name, allCompact, { merge: backfill });
+      const inMemAdded = store.upsertResults(db, String(eventId), evObj.name, allCompact, { merge: backfill });
+
+      // In Convex mode we always fetch from page 1, so allCompact holds EVERY row for
+      // this event — its length is the true row count and its completed subset is the
+      // true completed count. Basing the stored metadata on what we actually fetched
+      // (not on SE's claimed resultsCompleted) means a short/partial store self-heals on
+      // the next run instead of being permanently marked "synced" while rows are missing.
+      const completedInFetch = allCompact.filter(x => x.completed).length;
+      const trueTotal = isConvex ? allCompact.length : (storedCount + inMemAdded);
       store.upsertEventMeta(db, evObj, {
         fetchedAt:        new Date().toISOString(),
-        resultCount:      storedCount + added,
-        resultsCompleted: r.resultsCompleted ?? currentCompleted,
+        resultCount:      trueTotal,
+        resultsCompleted: isConvex ? completedInFetch : (r.resultsCompleted ?? currentCompleted),
       });
-      await store.save(db);
+      const saveRes = await store.save(db);
       cache.del('analytics_agg');
+
+      // Report the actual number of newly-inserted rows. In Convex mode upsertResults
+      // over-counts (db.results is empty so every fetched row looks "new"); the real
+      // insert count comes from batchUpsertResults' dedup on save.
+      const added = isConvex ? (saveRes?.inserted ?? 0) : inMemAdded;
 
       return res.json({
         added, fetched: allCompact.length, skipped: false, backfilled: backfill,
@@ -2995,14 +3014,23 @@ app.post('/api/cache/clear', auth.requireRole('admin', 'editor'), async (req, re
   res.json({ message: 'Cache cleared' });
 });
 
-// ── Recompute all dashboard stats from Convex results (fixes double-counting after purge) ──
+// ── Recompute dashboard stats + per-event counts from Convex results ──────────
+// Fixes (1) double-counted daily stats after a purge, and (2) inflated/stale
+// per-event resultCount/resultsCompleted that caused Smart Update to skip events
+// that were actually missing rows. Fire-and-forget — each action can take 1-2 min.
 app.post('/api/admin/recompute-stats', auth.requireAdmin, async (req, res) => {
   if (!store.IS_CONVEX) return res.status(400).json({ error: 'Only available when connected to Convex' });
-  // Fire-and-forget — action can take 1-2 min; respond immediately so Vercel doesn't time out
-  store.convexAction('reports:backfillStats', {})
-    .then(() => console.log('[admin] backfillStats completed'))
-    .catch(err => console.error('[admin] backfillStats failed:', err.message));
-  res.json({ ok: true, message: 'Stats recompute started — takes ~1–2 minutes. Refresh the dashboard afterward.' });
+  (async () => {
+    try {
+      const ec = await store.convexAction('reports:recomputeEventCounts', {});
+      console.log(`[admin] recomputeEventCounts completed — ${ec?.events ?? '?'} events`);
+      await store.convexAction('reports:backfillStats', {});
+      console.log('[admin] backfillStats completed');
+    } catch (err) {
+      console.error('[admin] recompute failed:', err.message);
+    }
+  })();
+  res.json({ ok: true, message: 'Recompute started — fixes event sync counts + dashboard stats. Takes ~1–2 minutes, then run Smart Update and refresh.' });
 });
 
 // Export for Vercel (api/index.js imports this)

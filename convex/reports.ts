@@ -865,3 +865,58 @@ export const backfillStats = action({
     };
   },
 });
+
+// ── Recompute per-event resultCount / resultsCompleted from actual stored rows ──
+//
+// The Express fetch-event handler used to inflate resultCount (in Convex mode
+// db.results is always [] so every fetched row looked "new") and set
+// resultsCompleted to SE's claimed number even when fewer rows were actually
+// saved. That left events permanently marked "synced" while missing rows, so
+// Smart Update skipped them forever. This resets both fields to ground truth —
+// afterward, any event where SE reports more completed than we hold will show
+// up in Smart Update again and re-fetch the missing rows.
+
+export const patchEventCounts = internalMutation({
+  args: {
+    entries: v.array(v.object({ eventId: v.string(), count: v.number(), completed: v.number() })),
+  },
+  handler: async (ctx, { entries }) => {
+    for (const { eventId, count, completed } of entries) {
+      const ev = await ctx.db
+        .query("events")
+        .withIndex("by_seId", (q) => q.eq("seId", eventId))
+        .first();
+      if (ev) await ctx.db.patch(ev._id, { resultCount: count, resultsCompleted: completed });
+    }
+  },
+});
+
+export const recomputeEventCounts = action({
+  handler: async (ctx) => {
+    const totals: Record<string, { count: number; completed: number }> = {};
+    let cursor: string | null = null;
+    let isDone = false;
+    while (!isDone) {
+      const result = await ctx.runQuery(internal.reports.resultPageInternal, {
+        paginationOpts: { cursor, numItems: 500 },
+      });
+      for (const r of result.page) {
+        const t = totals[r.eventId] ?? (totals[r.eventId] = { count: 0, completed: 0 });
+        t.count++;
+        if (r.completed) t.completed++;
+      }
+      cursor = result.continueCursor;
+      isDone = result.isDone;
+    }
+
+    const entries = Object.entries(totals).map(([eventId, t]) => ({
+      eventId,
+      count: t.count,
+      completed: t.completed,
+    }));
+    for (let i = 0; i < entries.length; i += 100) {
+      await ctx.runMutation(internal.reports.patchEventCounts, { entries: entries.slice(i, i + 100) });
+    }
+    return { events: entries.length };
+  },
+});
