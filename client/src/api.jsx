@@ -139,6 +139,10 @@ export const api = {
 
   recomputeStats: () => axios.post(`${BASE}/admin/recompute-stats`),
 
+  // ── Per-user UI preferences (server-persisted, survives devices) ──────────
+  getPref: (key)        => axios.get(`${BASE}/prefs/${encodeURIComponent(key)}`),
+  setPref: (key, value) => axios.put(`${BASE}/prefs/${encodeURIComponent(key)}`, { value: JSON.stringify(value) }),
+
   // ── Audience export (FB Audiences page) — reads straight from main store ──
   contactsPreview: (params) => axios.get(`${BASE}/contacts/preview`, { params }),
   contactsExportUrl: (params) => {

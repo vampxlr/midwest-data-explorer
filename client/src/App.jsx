@@ -159,7 +159,7 @@ export default function App() {
                   disabled={!recentRegs.length}
                 />
               </div>
-              <button className="btn-secondary" onClick={refreshData}>↺ ↺ Refresh All</button>
+              <button className="btn-secondary" onClick={refreshData}>↺ Refresh All</button>
             </div>
 
             <div className="sidebar-footer">

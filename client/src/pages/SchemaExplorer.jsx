@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../api';
+import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 
 export default function SchemaExplorer() {

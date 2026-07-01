@@ -3014,6 +3014,53 @@ app.post('/api/cache/clear', auth.requireRole('admin', 'editor'), async (req, re
   res.json({ message: 'Cache cleared' });
 });
 
+// ── Per-user UI preferences (dashboard slots etc.) ────────────────────────────
+// Convex-backed in production so selections survive devices/browsers; a local
+// JSON file in dev. Value is an opaque JSON string owned by the client.
+const PREFS_FILE = path.join(__dirname, 'data', 'prefs.json');
+function localPrefsLoad() {
+  try { return JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')) || {}; } catch { return {}; }
+}
+function localPrefsSave(obj) {
+  fs.mkdirSync(path.dirname(PREFS_FILE), { recursive: true });
+  fs.writeFileSync(PREFS_FILE, JSON.stringify(obj, null, 2));
+}
+const PREF_KEY_RE = /^[a-z0-9_-]{1,64}$/i;
+
+app.get('/api/prefs/:key', async (req, res) => {
+  const { key } = req.params;
+  if (!PREF_KEY_RE.test(key)) return res.status(400).json({ error: 'bad key' });
+  try {
+    if (store.IS_CONVEX) {
+      const value = await store.convexQuery('prefs:getPref', { userId: String(req.user.id), key });
+      return res.json({ key, value: value ?? null });
+    }
+    const all = localPrefsLoad();
+    res.json({ key, value: all[`${req.user.id}:${key}`] ?? null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/prefs/:key', async (req, res) => {
+  const { key } = req.params;
+  if (!PREF_KEY_RE.test(key)) return res.status(400).json({ error: 'bad key' });
+  const value = typeof req.body?.value === 'string' ? req.body.value : JSON.stringify(req.body?.value ?? null);
+  if (value.length > 20000) return res.status(413).json({ error: 'value too large' });
+  try {
+    if (store.IS_CONVEX) {
+      await store.convexMutation('prefs:setPref', { userId: String(req.user.id), key, value });
+      return res.json({ ok: true });
+    }
+    const all = localPrefsLoad();
+    all[`${req.user.id}:${key}`] = value;
+    localPrefsSave(all);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Recompute dashboard stats + per-event counts from Convex results ──────────
 // Fixes (1) double-counted daily stats after a purge, and (2) inflated/stale
 // per-event resultCount/resultsCompleted that caused Smart Update to skip events

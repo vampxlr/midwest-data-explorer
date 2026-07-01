@@ -5,15 +5,13 @@ import {
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 
-const COLORS = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6','#eab308','#06b6d4','#f43f5e','#84cc16'];
-
 const ChartTip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
-    <div style={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:8, padding:'10px 14px', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
-      <p style={{ color:'var(--text-2)', fontSize:12, marginBottom:4 }}>{label}</p>
+    <div style={{ background:'var(--bg-card)', border:'1px solid var(--line)', borderRadius:10, padding:'10px 14px', boxShadow:'var(--shadow-md)' }}>
+      <p style={{ color:'var(--text-2)', fontSize:12, margin:'0 0 4px' }}>{label}</p>
       {payload.map((p,i) => (
-        <p key={i} style={{ color:p.color||'var(--accent-light)', fontSize:13, fontWeight:700, margin:'2px 0' }}>
+        <p key={i} style={{ color:'var(--text-1)', fontSize:13, fontWeight:700, margin:'2px 0', fontVariantNumeric:'tabular-nums' }}>
           {p.name}: {p.value}
         </p>
       ))}
@@ -28,8 +26,9 @@ function Delta({ value, suffix='' }) {
     <span style={{
       display:'inline-flex', alignItems:'center', gap:3,
       background: up ? 'rgba(34,197,94,0.14)' : 'rgba(239,68,68,0.14)',
-      color: up ? '#22c55e' : '#ef4444',
+      color: up ? 'var(--viz-up)' : 'var(--viz-down)',
       borderRadius:20, padding:'2px 8px', fontSize:11, fontWeight:700,
+      fontVariantNumeric:'tabular-nums',
     }}>
       {up ? '▲' : '▼'} {Math.abs(value)}{suffix}
     </span>
@@ -84,7 +83,7 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
       {/* Date navigator */}
       <div className="card" style={{ marginBottom:16 }}>
         <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-          <button onClick={()=>navDay(-1)} className="btn-secondary" style={{margin:0,padding:'8px 14px',fontSize:18}}>←</button>
+          <button onClick={()=>navDay(-1)} className="btn-secondary" style={{margin:0,padding:'8px 14px',fontSize:18,width:'auto',flexShrink:0}}>←</button>
           <div style={{ flex:1, textAlign:'center' }}>
             <div style={{ fontSize:18, fontWeight:700, color:'var(--text-1)' }}>
               {fmtFull(activityDate)}
@@ -92,7 +91,7 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
             {activityDate===todayCDT() && <span className="badge badge-green" style={{fontSize:11}}>Today</span>}
           </div>
           <button onClick={()=>navDay(1)} disabled={activityDate>=todayCDT()} className="btn-secondary"
-            style={{margin:0,padding:'8px 14px',fontSize:18,opacity:activityDate>=todayCDT()?0.3:1}}>→</button>
+            style={{margin:0,padding:'8px 14px',fontSize:18,width:'auto',flexShrink:0,opacity:activityDate>=todayCDT()?0.3:1}}>→</button>
           <input type="date" value={activityDate}
             onChange={e=>{setActivityDate(e.target.value);loadActivity(e.target.value);}}
             max={todayCDT()}
@@ -108,12 +107,12 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
           <div className="grid-4" style={{ marginBottom:16 }}>
             <div className="stat-card" style={{ gridColumn:'span 1' }}>
               <div className="stat-label">Registrations This Day</div>
-              <div className="stat-value" style={{ color:'#3b82f6' }}>{activityData.total}</div>
+              <div className="stat-value" style={{ color:'var(--viz-1)' }}>{activityData.total}</div>
               <div className="stat-sub">{activityData.leagues.length} leagues active</div>
             </div>
             <div className="stat-card">
               <div className="stat-label">Week Total (Mon–Sun)</div>
-              <div className="stat-value" style={{ color:'#22c55e' }}>{activityData.weekTotal}</div>
+              <div className="stat-value" style={{ color:'var(--viz-up)' }}>{activityData.weekTotal}</div>
               <div className="stat-sub" style={{ display:'flex', alignItems:'center', gap:6 }}>
                 vs prev week&nbsp;<Delta value={activityData.weekTotal - activityData.prevWeekTotal}/>
               </div>
@@ -125,7 +124,7 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
             </div>
             <div className="stat-card">
               <div className="stat-label">Week Change</div>
-              <div className="stat-value" style={{ fontSize:28, color: activityData.weekTotal>=activityData.prevWeekTotal?'#22c55e':'#ef4444' }}>
+              <div className="stat-value" style={{ fontSize:28, color: activityData.weekTotal>=activityData.prevWeekTotal?'var(--viz-up)':'var(--viz-down)' }}>
                 {activityData.prevWeekTotal > 0
                   ? `${activityData.weekTotal>=activityData.prevWeekTotal?'+':''}${Math.round((activityData.weekTotal-activityData.prevWeekTotal)/activityData.prevWeekTotal*100)}%`
                   : '—'}
@@ -139,12 +138,12 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
             <div className="card" style={{ marginBottom:16 }}>
               <h3 style={{ marginBottom:12 }}>This Week — Day by Day</h3>
               <ResponsiveContainer width="100%" height={120}>
-                <BarChart data={activityData.weekDays.map(d=>({...d,label:fmt(d.date)}))} margin={{top:4,right:8,left:0,bottom:4}}>
-                  <XAxis dataKey="label" stroke="var(--text-5)" tick={{fill:'var(--text-3)',fontSize:11}}/>
-                  <Tooltip content={<ChartTip/>}/>
+                <BarChart data={activityData.weekDays.map(d=>({...d,label:fmt(d.date)}))} margin={{top:4,right:8,left:0,bottom:4}} barCategoryGap="18%">
+                  <XAxis dataKey="label" stroke="var(--viz-grid)" tickLine={false} tick={{fill:'var(--viz-axis)',fontSize:11}}/>
+                  <Tooltip content={<ChartTip/>} cursor={{ fill:'var(--bg-hover)' }}/>
                   <Bar dataKey="total" name="Registrations" radius={[4,4,0,0]}>
                     {activityData.weekDays.map((d,i)=>(
-                      <Cell key={i} fill={d.date===activityDate?'#3b82f6':'var(--chip-bg)'}/>
+                      <Cell key={i} fill={d.date===activityDate?'var(--viz-1)':'var(--viz-dim)'}/>
                     ))}
                   </Bar>
                 </BarChart>
@@ -186,27 +185,27 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
                         </td>
                         <td>
                           <span style={{
-                            background:COLORS[i%COLORS.length]+'22',
-                            color:COLORS[i%COLORS.length],
+                            background:'var(--chip-bg-soft)',
+                            color:'var(--viz-1)',
                             borderRadius:20, padding:'3px 12px',
-                            fontSize:14, fontWeight:700,
+                            fontSize:14, fontWeight:700, fontVariantNumeric:'tabular-nums',
                           }}>{l.count}</span>
                         </td>
                         <td style={{width:160}}>
                           <div style={{display:'flex',alignItems:'center',gap:8}}>
                             <div style={{background:'var(--surface-1)',borderRadius:4,height:8,flex:1}}>
                               <div style={{
-                                background:COLORS[i%COLORS.length],
+                                background:'var(--viz-1)',
                                 width:`${activityData.total>0?(l.count/activityData.total*100):0}%`,
                                 height:'100%',borderRadius:4,
                               }}/>
                             </div>
-                            <span style={{color:'var(--text-4)',fontSize:11,minWidth:28,textAlign:'right'}}>
+                            <span style={{color:'var(--text-4)',fontSize:11,minWidth:28,textAlign:'right',fontVariantNumeric:'tabular-nums'}}>
                               {activityData.total>0?Math.round(l.count/activityData.total*100):0}%
                             </span>
                           </div>
                         </td>
-                        <td style={{color:'#f97316',fontWeight:700}}>
+                        <td style={{color:'var(--accent-2)',fontWeight:700}}>
                           {l.gradYears?.[0]?.name||'—'}
                         </td>
                       </tr>

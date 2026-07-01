@@ -1,8 +1,8 @@
 import React from 'react';
 
 const BAR_COLOR = {
-  idle: 'var(--text-5)', planning: '#f97316', discovering: '#f97316',
-  fetching: '#3b82f6', done: '#22c55e', error: '#ef4444',
+  idle: 'var(--text-5)', planning: 'var(--accent-2)', discovering: 'var(--accent-2)',
+  fetching: 'var(--viz-1)', done: 'var(--viz-up)', error: 'var(--viz-down)',
 };
 
 // Quick-glance header: just a button + thin progress bar. Pairs with
@@ -33,7 +33,7 @@ export default function SmartUpdateBar({ running, phase, pct, current, total, ad
           <div style={{ background:'var(--surface-1)', borderRadius:8, height:8, overflow:'hidden' }}>
             <div style={{
               width:`${running ? pct : (phase==='done' ? 100 : 0)}%`, height:'100%', borderRadius:8,
-              background: phase==='done' && !running ? '#22c55e' : barColor, transition:'width 0.4s ease',
+              background: phase==='done' && !running ? 'var(--viz-up)' : barColor, transition:'width 0.4s ease',
             }}/>
           </div>
         </div>
@@ -49,7 +49,7 @@ export default function SmartUpdateBar({ running, phase, pct, current, total, ad
         <div style={{ marginTop:6, fontSize:11, color:'var(--text-4)' }}>
           {skipped>0 && <span>{skipped} skipped</span>}
           {skipped>0 && errors>0 && <span> · </span>}
-          {errors>0 && <span style={{color:'#ef4444'}}>{errors} errors</span>}
+          {errors>0 && <span style={{color:'var(--viz-down)'}}>{errors} errors</span>}
         </div>
       )}
     </div>

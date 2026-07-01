@@ -13,18 +13,23 @@ const STORAGE_KEY   = 'mw3-dashboard-yoy-slots';
 
 const emptySlot = () => ({ currentId: '', priorId: '' });
 
+const PREF_KEY = 'yoy-slots';
+
+function normalizeState(parsed) {
+  // Legacy format was a plain array of slots (always 5) — migrate gracefully.
+  if (Array.isArray(parsed)) {
+    const count = Math.min(MAX_SLOTS, Math.max(parsed.length, DEFAULT_COUNT));
+    return { count, slots: Array.from({ length: count }, (_, i) => parsed[i] || emptySlot()) };
+  }
+  const count = Math.min(MAX_SLOTS, Math.max(1, parsed?.count || DEFAULT_COUNT));
+  return { count, slots: Array.from({ length: count }, (_, i) => (parsed?.slots && parsed.slots[i]) || emptySlot()) };
+}
+
 function loadSaved() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { count: DEFAULT_COUNT, slots: Array.from({ length: DEFAULT_COUNT }, emptySlot) };
-    const parsed = JSON.parse(raw);
-    // Legacy format was a plain array of slots (always 5) — migrate gracefully.
-    if (Array.isArray(parsed)) {
-      const count = Math.min(MAX_SLOTS, Math.max(parsed.length, DEFAULT_COUNT));
-      return { count, slots: Array.from({ length: count }, (_, i) => parsed[i] || emptySlot()) };
-    }
-    const count = Math.min(MAX_SLOTS, Math.max(1, parsed.count || DEFAULT_COUNT));
-    return { count, slots: Array.from({ length: count }, (_, i) => (parsed.slots && parsed.slots[i]) || emptySlot()) };
+    return normalizeState(JSON.parse(raw));
   } catch {
     return { count: DEFAULT_COUNT, slots: Array.from({ length: DEFAULT_COUNT }, emptySlot) };
   }
@@ -104,8 +109,9 @@ function PairChart({ currentEv, priorEv }) {
         {!loading && (
           <span style={{
             flexShrink:0, fontSize:12, fontWeight:700, borderRadius:14, padding:'2px 9px',
+            fontVariantNumeric:'tabular-nums',
             background: delta>=0 ? 'rgba(34,197,94,0.14)' : 'rgba(239,68,68,0.14)',
-            color: delta>=0 ? '#22c55e' : '#ef4444',
+            color: delta>=0 ? 'var(--viz-up)' : 'var(--viz-down)',
           }}>
             {delta>=0?'▲':'▼'} {Math.abs(delta)}
           </span>
@@ -117,24 +123,24 @@ function PairChart({ currentEv, priorEv }) {
       {!loading && chartData.length > 0 && (
         <ResponsiveContainer width="100%" height={140}>
           <ComposedChart data={chartData} margin={{ top:4, right:8, left:0, bottom:0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-1)" />
-            <XAxis dataKey="label" stroke="var(--text-5)" tick={{ fill:'var(--text-4)', fontSize:9 }}
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--viz-grid)" vertical={false} />
+            <XAxis dataKey="label" stroke="var(--viz-grid)" tickLine={false} tick={{ fill:'var(--viz-axis)', fontSize:9 }}
               interval={Math.max(1, Math.floor(chartData.length/6))} />
-            <YAxis stroke="var(--text-5)" tick={{ fill:'var(--text-4)', fontSize:9 }} width={28} />
-            <Tooltip contentStyle={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:6, fontSize:11 }} />
+            <YAxis stroke="transparent" tickLine={false} tick={{ fill:'var(--viz-axis)', fontSize:9 }} width={28} />
+            <Tooltip contentStyle={{ background:'var(--bg-card)', border:'1px solid var(--line)', borderRadius:10, fontSize:11, boxShadow:'var(--shadow-md)' }} />
             {asOfYesterday && (
-              <ReferenceLine x={asOfYesterday.label} stroke="#f97316" strokeDasharray="3 3"
-                label={{ value:'Yesterday', position:'insideTopRight', fill:'#f97316', fontSize:9 }} />
+              <ReferenceLine x={asOfYesterday.label} stroke="var(--accent-2)" strokeDasharray="3 3"
+                label={{ value:'Yesterday', position:'insideTopRight', fill:'var(--accent-2)', fontSize:9 }} />
             )}
-            <Line type="monotone" dataKey="cumA" name="Selected" stroke="#3b82f6" strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--text-4)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
+            <Line type="monotone" dataKey="cumA" name="Selected" stroke="var(--viz-1)" strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--viz-muted)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
           </ComposedChart>
         </ResponsiveContainer>
       )}
 
       {!loading && (
-        <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)' }}>
-          <span>Through today: <strong style={{ color:'#3b82f6' }}>{totalA}</strong></span>
+        <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)', fontVariantNumeric:'tabular-nums' }}>
+          <span>Through today: <strong style={{ color:'var(--viz-1)' }}>{totalA}</strong></span>
           <span>Same day last yr: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
         </div>
       )}
@@ -143,11 +149,37 @@ function PairChart({ currentEv, priorEv }) {
 }
 
 export default function LeagueYoyCompare({ recentRegs = [] }) {
+  // localStorage paints instantly; the server copy is the source of truth so
+  // selections survive across devices, browsers, and localhost vs production.
   const [state, setState] = useState(loadSaved);
   const { count, slots } = state;
+  const hydratedRef = React.useRef(false);
+  const saveTimerRef = React.useRef(null);
 
+  // Hydrate from the server once on mount — server wins over the local cache.
+  useEffect(() => {
+    let cancelled = false;
+    api.getPref(PREF_KEY).then(res => {
+      if (cancelled || !res.data?.value) { hydratedRef.current = true; return; }
+      try {
+        const server = normalizeState(JSON.parse(res.data.value));
+        const hasContent = server.slots.some(s => s.currentId);
+        if (hasContent) setState(server);
+      } catch {}
+      hydratedRef.current = true;
+    }).catch(() => { hydratedRef.current = true; });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Persist on change: localStorage immediately, server debounced 800ms.
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (!hydratedRef.current) return; // don't echo the initial cache back over the server copy
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      api.setPref(PREF_KEY, state).catch(() => {});
+    }, 800);
+    return () => clearTimeout(saveTimerRef.current);
   }, [state]);
 
   function setCount(newCount) {

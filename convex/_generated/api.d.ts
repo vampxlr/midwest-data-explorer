@@ -10,6 +10,7 @@
 
 import type * as contacts from "../contacts.js";
 import type * as events from "../events.js";
+import type * as prefs from "../prefs.js";
 import type * as reports from "../reports.js";
 import type * as results from "../results.js";
 import type * as seed from "../seed.js";
@@ -25,6 +26,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   contacts: typeof contacts;
   events: typeof events;
+  prefs: typeof prefs;
   reports: typeof reports;
   results: typeof results;
   seed: typeof seed;

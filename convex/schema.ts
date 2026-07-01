@@ -114,4 +114,13 @@ export default defineSchema({
     createdAt: v.string(),
     lastLoginAt: v.optional(v.string()),
   }).index("by_userId", ["userId"]).index("by_username", ["username"]),
+
+  // Per-user UI preferences (dashboard slot selections etc.) — survives
+  // devices/browsers, unlike localStorage.
+  preferences: defineTable({
+    userId: v.string(),
+    key: v.string(),
+    value: v.string(),          // JSON-encoded payload
+    updatedAt: v.string(),
+  }).index("by_user_key", ["userId", "key"]),
 });

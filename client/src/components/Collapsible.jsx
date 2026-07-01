@@ -19,8 +19,9 @@ export default function Collapsible({ title, subtitle, defaultOpen = false, badg
           </h3>
           {subtitle && <p style={{ margin:'2px 0 0', fontSize:12, color:'var(--text-4)' }}>{subtitle}</p>}
         </div>
-        <span style={{ fontSize:13, color:'var(--text-4)', flexShrink:0, marginLeft:12 }}>
-          {open ? '▲ Collapse' : '▼ Expand'}
+        <span style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-4)', flexShrink:0, marginLeft:12 }}>
+          {open ? 'Collapse' : 'Expand'}
+          <span style={{ display:'inline-block', transition:'transform 0.18s ease', transform: open ? 'rotate(180deg)' : 'none', fontSize:10 }}>▼</span>
         </span>
       </button>
       {open && <div style={{ marginTop:14 }}>{children}</div>}
