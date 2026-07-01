@@ -445,6 +445,33 @@ select.field-input, .filter-group select { cursor: pointer; }
 .chart-container { width:100%; }
 .section-divider { border:none; border-top:1px solid var(--border-sub); margin:16px 0; }
 
+/* ── Spotlight glow card ────────────────────────────────────────────────────── */
+/* Border ring + soft interior wash that follow the cursor. --mx/--my are set
+   from a mousemove handler directly on the element (no React re-renders). */
+.glow-card { position: relative; --mx: 50%; --my: 50%; }
+.glow-card::before {
+  content:''; position:absolute; inset:-1px; border-radius:inherit; pointer-events:none;
+  padding:1.5px;
+  background:
+    radial-gradient(240px circle at var(--mx) var(--my),
+      rgba(59,130,246,0.9), rgba(249,115,22,0.45) 45%, transparent 70%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+          mask-composite: exclude;
+  opacity:0; transition: opacity 0.3s ease;
+  z-index: 1;
+}
+.glow-card::after {
+  content:''; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background: radial-gradient(320px circle at var(--mx) var(--my), rgba(59,130,246,0.07), transparent 62%);
+  opacity:0; transition: opacity 0.3s ease;
+}
+.glow-card:hover::before, .glow-card:hover::after { opacity:1; }
+@media (prefers-reduced-motion: reduce) {
+  .glow-card::before, .glow-card::after { transition: none; }
+}
+
 /* Subtle fade-in for page mounts */
 @keyframes fadeUp { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
 .main-content > * { animation: fadeUp 0.25s ease both; }

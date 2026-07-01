@@ -54,10 +54,20 @@ function fmtFull(dateStr) {
 
 // Identical to Reports' "Daily Activity" tab — which leagues registered
 // today/any day — extracted so it can be reused at the top of the Dashboard.
+// Track the cursor for the .glow-card spotlight border — writes CSS vars
+// straight onto the element so mousemove never triggers a React render.
+function glowMove(e) {
+  const el = e.currentTarget;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty('--mx', `${e.clientX - r.left}px`);
+  el.style.setProperty('--my', `${e.clientY - r.top}px`);
+}
+
 export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
   const [activityDate, setActivityDate] = useState(todayCDT());
   const [activityData, setActivityData] = useState(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [hoverBar, setHoverBar] = useState(-1);
 
   useEffect(() => { loadActivity(activityDate); }, [refreshToken]);
 
@@ -133,18 +143,37 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
             </div>
           </div>
 
-          {/* Week sparkline */}
+          {/* Week sparkline — glow border follows the cursor; bars glow on hover
+              and clicking a bar jumps to that day */}
           {activityData.weekDays?.length > 0 && (
-            <div className="card" style={{ marginBottom:16 }}>
-              <h3 style={{ marginBottom:12 }}>This Week — Day by Day</h3>
-              <ResponsiveContainer width="100%" height={120}>
-                <BarChart data={activityData.weekDays.map(d=>({...d,label:fmt(d.date)}))} margin={{top:4,right:8,left:0,bottom:4}} barCategoryGap="18%">
+            <div className="card glow-card" style={{ marginBottom:16 }} onMouseMove={glowMove} onMouseLeave={()=>setHoverBar(-1)}>
+              <h3 style={{ marginBottom:2 }}>This Week — Day by Day</h3>
+              <p style={{ margin:'0 0 10px', fontSize:11, color:'var(--text-4)' }}>Click a bar to jump to that day</p>
+              <ResponsiveContainer width="100%" height={130}>
+                <BarChart data={activityData.weekDays.map(d=>({...d,label:fmt(d.date)}))} margin={{top:8,right:8,left:0,bottom:4}} barCategoryGap="18%">
                   <XAxis dataKey="label" stroke="var(--viz-grid)" tickLine={false} tick={{fill:'var(--viz-axis)',fontSize:11}}/>
                   <Tooltip content={<ChartTip/>} cursor={{ fill:'var(--bg-hover)' }}/>
-                  <Bar dataKey="total" name="Registrations" radius={[4,4,0,0]}>
-                    {activityData.weekDays.map((d,i)=>(
-                      <Cell key={i} fill={d.date===activityDate?'var(--viz-1)':'var(--viz-dim)'}/>
-                    ))}
+                  <Bar dataKey="total" name="Registrations" radius={[4,4,0,0]}
+                    onMouseEnter={(_, i)=>setHoverBar(i)}
+                    onMouseLeave={()=>setHoverBar(-1)}
+                    onClick={(d)=>{ const date = d?.payload?.date; if (date && date <= todayCDT()) { setActivityDate(date); loadActivity(date); } }}>
+                    {activityData.weekDays.map((d,i)=>{
+                      const isSelected = d.date===activityDate;
+                      const isHovered  = i===hoverBar;
+                      return (
+                        <Cell key={i}
+                          fill={isSelected ? 'var(--viz-1)' : isHovered ? 'var(--viz-1)' : 'var(--viz-dim)'}
+                          fillOpacity={isSelected ? 1 : isHovered ? 0.75 : 1}
+                          style={{
+                            cursor: d.date <= todayCDT() ? 'pointer' : 'default',
+                            filter: (isSelected || isHovered)
+                              ? 'drop-shadow(0 0 7px rgba(59,130,246,0.75)) drop-shadow(0 0 18px rgba(59,130,246,0.3))'
+                              : 'none',
+                            transition: 'filter 0.2s ease, fill-opacity 0.2s ease',
+                          }}
+                        />
+                      );
+                    })}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
