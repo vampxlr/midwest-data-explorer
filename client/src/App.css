@@ -297,15 +297,8 @@ button, select, input, textarea { font-family: inherit; }
   border-radius: var(--radius-lg); padding: 18px 20px;
   box-shadow: var(--shadow-sm);
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  overflow: hidden;
-}
-.stat-card::before {
-  content:''; position:absolute; inset:0 0 auto 0; height:2px;
-  background: linear-gradient(90deg, var(--accent) 0%, transparent 70%);
-  opacity: 0; transition: opacity 0.15s ease;
 }
 .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--border); }
-.stat-card:hover::before { opacity: 0.8; }
 .stat-card .stat-label {
   font-size: 10px; color: var(--text-3);
   text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;
@@ -445,11 +438,12 @@ select.field-input, .filter-group select { cursor: pointer; }
 .chart-container { width:100%; }
 .section-divider { border:none; border-top:1px solid var(--border-sub); margin:16px 0; }
 
-/* ── Spotlight glow card ────────────────────────────────────────────────────── */
-/* Border ring + soft interior wash that follow the cursor. --mx/--my are set
-   from a mousemove handler directly on the element (no React re-renders). */
-.glow-card { position: relative; --mx: 50%; --my: 50%; }
-.glow-card::before {
+/* ── Spotlight glow panels ──────────────────────────────────────────────────── */
+/* Every card gets a border ring + soft interior wash that follow the cursor.
+   --mx/--my are written by ONE delegated mousemove listener in App.jsx (no
+   React re-renders, no per-component wiring). Only the hovered card lights. */
+.card, .stat-card, .glow-card { position: relative; --mx: 50%; --my: 50%; }
+.card::before, .stat-card::before, .glow-card::before {
   content:''; position:absolute; inset:-1px; border-radius:inherit; pointer-events:none;
   padding:1.5px;
   background:
@@ -462,13 +456,17 @@ select.field-input, .filter-group select { cursor: pointer; }
   opacity:0; transition: opacity 0.3s ease;
   z-index: 1;
 }
-.glow-card::after {
+.card::after, .stat-card::after, .glow-card::after {
   content:''; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
   background: radial-gradient(320px circle at var(--mx) var(--my), rgba(59,130,246,0.07), transparent 62%);
   opacity:0; transition: opacity 0.3s ease;
 }
+.card:hover::before, .card:hover::after,
+.stat-card:hover::before, .stat-card:hover::after,
 .glow-card:hover::before, .glow-card:hover::after { opacity:1; }
 @media (prefers-reduced-motion: reduce) {
+  .card::before, .card::after,
+  .stat-card::before, .stat-card::after,
   .glow-card::before, .glow-card::after { transition: none; }
 }
 

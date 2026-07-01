@@ -54,15 +54,6 @@ function fmtFull(dateStr) {
 
 // Identical to Reports' "Daily Activity" tab — which leagues registered
 // today/any day — extracted so it can be reused at the top of the Dashboard.
-// Track the cursor for the .glow-card spotlight border — writes CSS vars
-// straight onto the element so mousemove never triggers a React render.
-function glowMove(e) {
-  const el = e.currentTarget;
-  const r = el.getBoundingClientRect();
-  el.style.setProperty('--mx', `${e.clientX - r.left}px`);
-  el.style.setProperty('--my', `${e.clientY - r.top}px`);
-}
-
 export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
   const [activityDate, setActivityDate] = useState(todayCDT());
   const [activityData, setActivityData] = useState(null);
@@ -146,7 +137,7 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
           {/* Week sparkline — glow border follows the cursor; bars glow on hover
               and clicking a bar jumps to that day */}
           {activityData.weekDays?.length > 0 && (
-            <div className="card glow-card" style={{ marginBottom:16 }} onMouseMove={glowMove} onMouseLeave={()=>setHoverBar(-1)}>
+            <div className="card" style={{ marginBottom:16 }} onMouseLeave={()=>setHoverBar(-1)}>
               <h3 style={{ marginBottom:2 }}>This Week — Day by Day</h3>
               <p style={{ margin:'0 0 10px', fontSize:11, color:'var(--text-4)' }}>Click a bar to jump to that day</p>
               <ResponsiveContainer width="100%" height={130}>

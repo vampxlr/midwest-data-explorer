@@ -42,6 +42,22 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  // Cursor-tracking spotlight glow for ALL panels: one delegated listener
+  // writes --mx/--my onto the hovered card so the CSS border ring + interior
+  // wash (see .card::before/::after in App.css) follow the mouse. Writing
+  // style props directly avoids any React re-renders on mousemove.
+  useEffect(() => {
+    function onMove(e) {
+      const el = e.target?.closest?.('.card, .stat-card, .glow-card');
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      el.style.setProperty('--mx', `${e.clientX - r.left}px`);
+      el.style.setProperty('--my', `${e.clientY - r.top}px`);
+    }
+    document.addEventListener('mousemove', onMove, { passive: true });
+    return () => document.removeEventListener('mousemove', onMove);
+  }, []);
+
   function toggleTheme() {
     setTheme(t => t === 'dark' ? 'light' : 'dark');
   }
