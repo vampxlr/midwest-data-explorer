@@ -14,6 +14,7 @@ import type * as reports from "../reports.js";
 import type * as results from "../results.js";
 import type * as seed from "../seed.js";
 import type * as serverSync from "../serverSync.js";
+import type * as users from "../users.js";
 
 import type {
   ApiFromModules,
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   results: typeof results;
   seed: typeof seed;
   serverSync: typeof serverSync;
+  users: typeof users;
 }>;
 
 /**
