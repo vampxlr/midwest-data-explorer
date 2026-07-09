@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { Toaster, toast } from 'react-hot-toast';
 import Dashboard    from './pages/Dashboard.jsx';
 import Analytics    from './pages/Analytics.jsx';
@@ -135,6 +135,47 @@ export default function App() {
       : <Landing onSignIn={() => setShowLogin(true)} />;
   }
 
+  // ── Super admin standalone dashboard ─────────────────────────────────────
+  // A superadmin who hasn't entered an organization gets a completely
+  // separate shell: no SportsEngine boot sequence, no org sidebar. The boot
+  // log only runs after clicking "Enter Data Explorer →" on an org.
+  if (isSuperAdmin && !getActiveOrg()) {
+    return (
+      <>
+        <Toaster position="top-right" toastOptions={{
+          style: { background:'var(--bg-card)', color:'var(--text-1)', border:'1px solid var(--border)' }
+        }} />
+        <div style={{ minHeight:'100vh', background:'var(--bg-base)' }}>
+          <header style={{
+            display:'flex', alignItems:'center', justifyContent:'space-between', gap:12,
+            padding:'14px clamp(16px, 4vw, 40px)', borderBottom:'1px solid var(--border-sub)',
+            background:'var(--bg-card)', position:'sticky', top:0, zIndex:100,
+          }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <span style={{ fontSize:22 }}>👑</span>
+              <div>
+                <div style={{ fontSize:14, fontWeight:800, color:'#a855f7', letterSpacing:'-0.3px' }}>Super Admin</div>
+                <div style={{ fontSize:10, color:'var(--text-4)', textTransform:'uppercase', letterSpacing:'0.3px' }}>Platform Control</div>
+              </div>
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <button className="theme-toggle" onClick={toggleTheme} title="Switch theme">
+                <span>{theme === 'dark' ? '🌙' : '☀️'}</span>
+              </button>
+              <span style={{ fontSize:12, color:'var(--text-3)' }}>{user.username}</span>
+              <button className="btn-secondary" style={{ width:'auto', margin:0, padding:'6px 12px' }} onClick={logout}>
+                Sign out
+              </button>
+            </div>
+          </header>
+          <main style={{ maxWidth:1100, margin:'0 auto', padding:'28px clamp(14px, 3vw, 32px) 60px' }}>
+            <SuperAdmin />
+          </main>
+        </div>
+      </>
+    );
+  }
+
   return (
     <BrowserRouter>
       <Toaster position="top-right" toastOptions={{
@@ -169,9 +210,10 @@ export default function App() {
             <div className="nav-section">
               <div className="nav-label">Navigation</div>
               {isSuperAdmin && (
-                <NavLink to="/superadmin" onClick={()=>{ setNavOpen(false); sessionStorage.removeItem('mw3-active-org'); }} className="nav-item" style={{ color:'#a855f7' }}>
+                <button onClick={exitActiveOrg} className="nav-item"
+                  style={{ color:'#a855f7', width:'100%', background:'none', border:'none', cursor:'pointer', font:'inherit', textAlign:'left' }}>
                   <span>👑</span> Super Admin Panel
-                </NavLink>
+                </button>
               )}
               <NavLink to="/"           end onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📊</span> Dashboard</NavLink>
               <NavLink to="/reports"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📅</span> Reports</NavLink>
@@ -263,11 +305,7 @@ export default function App() {
 
           <main className="main-content">
             <Routes>
-              <Route path="/" element={
-                isSuperAdmin && !getActiveOrg()
-                  ? <Navigate to="/superadmin" replace />
-                  : <Dashboard ctx={ctx} />
-              } />
+              <Route path="/"              element={<Dashboard     ctx={ctx} />} />
               <Route path="/analytics"     element={<Analytics     ctx={ctx} />} />
               <Route path="/reports"       element={<Reports       ctx={ctx} />} />
               <Route path="/audiences"     element={<Audiences     ctx={ctx} />} />
@@ -276,7 +314,6 @@ export default function App() {
               <Route path="/schema"        element={<SchemaExplorer />} />
               <Route path="/data"          element={<DataManagement ctx={ctx} />} />
               {(user.role === 'admin' || isSuperAdmin) && <Route path="/users" element={<Users />} />}
-              {isSuperAdmin && <Route path="/superadmin" element={<SuperAdmin />} />}
               <Route path="/guide"         element={<Guide />} />
             </Routes>
           </main>
