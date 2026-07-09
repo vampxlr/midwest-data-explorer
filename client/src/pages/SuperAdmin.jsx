@@ -101,10 +101,33 @@ const emptyOrg = () => ({
   status:'beta', subscriptionStatus:'beta', notes:'',
 });
 
+function CredentialGuide() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ margin:'4px 0 14px' }}>
+      <button onClick={() => setOpen(v => !v)}
+        style={{ background:'none', border:'none', cursor:'pointer', fontSize:12, fontWeight:600, color:'var(--accent-light)', padding:0 }}>
+        {open ? '▾' : '▸'} How to get SportsEngine credentials
+      </button>
+      {open && (
+        <ol style={{ fontSize:12, color:'var(--text-3)', lineHeight:1.8, margin:'8px 0 0', paddingLeft:20 }}>
+          <li>Sign in to <strong>SportsEngine HQ</strong> as the organization owner.</li>
+          <li>Contact SportsEngine support (or your account rep) and request <strong>API access / OAuth client credentials</strong> for your organization.</li>
+          <li>They will issue a <strong>Client ID</strong> and <strong>Client Secret</strong> tied to your organization ID.</li>
+          <li>Paste both below, then click <strong>Verify & Lock</strong> — we test them live against SportsEngine, show you the organization name they belong to, then encrypt and lock them (they can never be viewed again).</li>
+          <li>After verification, the initial data import runs — it can take a few minutes for large organizations; you can leave the page and come back.</li>
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function OrgEditor({ org, onSaved, onCancel }) {
   const [o, setO] = useState(org);
   const [saving, setSaving] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const upd = patch => setO(prev => ({ ...prev, ...patch }));
+  const locked = !!o.lockedAt;
 
   async function save() {
     if (!o.name.trim()) { toast.error('Organization name is required'); return; }
@@ -117,8 +140,31 @@ function OrgEditor({ org, onSaved, onCancel }) {
     finally { setSaving(false); }
   }
 
+  async function verify() {
+    if (!o.name.trim()) { toast.error('Organization name is required'); return; }
+    setVerifying(true);
+    try {
+      // Persist current fields first so verify sees them
+      await api.saveOrg(o.orgKey, o);
+      const r = await api.verifyOrg(o.orgKey, { seClientId: o.seClientId, seClientSecret: o.seClientSecret });
+      toast.success(`✓ Verified with SportsEngine${r.data.seName ? ` — "${r.data.seName}"` : ''}. Credentials encrypted & locked.`);
+      onSaved();
+    } catch (err) {
+      const d = err.response?.data;
+      toast.error(d?.detail ? `${d.error}: ${d.detail}` : (d?.error || err.message));
+    } finally { setVerifying(false); }
+  }
+
   return (
     <div style={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:12, padding:16, marginBottom:14 }}>
+      <CredentialGuide />
+      {locked && (
+        <div style={{ marginBottom:12, padding:'8px 12px', borderRadius:8, fontSize:12, fontWeight:600,
+          background:'rgba(34,197,94,0.1)', border:'1px solid rgba(34,197,94,0.3)', color:'var(--viz-up)' }}>
+          🔒 Credentials verified{o.verifiedOrgName ? ` for "${o.verifiedOrgName}"` : ''} and locked
+          {o.lockedAt ? ` on ${new Date(o.lockedAt).toLocaleDateString()}` : ''} — enter a new secret and re-verify to replace them.
+        </div>
+      )}
       <div className="grid-2" style={{ gap:12 }}>
         <Field label="Organization name *">
           <input className="field-input" style={inputStyle} value={o.name} onChange={e => upd({ name: e.target.value })} autoFocus />
@@ -145,8 +191,12 @@ function OrgEditor({ org, onSaved, onCancel }) {
           <input className="field-input" style={inputStyle} value={o.notes || ''} onChange={e => upd({ notes: e.target.value })} />
         </Field>
       </div>
-      <div style={{ display:'flex', gap:8 }}>
-        <button className="btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save organization'}</button>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+        <button className="btn-primary" onClick={save} disabled={saving || verifying}>{saving ? 'Saving…' : 'Save organization'}</button>
+        <button className="btn-action-green" onClick={verify} disabled={saving || verifying}
+          title="Tests the credentials live against SportsEngine, then encrypts and locks them">
+          {verifying ? 'Verifying with SportsEngine…' : locked ? '🔒 Verify & Replace credentials' : '✓ Verify & Lock credentials'}
+        </button>
         <button className="btn-chart" onClick={onCancel}>Cancel</button>
       </div>
     </div>
@@ -197,12 +247,29 @@ function OrgsPanel() {
             <tbody>
               {orgs.map(o => (
                 <tr key={o.orgKey}>
-                  <td style={{ color:'var(--text-1)', fontWeight:600 }}>{o.name}</td>
+                  <td style={{ color:'var(--text-1)', fontWeight:600 }}>
+                    {o.name}
+                    {o.verifiedOrgName && <div style={{ fontSize:10, color:'var(--text-4)', fontWeight:400 }}>SE: {o.verifiedOrgName}</div>}
+                  </td>
                   <td>{o.seOrgId || '—'}</td>
-                  <td>{o.seClientId ? <span className="badge badge-green">configured</span> : <span className="badge badge-orange">missing</span>}</td>
+                  <td>
+                    {o.verified
+                      ? <span className="badge badge-green">🔒 verified</span>
+                      : o.hasCredentials
+                        ? <span className="badge badge-blue">unverified</span>
+                        : <span className="badge badge-orange">missing</span>}
+                  </td>
                   <td><span className={`badge ${o.status === 'active' ? 'badge-green' : o.status === 'suspended' ? 'badge-orange' : 'badge-blue'}`}>{o.status}</span></td>
                   <td style={{ fontSize:12, color:'var(--text-3)' }}>{o.subscriptionStatus || 'beta'}</td>
                   <td style={{ whiteSpace:'nowrap' }}>
+                    <button className="btn-primary" style={{ marginRight:6, padding:'6px 14px', fontSize:12 }}
+                      onClick={() => {
+                        sessionStorage.setItem('mw3-active-org', JSON.stringify({ orgKey: o.orgKey, name: o.name }));
+                        window.location.href = '/';
+                      }}
+                      title="Open this organization's reporting system">
+                      Enter →
+                    </button>
                     <button className="btn-chart" style={{ marginRight:6 }} onClick={() => setEditing(o)}>Edit</button>
                     <button onClick={() => remove(o)}
                       style={{ background:'none', border:'1px solid rgba(239,68,68,0.35)', color:'var(--danger-text)', borderRadius:999, padding:'6px 12px', fontSize:12, fontWeight:600, cursor:'pointer' }}>

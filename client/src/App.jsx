@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { Toaster, toast } from 'react-hot-toast';
 import Dashboard    from './pages/Dashboard.jsx';
 import Analytics    from './pages/Analytics.jsx';
@@ -22,6 +22,16 @@ import { isDemoMode, setDemoMode, maskDeep } from './demoMask.js';
 import './App.css';
 
 const ORG_ID = '8008';
+
+// Super admin "Enter organization" context — set by the Super Admin panel.
+// Until Phase B (per-org data), every org opens the default dataset.
+export function getActiveOrg() {
+  try { return JSON.parse(sessionStorage.getItem('mw3-active-org') || 'null'); } catch { return null; }
+}
+export function exitActiveOrg() {
+  sessionStorage.removeItem('mw3-active-org');
+  window.location.href = '/superadmin';
+}
 
 function getInitialTheme() {
   const saved = localStorage.getItem('theme');
@@ -250,8 +260,32 @@ export default function App() {
           </nav>
 
           <main className="main-content">
+            {/* Super admin viewing a customer org — banner + exit */}
+            {isSuperAdmin && getActiveOrg() && (
+              <div style={{
+                display:'flex', alignItems:'center', justifyContent:'space-between', gap:12,
+                marginBottom:16, padding:'10px 16px', borderRadius:10,
+                background:'rgba(168,85,247,0.10)', border:'1px solid rgba(168,85,247,0.35)',
+              }}>
+                <span style={{ fontSize:13, fontWeight:600, color:'#a855f7' }}>
+                  👑 Viewing as Super Admin: <strong>{getActiveOrg().name}</strong>
+                  <span style={{ fontWeight:400, color:'var(--text-3)', marginLeft:8, fontSize:12 }}>
+                    (shows default data until per-org fetching ships)
+                  </span>
+                </span>
+                <button onClick={exitActiveOrg}
+                  style={{ padding:'5px 14px', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer',
+                    border:'1px solid rgba(168,85,247,0.5)', background:'transparent', color:'#a855f7' }}>
+                  ← Exit to panel
+                </button>
+              </div>
+            )}
             <Routes>
-              <Route path="/"              element={<Dashboard     ctx={ctx} />} />
+              <Route path="/" element={
+                isSuperAdmin && !getActiveOrg()
+                  ? <Navigate to="/superadmin" replace />
+                  : <Dashboard ctx={ctx} />
+              } />
               <Route path="/analytics"     element={<Analytics     ctx={ctx} />} />
               <Route path="/reports"       element={<Reports       ctx={ctx} />} />
               <Route path="/audiences"     element={<Audiences     ctx={ctx} />} />

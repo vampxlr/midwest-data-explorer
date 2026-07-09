@@ -43,10 +43,15 @@ export const listOrgs = query({
 export const upsertOrg = mutation({
   args: {
     orgKey: v.string(),
+    accountKey: v.optional(v.string()),
     name: v.string(),
     seOrgId: v.optional(v.string()),
     seClientId: v.optional(v.string()),
     seClientSecret: v.optional(v.string()),
+    seClientSecretEnc: v.optional(v.string()),
+    verified: v.optional(v.boolean()),
+    verifiedOrgName: v.optional(v.string()),
+    lockedAt: v.optional(v.string()),
     status: v.string(),
     plan: v.optional(v.string()),
     stripeCustomerId: v.optional(v.string()),

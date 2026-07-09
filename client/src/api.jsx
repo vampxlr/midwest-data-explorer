@@ -156,6 +156,7 @@ export const api = {
   listOrgs:  ()            => axios.get(`${BASE}/admin/orgs`),
   saveOrg:   (orgKey, body)=> axios.put(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`, body),
   deleteOrg: (orgKey)      => axios.delete(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`),
+  verifyOrg: (orgKey, body)=> axios.post(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}/verify`, body || {}),
 
   // ── Per-user UI preferences (server-persisted, survives devices) ──────────
   getPref: (key)        => axios.get(`${BASE}/prefs/${encodeURIComponent(key)}`),

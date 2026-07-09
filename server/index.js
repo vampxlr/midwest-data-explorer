@@ -3223,10 +3223,48 @@ app.put('/api/site-settings', auth.requireAuth, auth.requireRole('superadmin'), 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Organizations registry — SE credentials stored for future multi-tenant use.
-// Secrets are write-only: list responses mask seClientSecret.
+// Organizations registry — SE credentials verified live against SportsEngine,
+// then encrypted at rest (AES-256-GCM, key only in server env) and locked.
+// Secrets are write-only: responses never include plaintext OR ciphertext.
+const cryptoLib = require('crypto');
+function encryptSecret(plain) {
+  const key = Buffer.from(process.env.ENCRYPTION_KEY || '', 'hex');
+  if (key.length !== 32) throw new Error('ENCRYPTION_KEY missing or invalid (need 64 hex chars)');
+  const iv = cryptoLib.randomBytes(12);
+  const cipher = cryptoLib.createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  return `${iv.toString('hex')}:${cipher.getAuthTag().toString('hex')}:${enc.toString('hex')}`;
+}
+function decryptSecret(blob) {
+  const key = Buffer.from(process.env.ENCRYPTION_KEY || '', 'hex');
+  const [iv, tag, data] = String(blob).split(':').map(h => Buffer.from(h, 'hex'));
+  const decipher = cryptoLib.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+}
 function maskOrgSecret(o) {
-  return { ...o, seClientSecret: o.seClientSecret ? '••••••••' : '' };
+  const { seClientSecret, seClientSecretEnc, ...rest } = o;
+  return {
+    ...rest,
+    hasCredentials: !!(seClientSecretEnc || seClientSecret),
+    seClientSecret: (seClientSecretEnc || seClientSecret) ? '••••••••' : '',
+  };
+}
+async function loadOrg(orgKey) {
+  const orgs = store.IS_CONVEX
+    ? await store.convexQuery('admin:listOrgs', {})
+    : localJsonLoad(ORGS_FILE, []);
+  return orgs.find(o => o.orgKey === orgKey) || null;
+}
+async function saveOrgDoc(doc) {
+  if (store.IS_CONVEX) {
+    const { _id, _creationTime, ...clean } = doc;
+    await store.convexMutation('admin:upsertOrg', clean);
+  } else {
+    const orgs = localJsonLoad(ORGS_FILE, []).filter(o => o.orgKey !== doc.orgKey);
+    orgs.push(doc);
+    localJsonSave(ORGS_FILE, orgs);
+  }
 }
 
 app.get('/api/admin/orgs', auth.requireRole('superadmin'), async (req, res) => {
@@ -3243,16 +3281,25 @@ app.put('/api/admin/orgs/:orgKey', auth.requireRole('superadmin'), async (req, r
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ error: 'name is required' });
   try {
-    const existing = store.IS_CONVEX
-      ? (await store.convexQuery('admin:listOrgs', {})).find(o => o.orgKey === orgKey)
-      : localJsonLoad(ORGS_FILE, []).find(o => o.orgKey === orgKey);
+    const existing = await loadOrg(orgKey);
+    const locked = !!existing?.lockedAt;
+    const newSecret = (b.seClientSecret && !/^•+$/.test(b.seClientSecret)) ? b.seClientSecret : null;
+    // Once locked, credentials are immutable via plain save — only the
+    // verify endpoint (which re-tests against SE) can replace them.
+    if (locked && (newSecret || (b.seClientId && b.seClientId !== existing.seClientId))) {
+      return res.status(409).json({ error: 'Credentials are verified & locked — use Verify & Replace to change them' });
+    }
     const doc = {
       orgKey,
+      accountKey:         b.accountKey || existing?.accountKey || undefined,
       name:               String(b.name),
-      seOrgId:            b.seOrgId            || undefined,
-      seClientId:         b.seClientId         || undefined,
-      // '••••••••' placeholder from the UI means "unchanged"
-      seClientSecret:     (b.seClientSecret && !/^•+$/.test(b.seClientSecret)) ? b.seClientSecret : (existing?.seClientSecret || undefined),
+      seOrgId:            b.seOrgId ?? existing?.seOrgId ?? undefined,
+      seClientId:         locked ? existing.seClientId : (b.seClientId || existing?.seClientId || undefined),
+      seClientSecret:     locked ? undefined : (newSecret || existing?.seClientSecret || undefined),
+      seClientSecretEnc:  existing?.seClientSecretEnc || undefined,
+      verified:           existing?.verified || undefined,
+      verifiedOrgName:    existing?.verifiedOrgName || undefined,
+      lockedAt:           existing?.lockedAt || undefined,
       status:             b.status || 'beta',
       plan:               b.plan   || undefined,
       stripeCustomerId:   existing?.stripeCustomerId   || undefined,
@@ -3260,13 +3307,59 @@ app.put('/api/admin/orgs/:orgKey', auth.requireRole('superadmin'), async (req, r
       createdAt:          existing?.createdAt || new Date().toISOString(),
       notes:              b.notes || undefined,
     };
-    if (store.IS_CONVEX) await store.convexMutation('admin:upsertOrg', doc);
-    else {
-      const orgs = localJsonLoad(ORGS_FILE, []).filter(o => o.orgKey !== orgKey);
-      orgs.push(doc);
-      localJsonSave(ORGS_FILE, orgs);
-    }
+    await saveOrgDoc(doc);
     res.json({ ok: true, org: maskOrgSecret(doc) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Verify credentials against SportsEngine, then encrypt + lock them.
+// Send { seClientId, seClientSecret } (or omit to re-verify stored ones).
+app.post('/api/admin/orgs/:orgKey/verify', auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    const org = await loadOrg(req.params.orgKey);
+    if (!org) return res.status(404).json({ error: 'Organization not found' });
+
+    const cid = req.body?.seClientId
+      || org.seClientId;
+    const sec = (req.body?.seClientSecret && !/^•+$/.test(req.body.seClientSecret))
+      ? req.body.seClientSecret
+      : (org.seClientSecret || (org.seClientSecretEnc ? decryptSecret(org.seClientSecretEnc) : null));
+    if (!cid || !sec) return res.status(400).json({ error: 'Client ID and secret are required to verify' });
+
+    // Live test against SportsEngine: token grant + identity lookup
+    const params = new URLSearchParams();
+    params.append('grant_type', 'client_credentials');
+    params.append('client_id', cid);
+    params.append('client_secret', sec);
+    let seName = '', seOrgIds = [];
+    try {
+      const tok = await axios.post(SE_TOKEN_URL, params, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      const me  = await axios.get('https://user.sportsengine.com/oauth/me', {
+        headers: { Authorization: `Bearer ${tok.data.access_token}` },
+      });
+      seName   = me.data?.result?.client?.name || '';
+      seOrgIds = me.data?.result?.client?.organization_ids || [];
+    } catch (err) {
+      return res.status(400).json({
+        error: 'SportsEngine rejected these credentials',
+        detail: err.response?.data?.error_description || err.response?.data?.error || err.message,
+      });
+    }
+
+    // Success — encrypt, clear plaintext, lock
+    const doc = {
+      ...org,
+      seClientId:        cid,
+      seClientSecret:    undefined,
+      seClientSecretEnc: encryptSecret(sec),
+      seOrgId:           org.seOrgId || (seOrgIds[0] != null ? String(seOrgIds[0]) : undefined),
+      verified:          true,
+      verifiedOrgName:   seName || undefined,
+      lockedAt:          new Date().toISOString(),
+    };
+    delete doc._id; delete doc._creationTime;
+    await saveOrgDoc(doc);
+    res.json({ ok: true, verified: true, seName, seOrgIds, org: maskOrgSecret(doc) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

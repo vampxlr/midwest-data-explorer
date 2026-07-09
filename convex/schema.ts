@@ -134,14 +134,20 @@ export default defineSchema({
     updatedAt: v.string(),
   }).index("by_key", ["key"]),
 
-  // Customer organizations (multi-tenant registry). Credentials stored but
-  // not yet driving fetches — full multi-tenancy is a later phase.
+  // Customer organizations (multi-tenant registry). Credentials verified
+  // against SportsEngine then encrypted (AES-256-GCM, key in server env) and
+  // locked — never returned by any API. Fetching per-org lands in Phase B.
   organizations: defineTable({
     orgKey: v.string(),                       // internal uuid
+    accountKey: v.optional(v.string()),       // owning company account
     name: v.string(),
     seOrgId: v.optional(v.string()),          // SportsEngine organization id
     seClientId: v.optional(v.string()),       // SportsEngine OAuth client
-    seClientSecret: v.optional(v.string()),
+    seClientSecret: v.optional(v.string()),   // legacy plaintext (pre-lock) — cleared on verify
+    seClientSecretEnc: v.optional(v.string()),// AES-256-GCM ciphertext (iv:tag:data, hex)
+    verified: v.optional(v.boolean()),        // passed a live SE token test
+    verifiedOrgName: v.optional(v.string()),  // SE-reported org name at verify time
+    lockedAt: v.optional(v.string()),         // credentials locked (write-only) since
     status: v.string(),                       // 'beta' | 'active' | 'suspended'
     plan: v.optional(v.string()),
     stripeCustomerId: v.optional(v.string()),
@@ -149,4 +155,21 @@ export default defineSchema({
     createdAt: v.string(),
     notes: v.optional(v.string()),
   }).index("by_orgKey", ["orgKey"]),
+
+  // Company accounts — a customer company owns one or more organizations.
+  accounts: defineTable({
+    accountKey: v.string(),
+    name: v.string(),
+    ownerUserId: v.optional(v.string()),
+    createdAt: v.string(),
+  }).index("by_accountKey", ["accountKey"]),
+
+  // Per-organization role assignments (a user can hold different roles in
+  // different orgs): 'org_admin' | 'analyst' | 'viewer'.
+  memberships: defineTable({
+    userId: v.string(),
+    orgKey: v.string(),
+    role: v.string(),
+    createdAt: v.string(),
+  }).index("by_user", ["userId"]).index("by_org", ["orgKey"]),
 });
