@@ -20,10 +20,73 @@ function normalizeState(parsed) {
   // Legacy format was a plain array of slots (always 5) — migrate gracefully.
   if (Array.isArray(parsed)) {
     const count = Math.min(MAX_SLOTS, Math.max(parsed.length, DEFAULT_COUNT));
-    return { count, slots: Array.from({ length: count }, (_, i) => parsed[i] || emptySlot()) };
+    return { count, aiAssist: true, slots: Array.from({ length: count }, (_, i) => parsed[i] || emptySlot()) };
   }
   const count = Math.min(MAX_SLOTS, Math.max(1, parsed?.count || DEFAULT_COUNT));
-  return { count, slots: Array.from({ length: count }, (_, i) => (parsed?.slots && parsed.slots[i]) || emptySlot()) };
+  return {
+    count,
+    aiAssist: parsed?.aiAssist !== false, // default ON
+    slots: Array.from({ length: count }, (_, i) => (parsed?.slots && parsed.slots[i]) || emptySlot()),
+  };
+}
+
+// ── AI-assist matching ─────────────────────────────────────────────────────────
+// Finds the prior-season counterpart of a league even when names differ
+// ("2026 Wayzata…" vs "Wayzata…", Legacy Hoops "Session 1/2"). Combines
+// name-token similarity, session-number agreement, and season-date proximity
+// (counterparts run ~N whole years apart on the calendar).
+const STOPWORDS = new Set(['the','of','and','a','an','in','on','at','registration','league','leagues','basketball']);
+function nameTokens(name = '') {
+  return name.toLowerCase()
+    .replace(/\b(19|20)\d{2}\b/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w && !STOPWORDS.has(w));
+}
+function sessionNum(name = '') {
+  const m = name.match(/session\s*(\d+)/i);
+  return m ? m[1] : null;
+}
+// Words that DON'T identify a location/program — anything else (Wayzata,
+// Woodbury, Chanhassen, Brainerd…) is treated as distinctive, and two events
+// whose distinctive words don't overlap at all are almost never counterparts.
+const GENERIC = new Set(['legacy','hoops','session','sessions','spring','summer','fall','winter',
+  'annual','camp','clinic','tournament','tourney','boys','girls','grade','august','play','game',
+  'skills','shooting','scoring','training','academy','development','hub','site','new','v']);
+export function matchScore(cur, cand) {
+  const tA = nameTokens(cur.name), tB = new Set(nameTokens(cand.name));
+  let inter = 0;
+  for (const t of new Set(tA)) if (tB.has(t)) inter++;
+  const union = new Set([...tA, ...tB]).size || 1;
+  let s = inter / union;                                   // token similarity 0..1
+  const distA = new Set(tA.filter(t => /[a-z]/.test(t) && !GENERIC.has(t)));
+  const distB = new Set([...tB].filter(t => /[a-z]/.test(t) && !GENERIC.has(t)));
+  if (distA.size && distB.size && ![...distA].some(t => distB.has(t))) s -= 0.8; // Woodbury ≠ Hopkins
+  else if (distA.size && !distB.size) s -= 0.2;            // location-less candidate is a weaker match
+  const sA = sessionNum(cur.name), sB = sessionNum(cand.name);
+  if (sA !== null && sB !== null) s += (sA === sB ? 0.15 : -0.5); // sessions must agree
+  const dA = new Date(cur.close || cur.open || 0), dB = new Date(cand.close || cand.open || 0);
+  if (!isNaN(dA.getTime()) && !isNaN(dB.getTime()) && dB < dA) {
+    const days = (dA - dB) / 86400000;
+    const yearGap = Math.round(days / 365.25);
+    const drift = Math.abs(days - yearGap * 365.25);       // same time of year?
+    if (yearGap >= 1 && drift < 45) s += 0.25;
+    else if (yearGap >= 1 && drift < 90) s += 0.12;
+    s -= 0.06 * Math.max(0, yearGap - 1);                  // prefer the most recent season
+  }
+  return s;
+}
+export function findPriorMatch(cur, regs) {
+  const dCur = new Date(cur.close || cur.open || 0);
+  let best = null, bestScore = 0;
+  for (const cand of regs) {
+    if (String(cand.id) === String(cur.id)) continue;
+    const dC = new Date(cand.close || cand.open || 0);
+    if (isNaN(dC.getTime()) || dC >= dCur) continue;       // must be an EARLIER season
+    const s = matchScore(cur, cand);
+    if (s > bestScore) { bestScore = s; best = cand; }
+  }
+  return bestScore >= 0.5 ? best : null;
 }
 
 function loadSaved() {
@@ -98,15 +161,14 @@ function PairChart({ currentEv, priorEv }) {
   const totalB = asOfToday ? asOfToday.cumB : 0;
   const delta  = totalA - totalB;
 
-  // Forecast: current count + the registrations the PRIOR season still gained
-  // after this same calendar day. Scaled by current pace vs prior pace so a
-  // hotter year projects higher. Only meaningful once the prior season has
-  // finished and we have some current data.
+  // Forecast — uses data only through YESTERDAY (today is still filling in)
+  // and extrapolates purely from the prior season's remaining tail:
+  // projected = current-through-yesterday + (prior final − prior-through-yesterday).
+  const yA = asOfYesterday ? asOfYesterday.cumA : 0;
+  const yB = asOfYesterday ? asOfYesterday.cumB : 0;
   const priorFinal = chartData.length ? chartData[chartData.length - 1].cumB : 0;
-  const priorRemaining = Math.max(0, priorFinal - totalB);
-  const paceRatio = totalB > 0 ? totalA / totalB : 1;
-  const projected = (totalA > 0 && priorFinal > totalB)
-    ? Math.round(totalA + priorRemaining * Math.min(Math.max(paceRatio, 0.5), 2))
+  const projected = (yA > 0 && priorFinal > 0)
+    ? yA + Math.max(0, priorFinal - yB)
     : null;
 
   return (
@@ -155,7 +217,7 @@ function PairChart({ currentEv, priorEv }) {
           <span>Through today: <strong style={{ color:'var(--viz-1)' }}>{totalA}</strong></span>
           <span>Same day last yr: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
           {projected !== null && (
-            <span title="Current count + what the prior season still gained after this date, scaled by this year's pace">
+            <span title="Count through yesterday + what the prior season still gained after the same date (prior-year extrapolation only)">
               🔮 Projected finish: <strong style={{ color:'var(--accent-2)' }}>~{projected}</strong>
               <span style={{ color:'var(--text-4)' }}> (prior: {priorFinal})</span>
             </span>
@@ -170,7 +232,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
   // localStorage paints instantly; the server copy is the source of truth so
   // selections survive across devices, browsers, and localhost vs production.
   const [state, setState] = useState(loadSaved);
-  const { count, slots } = state;
+  const { count, slots, aiAssist } = state;
   const hydratedRef = React.useRef(false);
   const saveTimerRef = React.useRef(null);
 
@@ -222,6 +284,30 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
 
   function updateSlot(i, patch) {
     setState(prev => ({ ...prev, slots: prev.slots.map((s, idx) => idx === i ? { ...s, ...patch } : s) }));
+  }
+
+  // AI assist: picking a league auto-selects its prior-season counterpart.
+  function pickCurrent(i, currentId) {
+    let priorId = '';
+    if (aiAssist && currentId) {
+      const cur = eventById[String(currentId)];
+      const match = cur ? findPriorMatch(cur, recentRegs) : null;
+      if (match) priorId = String(match.id);
+    }
+    updateSlot(i, { currentId, priorId });
+  }
+
+  // Compare dropdown ordered by match quality when AI assist is on:
+  // prior-year counterpart first, then two years back, etc.
+  function compareOptionsFor(slot) {
+    const base = eventOptions.filter(o => o.value !== slot.currentId);
+    if (!aiAssist || !slot.currentId) return base;
+    const cur = eventById[String(slot.currentId)];
+    if (!cur) return base;
+    return base
+      .map(o => ({ o, s: matchScore(cur, eventById[o.value] || { name: o.label }) }))
+      .sort((a, b) => b.s - a.s)
+      .map(x => x.o);
   }
 
   function clearSlot(i) {
@@ -292,6 +378,14 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         defaultOpen
       >
         <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+          <button onClick={() => setState(prev => ({ ...prev, aiAssist: !prev.aiAssist }))}
+            title="When ON: picking a league auto-selects its prior-season counterpart (matched by name, session number, and season timing), and the compare dropdown is ordered best-match-first"
+            style={{ padding:'5px 12px', borderRadius:8, fontSize:11, fontWeight:700, cursor:'pointer',
+              border: aiAssist ? '1px solid rgba(168,85,247,0.5)' : '1px solid var(--border)',
+              background: aiAssist ? 'rgba(168,85,247,0.12)' : 'var(--bg-hover)',
+              color: aiAssist ? '#a855f7' : 'var(--text-3)' }}>
+            ✨ AI assist {aiAssist ? 'ON' : 'OFF'}
+          </button>
           <button onClick={exportConfig}
             title="Download the current comparison setup as a JSON file"
             style={{ padding:'5px 12px', borderRadius:8, fontSize:11, fontWeight:600, border:'1px solid var(--border)',
@@ -317,7 +411,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
 
         <div className="yoy-slot-grid">
           {slots.map((slot, i) => {
-            const compareOptions = eventOptions.filter(o => o.value !== slot.currentId);
+            const compareOptions = compareOptionsFor(slot);
             return (
               <div key={i} style={{
                 display:'flex', flexDirection:'column', gap:8,
@@ -336,7 +430,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
                 </div>
                 <SearchableSelect
                   value={slot.currentId}
-                  onChange={v => updateSlot(i, { currentId: v, priorId: '' })}
+                  onChange={v => pickCurrent(i, v)}
                   options={eventOptions}
                   placeholder="Select league…"
                 />
