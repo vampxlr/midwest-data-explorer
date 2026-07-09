@@ -9,6 +9,7 @@ import Registrations from './pages/Registrations.jsx';
 import Guide        from './pages/Guide.jsx';
 import Reports      from './pages/Reports.jsx';
 import Audiences   from './pages/Audiences.jsx';
+import AdsReport   from './pages/AdsReport.jsx';
 import BootTerminal    from './components/BootTerminal.jsx';
 import DataManagement  from './pages/DataManagement.jsx';
 import Login        from './pages/Login.jsx';
@@ -240,6 +241,7 @@ export default function App() {
               <NavLink to="/"           end onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📊</span> Dashboard</NavLink>
               <NavLink to="/reports"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📅</span> Reports</NavLink>
               <NavLink to="/audiences"     onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🎯</span> FB Audiences</NavLink>
+              <NavLink to="/ads"           onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📣</span> Meta Ads</NavLink>
             </div>
 
             <div className="nav-section">
@@ -331,6 +333,7 @@ export default function App() {
               <Route path="/analytics"     element={<Analytics     ctx={ctx} />} />
               <Route path="/reports"       element={<Reports       ctx={ctx} />} />
               <Route path="/audiences"     element={<Audiences     ctx={ctx} />} />
+              <Route path="/ads"           element={<AdsReport     ctx={ctx} />} />
               <Route path="/registrations" element={<Registrations ctx={ctx} />} />
               <Route path="/query"         element={<QueryExplorer />} />
               <Route path="/schema"        element={<SchemaExplorer />} />

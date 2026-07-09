@@ -3773,6 +3773,232 @@ app.put('/api/deadlines/:eventId', auth.requireRole('admin'), async (req, res) =
   res.json({ ok: true });
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// META ADS REPORTING — read-only Marketing API sync + classification + reports
+// Token: in-app setting (encrypted, write-only) wins over META_ACCESS_TOKEN env.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const GRAPH = 'https://graph.facebook.com/v21.0';
+
+async function adsSettings() {
+  const s = (await kvGet('ads:settings')) || {};
+  const token = s.tokenEnc ? decryptSecret(s.tokenEnc) : (process.env.META_ACCESS_TOKEN || null);
+  const adAccountId = s.adAccountId || process.env.META_AD_ACCOUNT_ID || null;
+  return { token, adAccountId, fromApp: !!s.tokenEnc, updatedAt: s.updatedAt || null };
+}
+
+async function metaGet(path, params = {}, token) {
+  const q = new URLSearchParams({ ...params, access_token: token });
+  const r = await fetch(`${GRAPH}/${path}?${q}`);
+  const d = await r.json();
+  if (d.error) throw new Error(`Meta API: ${d.error.message}`);
+  return d;
+}
+
+async function metaGetAll(path, params, token, cap = 2000) {
+  let url = `${GRAPH}/${path}?${new URLSearchParams({ ...params, access_token: token })}`;
+  const out = [];
+  while (url && out.length < cap) {
+    const r = await fetch(url);
+    const d = await r.json();
+    if (d.error) throw new Error(`Meta API: ${d.error.message}`);
+    out.push(...(d.data || []));
+    url = d.paging?.next || null;
+  }
+  return out;
+}
+
+// GET current settings (masked)
+app.get('/api/ads/settings', auth.requireRole('admin'), async (req, res) => {
+  const s = await adsSettings();
+  res.json({
+    adAccountId: s.adAccountId,
+    hasToken: !!s.token,
+    tokenSource: s.fromApp ? 'app' : (process.env.META_ACCESS_TOKEN ? 'env' : 'none'),
+    updatedAt: s.updatedAt,
+  });
+});
+
+// Save settings — token is write-only; verifies live before saving
+app.put('/api/ads/settings', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const { token, adAccountId } = req.body || {};
+    const cur = (await kvGet('ads:settings')) || {};
+    const useToken = (token && !/^•+$/.test(token)) ? token : (cur.tokenEnc ? decryptSecret(cur.tokenEnc) : process.env.META_ACCESS_TOKEN);
+    const acct = adAccountId || cur.adAccountId || process.env.META_AD_ACCOUNT_ID;
+    if (!useToken || !acct) return res.status(400).json({ error: 'Token and ad account ID are required' });
+    // Live verification
+    const who = await metaGet('me', {}, useToken);
+    const acctInfo = await metaGet(`act_${acct}`, { fields: 'name,account_status,currency' }, useToken);
+    const next = {
+      adAccountId: String(acct),
+      tokenEnc: (token && !/^•+$/.test(token)) ? encryptSecret(token) : cur.tokenEnc,
+      updatedAt: new Date().toISOString(),
+    };
+    await kvSet('ads:settings', next);
+    res.json({ ok: true, verified: true, tokenUser: who.name, accountName: acctInfo.name, currency: acctInfo.currency });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Full sync: campaigns → daily insights → ads/creatives → classification
+app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) => {
+  try {
+    const { token, adAccountId: acct } = await adsSettings();
+    if (!token || !acct) return res.status(400).json({ error: 'Ads not configured — add the Meta token in settings' });
+
+    // 1. ACTIVE campaigns (metadata)
+    const campaigns = await metaGetAll(`act_${acct}/campaigns`, {
+      fields: 'id,name,status,effective_status,start_time,stop_time,objective,daily_budget',
+      filtering: JSON.stringify([{ field: 'effective_status', operator: 'IN', value: ['ACTIVE'] }]),
+      limit: 200,
+    }, token);
+
+    // 2. Daily insights for the whole account this year (one query, paginated)
+    const sinceYear = `${new Date().getFullYear()}-01-01`;
+    const today = new Date().toISOString().slice(0, 10);
+    const rawInsights = await metaGetAll(`act_${acct}/insights`, {
+      level: 'campaign', time_increment: '1',
+      fields: 'campaign_id,campaign_name,spend,impressions,clicks,actions',
+      time_range: JSON.stringify({ since: sinceYear, until: today }),
+      limit: 500,
+    }, token, 8000);
+
+    // Keep only report-relevant action types; discover metric names as we go
+    const KEEP_ACTIONS = /^(link_click|landing_page_view|video_view|offsite_conversion\.)/;
+    const discovered = new Set();
+    const insights = rawInsights.map(r => {
+      const actions = {};
+      for (const a of (r.actions || [])) {
+        if (KEEP_ACTIONS.test(a.action_type)) {
+          actions[a.action_type] = Number(a.value) || 0;
+          discovered.add(a.action_type);
+        }
+      }
+      return { c: r.campaign_id, d: r.date_start, spend: Number(r.spend) || 0, imp: Number(r.impressions) || 0, clicks: Number(r.clicks) || 0, actions };
+    });
+
+    // 3. "Really active" = ACTIVE status + any spend in the last 21 days
+    //    (the account has dozens of zombie ACTIVE campaigns from past years)
+    const cutoff = new Date(Date.now() - 21 * 86400000).toISOString().slice(0, 10);
+    const recentSpend = {};
+    for (const i of insights) if (i.d >= cutoff) recentSpend[i.c] = (recentSpend[i.c] || 0) + i.spend;
+    const activeCampaigns = campaigns.filter(c => (recentSpend[c.id] || 0) > 0);
+    const activeIds = activeCampaigns.map(c => c.id);
+
+    // 4. Ads + creatives for the really-active campaigns (thumbnail, video, landing URL)
+    let ads = [];
+    if (activeIds.length) {
+      const rawAds = await metaGetAll(`act_${acct}/ads`, {
+        fields: 'id,name,campaign_id,adset_id,effective_status,creative{id,thumbnail_url,video_id,object_type,body,title,object_story_spec}',
+        filtering: JSON.stringify([
+          { field: 'campaign.id', operator: 'IN', value: activeIds },
+          { field: 'effective_status', operator: 'IN', value: ['ACTIVE'] },
+        ]),
+        limit: 300,
+      }, token);
+      ads = rawAds.map(a => {
+        const cr = a.creative || {};
+        const spec = cr.object_story_spec || {};
+        const landing = spec.link_data?.link
+          || spec.video_data?.call_to_action?.value?.link
+          || (cr.body?.match(/https?:\/\/[^\s"']+/) || [])[0]
+          || null;
+        return {
+          id: a.id, name: a.name, campaignId: a.campaign_id, adsetId: a.adset_id,
+          creativeId: cr.id || null, thumbnailUrl: cr.thumbnail_url || null,
+          videoId: cr.video_id || null, objectType: cr.object_type || null,
+          title: cr.title || null, landingUrl: landing,
+        };
+      });
+    }
+
+    // 5. Custom conversion id → friendly name (for offsite_conversion.custom.<id>)
+    const ccList = await metaGetAll(`act_${acct}/customconversions`, { fields: 'id,name', limit: 100 }, token).catch(() => []);
+    const ccNames = {};
+    for (const cc of ccList) ccNames[`offsite_conversion.custom.${cc.id}`] = cc.name;
+
+    // 6. Auto-classification against SportsEngine events (landing URL slug + campaign name)
+    const db = await store.load();
+    const events = Object.values(db.events);
+    const landingByCampaign = {};
+    for (const a of ads) if (a.landingUrl && !landingByCampaign[a.campaignId]) landingByCampaign[a.campaignId] = a.landingUrl;
+    const campaignsOut = activeCampaigns.map(c => {
+      const url = landingByCampaign[c.id] || '';
+      const path = url.replace(/^https?:\/\/[^/]+/, '');
+      let classification = 'unknown', suggestedEventId = null, suggestedEventName = null;
+      if (/^\/tournaments?/.test(path)) classification = 'tournaments';
+      else if (/^\/camps?/.test(path)) classification = 'camps';
+      else if (path === '/leagues' || path === '/leagues/') classification = 'general-leagues';
+      else if (/^\/leagues\//.test(path)) classification = 'league';
+      // Pin a specific league: what fraction of the EVENT's distinctive tokens
+      // (locations like woodbury/menomonie) appear in URL slug + campaign name?
+      const matchTokens = new Set(scrapeTokens(`${path.replace(/[/-]/g, ' ')} ${c.name}`));
+      const thisYear = String(new Date().getFullYear());
+      const AD_GENERIC = new Set(['legacy','hoops','conversion','league','leagues','campaign','basketball','session','eb','fr','v2','cbo','abo','summer','spring','fall','winter','park']);
+      let best = null, bs = -1, bestFrac = 0;
+      const now = Date.now();
+      for (const ev of events) {
+        const evYear = ((ev.name || '').match(/\b(20\d{2})\b/) || [])[1] || String(ev.close || ev.open || '').slice(0, 4);
+        if (evYear !== thisYear) continue;
+        const distinct = scrapeTokens(ev.name).filter(t => /[a-z]/.test(t) && !AD_GENERIC.has(t));
+        if (!distinct.length) continue;
+        const hit = distinct.filter(t => matchTokens.has(t)).length;
+        if (hit < 1) continue;
+        const frac = hit / distinct.length;
+        if (frac < 0.6) continue;
+        // more matched tokens wins; ties → prefer the UPCOMING season (ads sell
+        // what's open now, not the spring league that already closed)
+        const closeMs = new Date(ev.close || ev.open || 0).getTime();
+        const upcoming = closeMs >= now ? 1 / (1 + (closeMs - now) / 86400000 / 30) : 0;
+        const s = hit * 10 + frac + upcoming;
+        if (s > bs) { bs = s; bestFrac = frac; best = ev; }
+      }
+      if (best && bestFrac >= 0.6) { suggestedEventId = String(best.id); suggestedEventName = best.name; if (classification === 'unknown') classification = 'league'; }
+      return {
+        id: c.id, name: c.name, status: c.effective_status, startTime: c.start_time,
+        objective: c.objective, dailyBudget: c.daily_budget ? Number(c.daily_budget) / 100 : null,
+        landingUrl: url || null, classification, suggestedEventId, suggestedEventName,
+        totalSpend: insights.filter(i => i.c === c.id).reduce((s, i) => s + i.spend, 0),
+      };
+    });
+
+    const data = {
+      syncedAt: new Date().toISOString(), adAccountId: acct,
+      campaigns: campaignsOut,
+      ads,
+      insights: insights.filter(i => activeIds.includes(i.c)),
+      ccNames,
+      discoveredMetrics: [...discovered].sort(),
+      zombieActiveCount: campaigns.length - activeCampaigns.length,
+    };
+    await kvSet('ads:data', data);
+    res.json({ ok: true, campaigns: campaignsOut.length, ads: ads.length, insightDays: data.insights.length, zombiesHidden: data.zombieActiveCount, syncedAt: data.syncedAt });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Report data: synced blob + saved mappings/aliases
+app.get('/api/ads/data', async (req, res) => {
+  const [data, mappings] = await Promise.all([kvGet('ads:data'), kvGet('ads:mappings')]);
+  const s = await adsSettings();
+  res.json({ data: data || null, mappings: mappings || {}, configured: !!(s.token && s.adAccountId), adAccountId: s.adAccountId });
+});
+
+// Save a campaign's league mapping and/or alias (also ad aliases)
+app.put('/api/ads/map/:campaignId', auth.requireRole('admin', 'editor'), async (req, res) => {
+  const { eventId, alias, adAliases } = req.body || {};
+  const all = (await kvGet('ads:mappings')) || {};
+  const cur = all[req.params.campaignId] || {};
+  all[req.params.campaignId] = {
+    ...cur,
+    ...(eventId !== undefined ? { eventId: eventId || null } : {}),
+    ...(alias !== undefined ? { alias: alias || null } : {}),
+    ...(adAliases !== undefined ? { adAliases: { ...(cur.adAliases || {}), ...adAliases } } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  await kvSet('ads:mappings', all);
+  res.json({ ok: true });
+});
+
 // ── Recompute dashboard stats + per-event counts from Convex results ──────────
 // Fixes (1) double-counted daily stats after a purge, and (2) inflated/stale
 // per-event resultCount/resultsCompleted that caused Smart Update to skip events

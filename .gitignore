@@ -47,3 +47,6 @@ npm-debug.log*
 CLAUDE.md
 AGENTS.md
 skills-lock.json
+
+.vercel
+.env*
