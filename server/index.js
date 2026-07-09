@@ -3267,6 +3267,77 @@ async function saveOrgDoc(doc) {
   }
 }
 
+// ── Company accounts (a company owns one or more organizations) ───────────────
+const ACCOUNTS_FILE = path.join(__dirname, 'data', 'accounts.json');
+
+async function listAccountsRaw() {
+  return store.IS_CONVEX
+    ? await store.convexQuery('admin:listAccounts', {})
+    : localJsonLoad(ACCOUNTS_FILE, []);
+}
+async function saveAccountDoc(doc) {
+  if (store.IS_CONVEX) {
+    const { _id, _creationTime, ...clean } = doc;
+    await store.convexMutation('admin:upsertAccount', clean);
+  } else {
+    const list = localJsonLoad(ACCOUNTS_FILE, []).filter(a => a.accountKey !== doc.accountKey);
+    list.push(doc);
+    localJsonSave(ACCOUNTS_FILE, list);
+  }
+}
+
+// First load bootstraps the default company + Midwest org so the existing
+// deployment appears in the new hierarchy without touching its data.
+async function ensureDefaultCompany() {
+  const accounts = await listAccountsRaw();
+  if (accounts.length > 0) return accounts;
+  const now = new Date().toISOString();
+  const account = { accountKey: 'midwest-3on3', name: 'Midwest 3on3', createdAt: now };
+  await saveAccountDoc(account);
+  const existingOrg = await loadOrg('midwest-default');
+  if (!existingOrg) {
+    await saveOrgDoc({
+      orgKey: 'midwest-default', accountKey: 'midwest-3on3',
+      name: 'Midwest 3on3', seOrgId: '8008',
+      verified: true, verifiedOrgName: '3 on 3 Hoops Hub', lockedAt: now,
+      status: 'active', subscriptionStatus: 'beta', createdAt: now,
+      notes: 'Built-in default org — runs on the server environment credentials',
+    });
+  }
+  return [account];
+}
+
+app.get('/api/admin/accounts', auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    const accounts = await ensureDefaultCompany();
+    res.json({ accounts: accounts.map(({ _id, _creationTime, ...a }) => a) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/admin/accounts/:accountKey', auth.requireRole('superadmin'), async (req, res) => {
+  const { accountKey } = req.params;
+  const b = req.body || {};
+  if (!b.name) return res.status(400).json({ error: 'name is required' });
+  try {
+    const existing = (await listAccountsRaw()).find(a => a.accountKey === accountKey);
+    await saveAccountDoc({
+      accountKey,
+      name: String(b.name),
+      ownerUserId: b.ownerUserId || existing?.ownerUserId || undefined,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+    });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/accounts/:accountKey', auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    if (store.IS_CONVEX) await store.convexMutation('admin:removeAccount', { accountKey: req.params.accountKey });
+    else localJsonSave(ACCOUNTS_FILE, localJsonLoad(ACCOUNTS_FILE, []).filter(a => a.accountKey !== req.params.accountKey));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/admin/orgs', auth.requireRole('superadmin'), async (req, res) => {
   try {
     const orgs = store.IS_CONVEX

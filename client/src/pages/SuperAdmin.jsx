@@ -95,9 +95,9 @@ function SiteSettingsEditor() {
   );
 }
 
-// ── 2. Organizations registry ─────────────────────────────────────────────────
-const emptyOrg = () => ({
-  orgKey: crypto.randomUUID(), name:'', seOrgId:'', seClientId:'', seClientSecret:'',
+// ── 2. Companies → Organizations ──────────────────────────────────────────────
+const emptyOrg = (accountKey) => ({
+  orgKey: crypto.randomUUID(), accountKey, name:'', seOrgId:'', seClientId:'', seClientSecret:'',
   status:'beta', subscriptionStatus:'beta', notes:'',
 });
 
@@ -203,18 +203,44 @@ function OrgEditor({ org, onSaved, onCancel }) {
   );
 }
 
-function OrgsPanel() {
+function CompaniesPanel() {
+  const [accounts, setAccounts] = useState([]);
   const [orgs, setOrgs] = useState([]);
-  const [editing, setEditing] = useState(null); // org object | null
+  const [selected, setSelected] = useState(null);   // accountKey | null
+  const [editing, setEditing] = useState(null);     // org object | null
+  const [addingCompany, setAddingCompany] = useState(false);
+  const [companyName, setCompanyName] = useState('');
   const [loading, setLoading] = useState(true);
 
   async function load() {
     setLoading(true);
-    try { const r = await api.listOrgs(); setOrgs(r.data.orgs || []); }
-    catch (err) { toast.error('Failed to load orgs: ' + err.message); }
+    try {
+      const [a, o] = await Promise.all([api.listAccounts(), api.listOrgs()]);
+      setAccounts(a.data.accounts || []);
+      setOrgs(o.data.orgs || []);
+    }
+    catch (err) { toast.error('Failed to load: ' + err.message); }
     finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
+
+  async function addCompany() {
+    if (!companyName.trim()) { toast.error('Company name is required'); return; }
+    try {
+      await api.saveAccount(crypto.randomUUID(), { name: companyName.trim() });
+      setCompanyName(''); setAddingCompany(false);
+      toast.success('Company added');
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || err.message); }
+  }
+
+  async function removeCompany(a) {
+    const count = orgs.filter(o => o.accountKey === a.accountKey).length;
+    if (count > 0) { toast.error('Delete or reassign its organizations first'); return; }
+    if (!window.confirm(`Delete company "${a.name}"?`)) return;
+    try { await api.deleteAccount(a.accountKey); toast.success('Deleted'); setSelected(null); load(); }
+    catch (err) { toast.error(err.message); }
+  }
 
   async function remove(o) {
     if (!window.confirm(`Delete organization "${o.name}"? Its stored SE credentials will be removed.`)) return;
@@ -222,22 +248,75 @@ function OrgsPanel() {
     catch (err) { toast.error(err.message); }
   }
 
+  const selectedAccount = accounts.find(a => a.accountKey === selected);
+  const companyOrgs = selected ? orgs.filter(o => o.accountKey === selected) : [];
+
+  // ── Companies list view ──
+  if (!selected) {
+    return (
+      <div className="card">
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+          <h2 style={{ margin:0 }}>Companies</h2>
+          {!addingCompany && <button className="btn-primary" onClick={() => setAddingCompany(true)}>+ Add company</button>}
+        </div>
+        <p style={{ fontSize:12, color:'var(--text-3)', margin:'0 0 14px', lineHeight:1.5 }}>
+          Each customer company owns one or more SportsEngine organizations. Click a company to
+          see its organizations and enter their data explorers.
+        </p>
+        {addingCompany && (
+          <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+            <input className="field-input" style={{ flex:1 }} placeholder="Company name"
+              value={companyName} onChange={e => setCompanyName(e.target.value)} autoFocus
+              onKeyDown={e => e.key === 'Enter' && addCompany()} />
+            <button className="btn-primary" onClick={addCompany}>Add</button>
+            <button className="btn-chart" onClick={() => setAddingCompany(false)}>Cancel</button>
+          </div>
+        )}
+        {loading ? <div className="no-data">Loading…</div> : (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(260px, 1fr))', gap:12 }}>
+            {accounts.map(a => {
+              const n = orgs.filter(o => o.accountKey === a.accountKey).length;
+              return (
+                <div key={a.accountKey} onClick={() => setSelected(a.accountKey)}
+                  style={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:12,
+                    padding:'16px 18px', cursor:'pointer' }}>
+                  <div style={{ fontSize:15, fontWeight:700, color:'var(--text-1)' }}>🏢 {a.name}</div>
+                  <div style={{ fontSize:12, color:'var(--text-3)', marginTop:4 }}>
+                    {n} organization{n !== 1 ? 's' : ''} · since {new Date(a.createdAt).toLocaleDateString()}
+                  </div>
+                  <div style={{ fontSize:12, color:'var(--accent-light)', marginTop:10, fontWeight:600 }}>
+                    View organizations →
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Single company view: its organizations ──
   return (
     <div className="card">
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-        <h2 style={{ margin:0 }}>Organizations</h2>
-        {!editing && <button className="btn-primary" onClick={() => setEditing(emptyOrg())}>+ Add organization</button>}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, flexWrap:'wrap', gap:8 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <button className="btn-chart" onClick={() => { setSelected(null); setEditing(null); }}>← Companies</button>
+          <h2 style={{ margin:0 }}>🏢 {selectedAccount?.name}</h2>
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          {!editing && <button className="btn-primary" onClick={() => setEditing(emptyOrg(selected))}>+ Add organization</button>}
+          <button onClick={() => removeCompany(selectedAccount)}
+            style={{ background:'none', border:'1px solid rgba(239,68,68,0.35)', color:'var(--danger-text)', borderRadius:999, padding:'6px 12px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+            Delete company
+          </button>
+        </div>
       </div>
-      <p style={{ fontSize:12, color:'var(--text-3)', margin:'0 0 14px', lineHeight:1.5 }}>
-        Each customer organization stores its own SportsEngine credentials here. Credentials are
-        write-only (never displayed back). Full multi-tenant fetching lands in a later phase —
-        today the app still runs on the default Midwest credentials.
-      </p>
 
       {editing && <OrgEditor org={editing} onSaved={() => { setEditing(null); load(); }} onCancel={() => setEditing(null)} />}
 
-      {loading ? <div className="no-data">Loading…</div> : orgs.length === 0 ? (
-        <div className="no-data" style={{ padding:'24px' }}>No organizations yet.</div>
+      {loading ? <div className="no-data">Loading…</div> : companyOrgs.length === 0 ? (
+        <div className="no-data" style={{ padding:'24px' }}>No organizations yet — add one to start the guided SportsEngine setup.</div>
       ) : (
         <div style={{ overflowX:'auto' }}>
           <table className="data-table">
@@ -245,7 +324,7 @@ function OrgsPanel() {
               <tr><th>Name</th><th>SE Org ID</th><th>Credentials</th><th>Status</th><th>Billing</th><th></th></tr>
             </thead>
             <tbody>
-              {orgs.map(o => (
+              {companyOrgs.map(o => (
                 <tr key={o.orgKey}>
                   <td style={{ color:'var(--text-1)', fontWeight:600 }}>
                     {o.name}
@@ -267,8 +346,8 @@ function OrgsPanel() {
                         sessionStorage.setItem('mw3-active-org', JSON.stringify({ orgKey: o.orgKey, name: o.name }));
                         window.location.href = '/';
                       }}
-                      title="Open this organization's reporting system">
-                      Enter →
+                      title="Open this organization's data explorer">
+                      Enter Data Explorer →
                     </button>
                     <button className="btn-chart" style={{ marginRight:6 }} onClick={() => setEditing(o)}>Edit</button>
                     <button onClick={() => remove(o)}
@@ -316,8 +395,8 @@ export default function SuperAdmin() {
         <h1>Super Admin</h1>
         <p>Platform controls — landing page content, pricing, customer organizations, billing</p>
       </div>
+      <CompaniesPanel />
       <SiteSettingsEditor />
-      <OrgsPanel />
       <BillingPanel />
     </div>
   );

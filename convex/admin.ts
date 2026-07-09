@@ -33,6 +33,43 @@ export const setSettings = mutation({
   },
 });
 
+// ── Company accounts ───────────────────────────────────────────────────────────
+
+export const listAccounts = query({
+  args: {},
+  handler: async (ctx) => ctx.db.query("accounts").collect(),
+});
+
+export const upsertAccount = mutation({
+  args: {
+    accountKey: v.string(),
+    name: v.string(),
+    ownerUserId: v.optional(v.string()),
+    createdAt: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("accounts")
+      .withIndex("by_accountKey", (q) => q.eq("accountKey", args.accountKey))
+      .first();
+    if (existing) await ctx.db.patch(existing._id, args);
+    else await ctx.db.insert("accounts", args);
+    return { ok: true };
+  },
+});
+
+export const removeAccount = mutation({
+  args: { accountKey: v.string() },
+  handler: async (ctx, { accountKey }) => {
+    const doc = await ctx.db
+      .query("accounts")
+      .withIndex("by_accountKey", (q) => q.eq("accountKey", accountKey))
+      .first();
+    if (doc) await ctx.db.delete(doc._id);
+    return { ok: true };
+  },
+});
+
 // ── Organizations registry ─────────────────────────────────────────────────────
 
 export const listOrgs = query({

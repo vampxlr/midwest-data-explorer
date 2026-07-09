@@ -153,6 +153,9 @@ export const api = {
   // ── Super admin: site settings + organizations ─────────────────────────────
   getSiteSettings: ()      => axios.get(`${BASE}/site-settings`),
   setSiteSettings: (body)  => axios.put(`${BASE}/site-settings`, body),
+  listAccounts:  ()             => axios.get(`${BASE}/admin/accounts`),
+  saveAccount:   (key, body)    => axios.put(`${BASE}/admin/accounts/${encodeURIComponent(key)}`, body),
+  deleteAccount: (key)          => axios.delete(`${BASE}/admin/accounts/${encodeURIComponent(key)}`),
   listOrgs:  ()            => axios.get(`${BASE}/admin/orgs`),
   saveOrg:   (orgKey, body)=> axios.put(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`, body),
   deleteOrg: (orgKey)      => axios.delete(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`),

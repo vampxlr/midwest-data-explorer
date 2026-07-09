@@ -168,6 +168,11 @@ export default function App() {
 
             <div className="nav-section">
               <div className="nav-label">Navigation</div>
+              {isSuperAdmin && (
+                <NavLink to="/superadmin" onClick={()=>{ setNavOpen(false); sessionStorage.removeItem('mw3-active-org'); }} className="nav-item" style={{ color:'#a855f7' }}>
+                  <span>👑</span> Super Admin Panel
+                </NavLink>
+              )}
               <NavLink to="/"           end onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📊</span> Dashboard</NavLink>
               <NavLink to="/reports"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📅</span> Reports</NavLink>
               <NavLink to="/audiences"     onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🎯</span> FB Audiences</NavLink>
@@ -187,9 +192,6 @@ export default function App() {
                   <NavLink to="/data"          onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🗄️</span> Data Mgmt</NavLink>
                   {(user.role === 'admin' || isSuperAdmin) && (
                     <NavLink to="/users"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>👤</span> Users</NavLink>
-                  )}
-                  {isSuperAdmin && (
-                    <NavLink to="/superadmin"  onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>👑</span> Super Admin</NavLink>
                   )}
                   <NavLink to="/guide"         onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📖</span> Guide</NavLink>
                 </>
@@ -260,26 +262,6 @@ export default function App() {
           </nav>
 
           <main className="main-content">
-            {/* Super admin viewing a customer org — banner + exit */}
-            {isSuperAdmin && getActiveOrg() && (
-              <div style={{
-                display:'flex', alignItems:'center', justifyContent:'space-between', gap:12,
-                marginBottom:16, padding:'10px 16px', borderRadius:10,
-                background:'rgba(168,85,247,0.10)', border:'1px solid rgba(168,85,247,0.35)',
-              }}>
-                <span style={{ fontSize:13, fontWeight:600, color:'#a855f7' }}>
-                  👑 Viewing as Super Admin: <strong>{getActiveOrg().name}</strong>
-                  <span style={{ fontWeight:400, color:'var(--text-3)', marginLeft:8, fontSize:12 }}>
-                    (shows default data until per-org fetching ships)
-                  </span>
-                </span>
-                <button onClick={exitActiveOrg}
-                  style={{ padding:'5px 14px', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer',
-                    border:'1px solid rgba(168,85,247,0.5)', background:'transparent', color:'#a855f7' }}>
-                  ← Exit to panel
-                </button>
-              </div>
-            )}
             <Routes>
               <Route path="/" element={
                 isSuperAdmin && !getActiveOrg()
