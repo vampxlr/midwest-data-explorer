@@ -284,7 +284,7 @@ export default function App() {
               {connected
                 ? <div className="status-ok">● Connected · Org {isDemoMode() ? '****' : ORG_ID}</div>
                 : <div className="status-err">● Disconnected</div>}
-              {user.role === 'admin' && (
+              {(user.role === 'admin' || isSuperAdmin) && (
                 <button
                   onClick={toggleDemoMode}
                   title="Demo/stream mode masks org, league, and contact details for screen recording"
