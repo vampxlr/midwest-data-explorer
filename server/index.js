@@ -47,6 +47,8 @@ app.use(rateLimit({
 const PUBLIC_API_PATHS = new Set([
   '/api/auth/login', '/api/health', '/api/runtime',
   '/api/auth/google', '/api/auth/google/callback',
+  '/api/site-settings',   // landing page content (GET only — PUT re-runs auth below)
+  '/api/billing/webhook', // Stripe signs its own requests; no app JWT
 ]);
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/') || PUBLIC_API_PATHS.has(req.path)) return next();
@@ -180,7 +182,7 @@ app.get('/api/users', auth.requireAdmin, async (req, res) => {
 });
 
 app.post('/api/users', auth.requireAdmin, async (req, res) => {
-  const { username, password, role } = req.body || {};
+  const { username, password, role, email } = req.body || {};
   if (!username || !password || !role) {
     return res.status(400).json({ error: 'username, password, and role are required' });
   }
@@ -192,7 +194,7 @@ app.post('/api/users', auth.requireAdmin, async (req, res) => {
   }
   try {
     const passwordHash = await auth.hashPassword(password);
-    const user = await userStore.create({ username, passwordHash, role });
+    const user = await userStore.create({ username, passwordHash, role, email: email || undefined });
     res.json({ user });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -200,7 +202,7 @@ app.post('/api/users', auth.requireAdmin, async (req, res) => {
 });
 
 app.patch('/api/users/:id', auth.requireAdmin, async (req, res) => {
-  const { role, password } = req.body || {};
+  const { role, password, email } = req.body || {};
   const patch = {};
   if (role !== undefined) {
     if (!['admin', 'editor'].includes(role)) {
@@ -214,8 +216,12 @@ app.patch('/api/users/:id', auth.requireAdmin, async (req, res) => {
     }
     patch.passwordHash = await auth.hashPassword(password);
   }
+  if (email !== undefined) {
+    // Email enables Google sign-in for this account
+    patch.email = String(email).trim().toLowerCase() || undefined;
+  }
   if (Object.keys(patch).length === 0) {
-    return res.status(400).json({ error: 'Nothing to update — provide role and/or password' });
+    return res.status(400).json({ error: 'Nothing to update — provide role, password, and/or email' });
   }
   try {
     const user = await userStore.update(req.params.id, patch);
@@ -3158,6 +3164,128 @@ app.put('/api/prefs/:key', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── Site settings (landing page content) + organizations registry ─────────────
+// GET is public (the landing page renders pre-login); writes are superadmin.
+
+const SITE_SETTINGS_FILE = path.join(__dirname, 'data', 'site-settings.json');
+const ORGS_FILE          = path.join(__dirname, 'data', 'orgs.json');
+function localJsonLoad(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+function localJsonSave(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(obj, null, 2));
+}
+
+const DEFAULT_SITE_SETTINGS = {
+  appName: 'Data Explorer for SportsEngine',
+  tagline: 'Registration analytics, year-over-year insights, and Facebook audience exports for youth sports organizations.',
+  betaBanner: 'We are in beta right now — lock in the discounted rate.',
+  priceMonthly: 100,
+  betaPriceMonthly: 30,
+  features: [
+    { title: 'Live Registration Dashboard',  desc: 'Day-by-day activity, week trends, and league breakdowns at a glance — on desktop and phone.' },
+    { title: 'Year-over-Year Comparisons',   desc: 'Pit any league against last season with cumulative pace charts and same-day deltas.' },
+    { title: 'Smart Update Sync',            desc: 'One click pulls only what changed from SportsEngine — no manual exports.' },
+    { title: 'Facebook Custom Audiences',    desc: 'Build filtered, dedup-ed audience CSVs (emails + E.164 phones) ready for Meta import.' },
+    { title: 'Lapsed Player Detection',      desc: 'Find every past participant who has not re-registered — with contact details.' },
+    { title: 'Demo / Stream Mode',           desc: 'Mask sensitive data instantly for screen shares and client demos.' },
+  ],
+};
+
+// Returns the stored settings merged over defaults (new fields appear automatically)
+async function loadSiteSettings() {
+  let stored = null;
+  if (store.IS_CONVEX) {
+    try { stored = await store.convexQuery('admin:getSettings', {}); } catch {}
+  } else {
+    const raw = localJsonLoad(SITE_SETTINGS_FILE, null);
+    stored = raw ? JSON.stringify(raw) : null;
+  }
+  try { return { ...DEFAULT_SITE_SETTINGS, ...(stored ? JSON.parse(stored) : {}) }; }
+  catch { return DEFAULT_SITE_SETTINGS; }
+}
+
+app.get('/api/site-settings', async (req, res) => {
+  res.json(await loadSiteSettings());
+});
+
+// Path is public for GET, so PUT must authenticate explicitly
+app.put('/api/site-settings', auth.requireAuth, auth.requireRole('superadmin'), async (req, res) => {
+  const value = JSON.stringify(req.body || {});
+  if (value.length > 50000) return res.status(413).json({ error: 'settings too large' });
+  try {
+    if (store.IS_CONVEX) await store.convexMutation('admin:setSettings', { value });
+    else localJsonSave(SITE_SETTINGS_FILE, req.body || {});
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Organizations registry — SE credentials stored for future multi-tenant use.
+// Secrets are write-only: list responses mask seClientSecret.
+function maskOrgSecret(o) {
+  return { ...o, seClientSecret: o.seClientSecret ? '••••••••' : '' };
+}
+
+app.get('/api/admin/orgs', auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    const orgs = store.IS_CONVEX
+      ? await store.convexQuery('admin:listOrgs', {})
+      : localJsonLoad(ORGS_FILE, []);
+    res.json({ orgs: orgs.map(({ _id, _creationTime, ...o }) => maskOrgSecret(o)) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/admin/orgs/:orgKey', auth.requireRole('superadmin'), async (req, res) => {
+  const { orgKey } = req.params;
+  const b = req.body || {};
+  if (!b.name) return res.status(400).json({ error: 'name is required' });
+  try {
+    const existing = store.IS_CONVEX
+      ? (await store.convexQuery('admin:listOrgs', {})).find(o => o.orgKey === orgKey)
+      : localJsonLoad(ORGS_FILE, []).find(o => o.orgKey === orgKey);
+    const doc = {
+      orgKey,
+      name:               String(b.name),
+      seOrgId:            b.seOrgId            || undefined,
+      seClientId:         b.seClientId         || undefined,
+      // '••••••••' placeholder from the UI means "unchanged"
+      seClientSecret:     (b.seClientSecret && !/^•+$/.test(b.seClientSecret)) ? b.seClientSecret : (existing?.seClientSecret || undefined),
+      status:             b.status || 'beta',
+      plan:               b.plan   || undefined,
+      stripeCustomerId:   existing?.stripeCustomerId   || undefined,
+      subscriptionStatus: b.subscriptionStatus || existing?.subscriptionStatus || 'beta',
+      createdAt:          existing?.createdAt || new Date().toISOString(),
+      notes:              b.notes || undefined,
+    };
+    if (store.IS_CONVEX) await store.convexMutation('admin:upsertOrg', doc);
+    else {
+      const orgs = localJsonLoad(ORGS_FILE, []).filter(o => o.orgKey !== orgKey);
+      orgs.push(doc);
+      localJsonSave(ORGS_FILE, orgs);
+    }
+    res.json({ ok: true, org: maskOrgSecret(doc) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/admin/orgs/:orgKey', auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    if (store.IS_CONVEX) await store.convexMutation('admin:removeOrg', { orgKey: req.params.orgKey });
+    else localJsonSave(ORGS_FILE, localJsonLoad(ORGS_FILE, []).filter(o => o.orgKey !== req.params.orgKey));
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Stripe-ready billing stub — activates when STRIPE_* env vars exist ────────
+app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    return res.status(503).json({ error: 'Billing is not configured yet' });
+  }
+  // When Stripe goes live: verify signature with stripe.webhooks.constructEvent
+  // and update organizations.subscriptionStatus accordingly.
+  res.json({ received: true });
 });
 
 // ── Recompute dashboard stats + per-event counts from Convex results ──────────

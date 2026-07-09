@@ -150,6 +150,13 @@ export const api = {
 
   recomputeStats: () => axios.post(`${BASE}/admin/recompute-stats`),
 
+  // ── Super admin: site settings + organizations ─────────────────────────────
+  getSiteSettings: ()      => axios.get(`${BASE}/site-settings`),
+  setSiteSettings: (body)  => axios.put(`${BASE}/site-settings`, body),
+  listOrgs:  ()            => axios.get(`${BASE}/admin/orgs`),
+  saveOrg:   (orgKey, body)=> axios.put(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`, body),
+  deleteOrg: (orgKey)      => axios.delete(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`),
+
   // ── Per-user UI preferences (server-persisted, survives devices) ──────────
   getPref: (key)        => axios.get(`${BASE}/prefs/${encodeURIComponent(key)}`),
   setPref: (key, value) => axios.put(`${BASE}/prefs/${encodeURIComponent(key)}`, { value: JSON.stringify(value) }),

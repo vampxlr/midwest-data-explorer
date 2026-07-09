@@ -13,6 +13,8 @@ import BootTerminal    from './components/BootTerminal.jsx';
 import DataManagement  from './pages/DataManagement.jsx';
 import Login        from './pages/Login.jsx';
 import Users        from './pages/Users.jsx';
+import Landing      from './pages/Landing.jsx';
+import SuperAdmin   from './pages/SuperAdmin.jsx';
 import { api }      from './api.jsx';
 import { useAuth }  from './AuthContext.jsx';
 import SearchableSelect from './components/SearchableSelect.jsx';
@@ -28,7 +30,11 @@ function getInitialTheme() {
 }
 
 export default function App() {
-  const { user, loading: authLoading, logout } = useAuth();
+  const { user, loading: authLoading, logout, isSuperAdmin } = useAuth();
+  // Logged-out visitors see the marketing landing page first; "Sign in" flips
+  // to the login form. OAuth round-trips (?gerror / #gtoken) skip the landing.
+  const [showLogin, setShowLogin] = useState(() =>
+    window.location.search.includes('gerror=') || window.location.hash.includes('gtoken='));
   const [connected,     setConnected]     = useState(false);
   const [recentRegs,    setRecentRegs]    = useState([]);
   const [selectedReg,   setSelectedReg]   = useState(null);
@@ -108,8 +114,15 @@ export default function App() {
   if (authLoading) {
     return <div style={{ minHeight:'100vh', background:'var(--bg-base)' }} />;
   }
+  // Superadmin can preview the public landing page while logged in
+  if (window.location.search.includes('landing-preview=1')) {
+    return <Landing onSignIn={() => { window.location.href = '/'; }} />;
+  }
+
   if (!user) {
-    return <Login />;
+    return showLogin
+      ? <Login />
+      : <Landing onSignIn={() => setShowLogin(true)} />;
   }
 
   return (
@@ -162,8 +175,11 @@ export default function App() {
                   <NavLink to="/query"         onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🔍</span> Query Explorer</NavLink>
                   <NavLink to="/schema"        onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📋</span> Schema</NavLink>
                   <NavLink to="/data"          onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🗄️</span> Data Mgmt</NavLink>
-                  {user.role === 'admin' && (
+                  {(user.role === 'admin' || isSuperAdmin) && (
                     <NavLink to="/users"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>👤</span> Users</NavLink>
+                  )}
+                  {isSuperAdmin && (
+                    <NavLink to="/superadmin"  onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>👑</span> Super Admin</NavLink>
                   )}
                   <NavLink to="/guide"         onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📖</span> Guide</NavLink>
                 </>
@@ -243,7 +259,8 @@ export default function App() {
               <Route path="/query"         element={<QueryExplorer />} />
               <Route path="/schema"        element={<SchemaExplorer />} />
               <Route path="/data"          element={<DataManagement ctx={ctx} />} />
-              {user.role === 'admin' && <Route path="/users" element={<Users />} />}
+              {(user.role === 'admin' || isSuperAdmin) && <Route path="/users" element={<Users />} />}
+              {isSuperAdmin && <Route path="/superadmin" element={<SuperAdmin />} />}
               <Route path="/guide"         element={<Guide />} />
             </Routes>
           </main>

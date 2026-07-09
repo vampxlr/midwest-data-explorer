@@ -125,4 +125,28 @@ export default defineSchema({
     value: v.string(),          // JSON-encoded payload
     updatedAt: v.string(),
   }).index("by_user_key", ["userId", "key"]),
+
+  // Site-wide settings edited from the super admin panel (landing page
+  // pricing/features, beta banner, etc.). Single row keyed 'main'.
+  siteSettings: defineTable({
+    key: v.string(),
+    value: v.string(),          // JSON-encoded settings object
+    updatedAt: v.string(),
+  }).index("by_key", ["key"]),
+
+  // Customer organizations (multi-tenant registry). Credentials stored but
+  // not yet driving fetches — full multi-tenancy is a later phase.
+  organizations: defineTable({
+    orgKey: v.string(),                       // internal uuid
+    name: v.string(),
+    seOrgId: v.optional(v.string()),          // SportsEngine organization id
+    seClientId: v.optional(v.string()),       // SportsEngine OAuth client
+    seClientSecret: v.optional(v.string()),
+    status: v.string(),                       // 'beta' | 'active' | 'suspended'
+    plan: v.optional(v.string()),
+    stripeCustomerId: v.optional(v.string()),
+    subscriptionStatus: v.optional(v.string()), // 'beta'|'active'|'past_due'|'canceled'
+    createdAt: v.string(),
+    notes: v.optional(v.string()),
+  }).index("by_orgKey", ["orgKey"]),
 });

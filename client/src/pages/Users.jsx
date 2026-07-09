@@ -23,6 +23,7 @@ function RoleBadge({ role }) {
 function CreateUserForm({ onCreated }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [email,    setEmail]    = useState('');
   const [role,     setRole]     = useState('editor');
   const [busy,     setBusy]     = useState(false);
 
@@ -30,9 +31,9 @@ function CreateUserForm({ onCreated }) {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.createUser({ username: username.trim(), password, role });
+      await api.createUser({ username: username.trim(), password, role, email: email.trim() || undefined });
       toast.success(`Created account "${username.trim()}"`);
-      setUsername(''); setPassword(''); setRole('editor');
+      setUsername(''); setPassword(''); setEmail(''); setRole('editor');
       onCreated();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to create account');
@@ -57,6 +58,12 @@ function CreateUserForm({ onCreated }) {
                  minLength={8} required />
         </div>
         <div>
+          <label className="field-label" htmlFor="new-email">Google email (optional)</label>
+          <input id="new-email" type="email" className="field-input" style={{ width:210 }}
+                 placeholder="enables Google sign-in"
+                 value={email} onChange={e=>setEmail(e.target.value)} />
+        </div>
+        <div>
           <label className="field-label" htmlFor="new-role">Role</label>
           <select id="new-role" className="field-input" style={{ width:140 }}
                   value={role} onChange={e=>setRole(e.target.value)}>
@@ -78,7 +85,24 @@ function CreateUserForm({ onCreated }) {
 function UserRow({ u, isSelf, onChanged }) {
   const [editingPw, setEditingPw] = useState(false);
   const [password,  setPassword]  = useState('');
+  const [email,     setEmail]     = useState(u.email || '');
+  const [editingEmail, setEditingEmail] = useState(false);
   const [busy,      setBusy]      = useState(false);
+
+  async function saveEmail(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api.updateUser(u.id, { email: email.trim() });
+      toast.success(`Email ${email.trim() ? 'set' : 'cleared'} for "${u.username}"`);
+      setEditingEmail(false);
+      onChanged();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update email');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function changeRole(role) {
     if (role === u.role) return;
@@ -133,6 +157,25 @@ function UserRow({ u, isSelf, onChanged }) {
         </select>
       </td>
       <td><RoleBadge role={u.role} /></td>
+      <td>
+        {editingEmail ? (
+          <form onSubmit={saveEmail} style={{ display:'flex', gap:6 }}>
+            <input type="email" className="field-input" style={{ width:190 }}
+                   placeholder="google email" value={email}
+                   onChange={e=>setEmail(e.target.value)} autoFocus />
+            <button type="submit" className="btn-action-green" disabled={busy}>Save</button>
+            <button type="button" className="btn-secondary" style={{ width:'auto', margin:0 }}
+                    onClick={()=>{ setEditingEmail(false); setEmail(u.email || ''); }}>✕</button>
+          </form>
+        ) : (
+          <button onClick={()=>setEditingEmail(true)} disabled={busy}
+            title="Google email — enables Sign in with Google for this account"
+            style={{ background:'none', border:'none', cursor:'pointer', fontSize:12, padding:0,
+              color: u.email ? 'var(--text-2)' : 'var(--text-4)', textDecoration:'underline dotted' }}>
+            {u.email || '+ add email'}
+          </button>
+        )}
+      </td>
       <td style={{ fontSize:12, color:'var(--text-3)' }}>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never'}</td>
       <td style={{ fontSize:12, color:'var(--text-3)' }}>{new Date(u.createdAt).toLocaleDateString()}</td>
       <td>
@@ -204,6 +247,7 @@ export default function Users() {
                   <th style={{ padding:'8px 10px' }}>Username</th>
                   <th style={{ padding:'8px 10px' }}>Change role</th>
                   <th style={{ padding:'8px 10px' }}>Role</th>
+                  <th style={{ padding:'8px 10px' }}>Google email</th>
                   <th style={{ padding:'8px 10px' }}>Last login</th>
                   <th style={{ padding:'8px 10px' }}>Created</th>
                   <th style={{ padding:'8px 10px' }}>Password</th>
