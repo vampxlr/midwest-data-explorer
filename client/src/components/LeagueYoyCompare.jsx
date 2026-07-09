@@ -3,6 +3,7 @@ import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 import { api } from '../api.jsx';
+import { toast } from 'react-hot-toast';
 import SearchableSelect from './SearchableSelect.jsx';
 import Collapsible from './Collapsible.jsx';
 
@@ -210,6 +211,58 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
     updateSlot(i, { currentId: '', priorId: '' });
   }
 
+  // ── Config file export / import — a portable backup of the comparison setup.
+  // The file also carries event names so it stays human-readable.
+  function exportConfig() {
+    const payload = {
+      app: 'midwest-3on3-data-explorer',
+      kind: 'dashboard-config',
+      exportedAt: new Date().toISOString(),
+      yoySlots: {
+        count,
+        slots: slots.map(s => ({
+          ...s,
+          currentName: eventById[s.currentId]?.name || undefined,
+          priorName:   eventById[s.priorId]?.name   || undefined,
+        })),
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `mw3-dashboard-config-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Config downloaded');
+  }
+
+  function importConfig(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        // Accept our export format, a bare {count,slots} state, or the legacy array.
+        const raw = parsed?.yoySlots ?? parsed;
+        const clean = s => ({ currentId: String(s?.currentId || ''), priorId: String(s?.priorId || '') });
+        const next = normalizeState(Array.isArray(raw)
+          ? raw.map(clean)
+          : { count: raw?.count, slots: (raw?.slots || []).map(clean) });
+        if (!next.slots.some(s => s.currentId)) {
+          toast.error('No slot selections found in that file');
+          return;
+        }
+        hydratedRef.current = true; // ensure the debounced save pushes to the server
+        setState(next);
+        const pairs = next.slots.filter(s => s.currentId && s.priorId).length;
+        toast.success(`Imported ${pairs} comparison pair(s)`);
+      } catch {
+        toast.error('Not a valid config file');
+      }
+    };
+    reader.readAsText(file);
+  }
+
   return (
     <div style={{ marginBottom:20 }}>
       <h2 style={{ fontSize:15, fontWeight:700, color:'var(--text-1)', letterSpacing:'-0.2px', margin:'0 0 12px' }}>
@@ -221,7 +274,21 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         subtitle="Pick a league/camp/tournament, then pick what to compare it against. Your selections are saved."
         defaultOpen
       >
-        <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:12 }}>
+        <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+          <button onClick={exportConfig}
+            title="Download the current comparison setup as a JSON file"
+            style={{ padding:'5px 12px', borderRadius:8, fontSize:11, fontWeight:600, border:'1px solid var(--border)',
+              background:'var(--bg-hover)', color:'var(--text-2)', cursor:'pointer' }}>
+            ⬇ Export config
+          </button>
+          <label
+            title="Restore a previously downloaded config file"
+            style={{ padding:'5px 12px', borderRadius:8, fontSize:11, fontWeight:600, border:'1px solid var(--border)',
+              background:'var(--bg-hover)', color:'var(--text-2)', cursor:'pointer' }}>
+            ⬆ Import config
+            <input type="file" accept=".json,application/json" style={{ display:'none' }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) importConfig(f); e.target.value = ''; }} />
+          </label>
           <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--text-3)', fontWeight:600 }}>
             Slots:
             <select value={count} onChange={e => setCount(Number(e.target.value))}

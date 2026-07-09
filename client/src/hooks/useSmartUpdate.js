@@ -69,21 +69,47 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
     } catch {}
   }
 
-  function computeNeeds() {
+  function computeNeeds(regs = recentRegs, stored = storedMap) {
     const thisYear = new Date().getFullYear();
     const needs = [];
-    for (const reg of recentRegs) {
+    for (const reg of regs) {
       // Include current-year events AND any open/active events (status=1 means still
       // accepting registrations regardless of the year in the event name/date).
       const ey = eventYear(reg);
       if (ey !== thisYear && ey !== thisYear - 1 && reg.status !== 1) continue;
-      const stored = storedMap[String(reg.id)];
+      const s = stored[String(reg.id)];
       const current = reg.resultsCompleted || 0;
-      if (!stored) { needs.push(reg); continue; }
-      const storedC = stored.resultsCompleted ?? stored.meta?.resultsCompleted ?? null;
+      if (!s) { needs.push(reg); continue; }
+      const storedC = s.resultsCompleted ?? s.meta?.resultsCompleted ?? null;
       if (storedC === null || current > storedC) needs.push(reg);
     }
     return needs;
+  }
+
+  // The event list captured at page load goes stale — if the tab has been open
+  // a while, new registrations are invisible (stale SE count == stored count →
+  // "no updates"). So at click time, bust the server cache and pull LIVE counts
+  // from SportsEngine plus the current store state, and plan from those.
+  async function fetchFreshData(log) {
+    try {
+      if (log) log('Checking SportsEngine for live registration counts…', 'info');
+      try { await api.clearCache(); } catch {}
+      const [regsRes, storeRes] = await Promise.all([
+        api.recentRegistrations(orgId),
+        api.storeEvents(),
+      ]);
+      const regs = regsRes.data?.registrations || [];
+      const m = {};
+      for (const ev of (storeRes.data?.events || [])) m[String(ev.id)] = ev;
+      if (regs.length) {
+        setStoredMap(m);
+        if (log) log(`  ✓ Live data: ${regs.length} events from SE`, 'ok');
+        return { regs, stored: m };
+      }
+    } catch (err) {
+      if (log) log(`  ⚠ Live check failed (${err.message}) — using page-load data`, 'warn');
+    }
+    return { regs: recentRegs, stored: storedMap };
   }
 
   function cdAddLog(msg, level='info') {
@@ -96,7 +122,8 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
     setCdRunning(true); setCdLog([]); setCdPhase('planning');
     setCdProgress({ current:0, total:0, added:0, skipped:0, errors:0 });
 
-    const eventsToFetch = computeNeeds();
+    const { regs, stored } = await fetchFreshData(cdAddLog);
+    const eventsToFetch = computeNeeds(regs, stored);
     if (!eventsToFetch.length) {
       cdAddLog('All events are up-to-date — nothing to fetch', 'ok');
       setCdPhase('done'); setCdRunning(false);
@@ -153,7 +180,8 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
 
   async function start() {
     if (isVercel === true) { startClientDriven(); return; }
-    const needs = computeNeeds();
+    const { regs, stored } = await fetchFreshData(null);
+    const needs = computeNeeds(regs, stored);
     if (!needs.length) { toast.success('All events are up-to-date'); return; }
     try {
       const res = await api.startAggregate(orgId, 1200, needs, false);
