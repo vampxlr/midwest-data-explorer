@@ -6,7 +6,7 @@ import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 import SearchableSelect from './SearchableSelect.jsx';
 import Collapsible from './Collapsible.jsx';
-import { DeadlineToggle, useDeadlinesOn, useDeadlineMap, nearestLabel } from '../deadlines.jsx';
+import { DeadlineToggle, useDeadlinesOn, useDeadlineMap, nearestLabel, ProjectionToggle, useProjectionOn } from '../deadlines.jsx';
 
 const MAX_SLOTS     = 10;
 const DEFAULT_COUNT = 5;
@@ -118,6 +118,7 @@ function PairChart({ currentEv, priorEv, deadlines }) {
   const [seriesB, setSeriesB] = useState([]);
   const [loading, setLoading] = useState(true);
   const showDeadlines = useDeadlinesOn();
+  const showProjection = useProjectionOn();
 
   useEffect(() => {
     let cancelled = false;
@@ -271,7 +272,7 @@ function PairChart({ currentEv, priorEv, deadlines }) {
             )}
             <Line type="monotone" dataKey="cumA" name="Selected" stroke="var(--viz-1)" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--viz-muted)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
-            {projected !== null && (
+            {showProjection && projected !== null && (
               <Line type="monotone" dataKey="proj" name="Projected" stroke="var(--accent-2)" strokeWidth={2} dot={false} strokeDasharray="2 5" />
             )}
           </ComposedChart>
@@ -282,8 +283,8 @@ function PairChart({ currentEv, priorEv, deadlines }) {
         <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)', fontVariantNumeric:'tabular-nums', flexWrap:'wrap' }}>
           <span>Through today: <strong style={{ color:'var(--viz-1)' }}>{totalA}</strong></span>
           <span>Same day last yr: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
-          {projected !== null && (
-            <span title="Count through yesterday + what the prior season still gained after the same date (prior-year extrapolation only)">
+          {showProjection && projected !== null && (
+            <span title="Prior season's curve time-warped onto this season's deadline dates, from yesterday's count">
               🔮 Projected finish: <strong style={{ color:'var(--accent-2)' }}>~{projected}</strong>
               <span style={{ color:'var(--text-4)' }}> (prior: {priorFinal})</span>
             </span>
@@ -446,6 +447,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
       >
         <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:12 }}>
           <DeadlineToggle />
+          <ProjectionToggle />
           <button onClick={() => setState(prev => ({ ...prev, aiAssist: !prev.aiAssist }))}
             title="When ON: picking a league auto-selects its prior-season counterpart (matched by name, session number, and season timing), and the compare dropdown is ordered best-match-first"
             style={{ padding:'5px 12px', borderRadius:8, fontSize:11, fontWeight:700, cursor:'pointer',
