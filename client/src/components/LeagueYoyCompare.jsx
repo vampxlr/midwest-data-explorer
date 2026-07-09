@@ -113,7 +113,7 @@ function shiftDay(dateStr, delta) {
   return d.toISOString().slice(0, 10);
 }
 
-function PairChart({ currentEv, priorEv, deadlines }) {
+function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
   const [seriesA, setSeriesA] = useState([]);
   const [seriesB, setSeriesB] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -159,17 +159,34 @@ function PairChart({ currentEv, priorEv, deadlines }) {
     const lastBNum = dayNum([...Object.keys(addB)].sort().pop() || keys[keys.length - 1]);
     const lastANum = dayNum([...Object.keys(addA)].sort().pop() || keys[0]);
 
-    // Prior-season anchors = its two biggest single-day jumps, in date order
-    const bSpikes = Object.entries(addB).sort((a, b) => b[1] - a[1]).slice(0, 2)
-      .map(([d]) => dayNum(d)).sort((a, b) => a - b);
-    const pEB = bSpikes[0], pFR = bSpikes[1], pEnd = lastBNum;
+    // Prior-season anchors: prefer the SCRAPED deadlines for the prior event
+    // (exact), else detect its two biggest single-day jumps — with a sanity
+    // guard that they're ≥5 days apart (else they're both the same deadline
+    // rush and can't serve as separate EB/FR anchors).
+    let pEB = priorDeadlines?.earlyBird     ? dayNum(priorDeadlines.earlyBird.slice(5))     : null;
+    let pFR = priorDeadlines?.finalDeadline ? dayNum(priorDeadlines.finalDeadline.slice(5)) : null;
+    if (pEB == null || pFR == null || pEB >= pFR) {
+      const bSpikes = Object.entries(addB).sort((a, b) => b[1] - a[1]).slice(0, 2)
+        .map(([d]) => dayNum(d)).sort((a, b) => a - b);
+      if (bSpikes.length === 2 && bSpikes[1] - bSpikes[0] >= 5) {
+        pEB = bSpikes[0]; pFR = bSpikes[1];
+      } else {
+        pEB = null; pFR = null; // ambiguous — fall back to calendar alignment
+      }
+    }
+    const pEnd = lastBNum;
     // Current-season anchors = scraped deadlines
     const cEB = deadlines?.earlyBird     ? dayNum(deadlines.earlyBird.slice(5))     : null;
     const cFR = deadlines?.finalDeadline ? dayNum(deadlines.finalDeadline.slice(5)) : null;
 
     const canWarp = cEB != null && cFR != null && pEB != null && pFR != null &&
                     cEB < cFR && pEB < pFR && pFR <= pEnd;
-    const cEnd = canWarp ? cFR + (pEnd - pFR) : Math.max(lastBNum, lastANum);
+    // Registrations effectively stop at the final deadline — compress the
+    // prior season's straggler tail (late/manual adds weeks after FR) into a
+    // short grace window so the projected line doesn't crawl on "more than
+    // normal". The full remaining amount still lands, just within ~a week.
+    const GRACE = 7;
+    const cEnd = canWarp ? cFR + Math.min(pEnd - pFR, GRACE) : Math.max(lastBNum, lastANum);
     const dMax = Math.max(lastBNum, lastANum, cEnd, tNum);
 
     // Daily grid with cumulative sums
@@ -212,7 +229,9 @@ function PairChart({ currentEv, priorEv, deadlines }) {
     for (const r of rows) {
       if (r.n > tNum)  r.cumA = undefined;                       // don't draw current line into the future
       if (r.n > pEnd)  r.cumB = undefined;
-      if (yA > 0 && priorFinalV > 0 && r.n >= yNum) {
+      // The projection ENDS at cEnd (shortly after the final deadline) —
+      // never a flat line crawling to the edge of the axis.
+      if (yA > 0 && priorFinalV > 0 && r.n >= yNum && r.n <= cEnd) {
         const p = Math.min(warp(r.n), pEnd);
         r.proj = Math.round(yA + Math.max(0, priorCumAt(p) - baseline));
         projectedV = r.proj;                                     // last one = projected finish
@@ -220,7 +239,7 @@ function PairChart({ currentEv, priorEv, deadlines }) {
     }
     const asToday = at(Math.min(tNum, dMax));
     return { plotData: rows, projected: projectedV, priorFinal: priorFinalV, totalA: asToday.cumA ?? yA, totalB: asToday.cumB };
-  }, [seriesA, seriesB, deadlines, todayMD, yesterdayMD]);
+  }, [seriesA, seriesB, deadlines, priorDeadlines, todayMD, yesterdayMD]);
 
   const chartData = plotData;
   const delta = totalA - totalB;
@@ -528,7 +547,9 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
             const currentEv = eventById[slot.currentId];
             const priorEv = eventById[slot.priorId];
             if (!currentEv || !priorEv) return null;
-            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} deadlines={deadlineMap[String(currentEv.id)]} />;
+            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv}
+              deadlines={deadlineMap[String(currentEv.id)]}
+              priorDeadlines={deadlineMap[String(priorEv.id)]} />;
           })}
         </div>
         {slots.every(s => !s.currentId || !s.priorId) && (
