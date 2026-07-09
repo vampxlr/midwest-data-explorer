@@ -155,11 +155,15 @@ export const api = {
   setSiteSettings: (body)  => axios.put(`${BASE}/site-settings`, body),
   listAccounts:  ()             => axios.get(`${BASE}/admin/accounts`),
   saveAccount:   (key, body)    => axios.put(`${BASE}/admin/accounts/${encodeURIComponent(key)}`, body),
-  deleteAccount: (key)          => axios.delete(`${BASE}/admin/accounts/${encodeURIComponent(key)}`),
+  deleteAccount: (key, body)    => axios.delete(`${BASE}/admin/accounts/${encodeURIComponent(key)}`, { data: body || {} }),
   listOrgs:  ()            => axios.get(`${BASE}/admin/orgs`),
   saveOrg:   (orgKey, body)=> axios.put(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`, body),
-  deleteOrg: (orgKey)      => axios.delete(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`),
-  verifyOrg: (orgKey, body)=> axios.post(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}/verify`, body || {}),
+  deleteOrg: (orgKey, body)     => axios.delete(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}`, { data: body || {} }),
+  verifyOrg: (orgKey, body)     => axios.post(`${BASE}/admin/orgs/${encodeURIComponent(orgKey)}/verify`, body || {}),
+  requestDelete: (body)         => axios.post(`${BASE}/admin/delete-request`, body),
+  companyMe:    ()              => axios.get(`${BASE}/company/me`),
+  companyUsers: ()              => axios.get(`${BASE}/company/users`),
+  companyCreateUser: (body)     => axios.post(`${BASE}/company/users`, body),
 
   // ── Per-user UI preferences (server-persisted, survives devices) ──────────
   getPref: (key)        => axios.get(`${BASE}/prefs/${encodeURIComponent(key)}`),

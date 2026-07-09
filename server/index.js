@@ -150,17 +150,17 @@ app.get('/api/auth/google/callback', async (req, res) => {
     // Find or provision the user
     let user = await userStore.findByEmail(email);
     if (!user && email === SUPER_ADMIN_EMAIL) {
-      // First-ever super admin sign-in — provision the account
+      // First-ever platform-owner sign-in — provision the account
       const randomPw = await auth.hashPassword(require('crypto').randomUUID());
       user = await userStore.create({
-        username: name || 'Super Admin',
+        username: name || 'Owner',
         passwordHash: randomPw,
-        role: 'superadmin',
+        role: 'owner',
         email, provider: 'google',
       });
       user = await userStore.findByEmail(email); // re-read with internal id
-    } else if (user && email === SUPER_ADMIN_EMAIL && user.role !== 'superadmin') {
-      await userStore.update(user.id, { role: 'superadmin' });
+    } else if (user && email === SUPER_ADMIN_EMAIL && user.role !== 'owner') {
+      await userStore.update(user.id, { role: 'owner' });
       user = await userStore.findByEmail(email);
     }
     if (!user) return fail('No account for this Google email — ask the admin to add you');
@@ -182,19 +182,23 @@ app.get('/api/users', auth.requireAdmin, async (req, res) => {
 });
 
 app.post('/api/users', auth.requireAdmin, async (req, res) => {
-  const { username, password, role, email } = req.body || {};
+  const { username, password, role, email, accountKey } = req.body || {};
   if (!username || !password || !role) {
     return res.status(400).json({ error: 'username, password, and role are required' });
   }
-  if (!['admin', 'editor', 'superadmin'].includes(role)) {
-    return res.status(400).json({ error: 'role must be "admin", "editor", or "superadmin"' });
+  if (!['admin', 'editor', 'superadmin', 'owner'].includes(role)) {
+    return res.status(400).json({ error: 'role must be "admin", "editor", "superadmin", or "owner"' });
+  }
+  // Only the Owner can mint platform roles
+  if (['superadmin', 'owner'].includes(role) && req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the Owner can create Super Admin or Owner accounts' });
   }
   if (String(password).length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
   try {
     const passwordHash = await auth.hashPassword(password);
-    const user = await userStore.create({ username, passwordHash, role, email: email || undefined });
+    const user = await userStore.create({ username, passwordHash, role, email: email || undefined, accountKey: accountKey || undefined });
     res.json({ user });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -202,13 +206,19 @@ app.post('/api/users', auth.requireAdmin, async (req, res) => {
 });
 
 app.patch('/api/users/:id', auth.requireAdmin, async (req, res) => {
-  const { role, password, email } = req.body || {};
+  const { role, password, email, accountKey } = req.body || {};
   const patch = {};
   if (role !== undefined) {
-    if (!['admin', 'editor', 'superadmin'].includes(role)) {
-      return res.status(400).json({ error: 'role must be "admin", "editor", or "superadmin"' });
+    if (!['admin', 'editor', 'superadmin', 'owner'].includes(role)) {
+      return res.status(400).json({ error: 'role must be "admin", "editor", "superadmin", or "owner"' });
+    }
+    if (['superadmin', 'owner'].includes(role) && req.user.role !== 'owner') {
+      return res.status(403).json({ error: 'Only the Owner can grant Super Admin or Owner roles' });
     }
     patch.role = role;
+  }
+  if (accountKey !== undefined) {
+    patch.accountKey = String(accountKey || '') || undefined; // link user to a company
   }
   if (password !== undefined) {
     if (String(password).length < 8) {
@@ -232,8 +242,17 @@ app.patch('/api/users/:id', auth.requireAdmin, async (req, res) => {
 });
 
 app.delete('/api/users/:id', auth.requireAdmin, async (req, res) => {
+  // Super admins can do everything EXCEPT delete
+  if (req.user.role === 'superadmin') {
+    return res.status(403).json({ error: 'Super Admins cannot delete — ask the Owner' });
+  }
   if (req.params.id === req.user.id) {
     return res.status(400).json({ error: 'You cannot delete your own account' });
+  }
+  // Nobody below Owner can delete platform-role accounts
+  const target = await userStore.findById(req.params.id);
+  if (target && ['owner', 'superadmin'].includes(target.role) && req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the Owner can delete platform accounts' });
   }
   try {
     await userStore.remove(req.params.id);
@@ -3330,12 +3349,57 @@ app.put('/api/admin/accounts/:accountKey', auth.requireRole('superadmin'), async
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/admin/accounts/:accountKey', auth.requireRole('superadmin'), async (req, res) => {
+app.delete('/api/admin/accounts/:accountKey', auth.requireOwner, async (req, res) => {
   try {
+    const acct = (await listAccountsRaw()).find(a => a.accountKey === req.params.accountKey);
+    if (!acct) return res.status(404).json({ error: 'Company not found' });
+    if (!(await checkDeleteGuards(req, res, 'account', req.params.accountKey, acct.name))) return;
     if (store.IS_CONVEX) await store.convexMutation('admin:removeAccount', { accountKey: req.params.accountKey });
     else localJsonSave(ACCOUNTS_FILE, localJsonLoad(ACCOUNTS_FILE, []).filter(a => a.accountKey !== req.params.accountKey));
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Company-level endpoints — for customer admins linked to an account ────────
+async function requireCompanyUser(req, res) {
+  const me = await userStore.findById(req.user.id);
+  if (!me?.accountKey) { res.status(403).json({ error: 'No company linked to this account' }); return null; }
+  return me;
+}
+
+app.get('/api/company/me', async (req, res) => {
+  try {
+    const me = await requireCompanyUser(req, res); if (!me) return;
+    const [accounts, orgsRes] = await Promise.all([
+      listAccountsRaw(),
+      store.IS_CONVEX ? store.convexQuery('admin:listOrgs', {}) : localJsonLoad(ORGS_FILE, []),
+    ]);
+    const account = accounts.find(a => a.accountKey === me.accountKey);
+    const orgs = orgsRes.filter(o => o.accountKey === me.accountKey)
+      .map(({ _id, _creationTime, ...o }) => maskOrgSecret(o));
+    res.json({ account: account ? { accountKey: account.accountKey, name: account.name } : null, orgs });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/company/users', async (req, res) => {
+  try {
+    const me = await requireCompanyUser(req, res); if (!me) return;
+    const users = (await userStore.list()).filter(u => u.accountKey === me.accountKey);
+    res.json({ users });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/company/users', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const me = await requireCompanyUser(req, res); if (!me) return;
+    const { username, password, role, email } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+    if (!['admin', 'editor'].includes(role)) return res.status(400).json({ error: 'role must be admin or editor' });
+    if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    const passwordHash = await auth.hashPassword(password);
+    const user = await userStore.create({ username, passwordHash, role, email: email || undefined, accountKey: me.accountKey });
+    res.json({ user });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.get('/api/admin/orgs', auth.requireRole('superadmin'), async (req, res) => {
@@ -3434,8 +3498,84 @@ app.post('/api/admin/orgs/:orgKey/verify', auth.requireRole('superadmin'), async
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/admin/orgs/:orgKey', auth.requireRole('superadmin'), async (req, res) => {
+// ── Guarded deletion: multi-step, typed-name, email 2FA — and a platform-wide
+//    kill-switch. Even the Owner cannot delete until PLATFORM_DELETES_ENABLED=1
+//    is set in the environment (deliberately disabled for safety right now).
+const DELETES_ENABLED = process.env.PLATFORM_DELETES_ENABLED === '1';
+
+async function kvSet(key, obj) {
+  if (store.IS_CONVEX) await store.convexMutation('prefs:setPref', { userId: '__platform', key, value: JSON.stringify(obj) });
+  else { const all = localPrefsLoad(); all[`__platform:${key}`] = JSON.stringify(obj); localPrefsSave(all); }
+}
+async function kvGet(key) {
+  let raw;
+  if (store.IS_CONVEX) raw = await store.convexQuery('prefs:getPref', { userId: '__platform', key });
+  else raw = localPrefsLoad()[`__platform:${key}`];
+  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
+// Sends via Resend when RESEND_API_KEY is configured; returns false otherwise.
+async function sendEmail(to, subject, text) {
+  if (!process.env.RESEND_API_KEY) return false;
   try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: process.env.EMAIL_FROM || 'onboarding@resend.dev', to, subject, text }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+// Step 1 of deletion: request a 2FA code (Owner only). Emails a 6-digit code
+// to the Owner's email; the code is stored hashed with a 10-minute expiry.
+app.post('/api/admin/delete-request', auth.requireOwner, async (req, res) => {
+  const { targetType, targetKey } = req.body || {};
+  if (!['org', 'account'].includes(targetType) || !targetKey) {
+    return res.status(400).json({ error: 'targetType (org|account) and targetKey required' });
+  }
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const codeHash = cryptoLib.createHash('sha256').update(code).digest('hex');
+  await kvSet(`del2fa:${targetType}:${targetKey}`, {
+    codeHash, requestedBy: req.user.id, expiresAt: Date.now() + 10 * 60 * 1000,
+  });
+  const me = await userStore.findById(req.user.id);
+  const to = me?.email || SUPER_ADMIN_EMAIL;
+  const emailSent = to ? await sendEmail(
+    to,
+    'Deletion confirmation code',
+    `Your confirmation code for deleting ${targetType} "${targetKey}" is: ${code}\n\nIt expires in 10 minutes. If you did not request this, ignore this email.`
+  ) : false;
+  res.json({ ok: true, emailSent, emailConfigured: !!process.env.RESEND_API_KEY, deletesEnabled: DELETES_ENABLED });
+});
+
+async function checkDeleteGuards(req, res, targetType, targetKey, expectedName) {
+  if (!DELETES_ENABLED) {
+    res.status(403).json({ error: 'Deletion is disabled platform-wide for safety (PLATFORM_DELETES_ENABLED is off)' });
+    return false;
+  }
+  const { confirmName, code } = req.body || {};
+  if (!confirmName || confirmName !== expectedName) {
+    res.status(400).json({ error: 'Typed name does not match — deletion aborted' });
+    return false;
+  }
+  if (process.env.RESEND_API_KEY) { // 2FA enforced whenever email delivery exists
+    const rec = await kvGet(`del2fa:${targetType}:${targetKey}`);
+    const hash = code ? cryptoLib.createHash('sha256').update(String(code)).digest('hex') : null;
+    if (!rec || rec.expiresAt < Date.now() || rec.codeHash !== hash) {
+      res.status(403).json({ error: 'Invalid or expired confirmation code' });
+      return false;
+    }
+    await kvSet(`del2fa:${targetType}:${targetKey}`, { used: true, expiresAt: 0 });
+  }
+  return true;
+}
+
+app.delete('/api/admin/orgs/:orgKey', auth.requireOwner, async (req, res) => {
+  try {
+    const org = await loadOrg(req.params.orgKey);
+    if (!org) return res.status(404).json({ error: 'Organization not found' });
+    if (!(await checkDeleteGuards(req, res, 'org', req.params.orgKey, org.name))) return;
     if (store.IS_CONVEX) await store.convexMutation('admin:removeOrg', { orgKey: req.params.orgKey });
     else localJsonSave(ORGS_FILE, localJsonLoad(ORGS_FILE, []).filter(o => o.orgKey !== req.params.orgKey));
     res.json({ ok: true });

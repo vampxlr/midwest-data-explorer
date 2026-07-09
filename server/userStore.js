@@ -82,6 +82,7 @@ function toConvexArgs(u) {
   if (u.lastLoginAt) args.lastLoginAt = u.lastLoginAt;
   if (u.email)       args.email       = u.email;
   if (u.provider)    args.provider    = u.provider;
+  if (u.accountKey)  args.accountKey  = u.accountKey;
   return args;
 }
 
@@ -128,7 +129,7 @@ async function findByEmail(email) {
   return users.find(u => (u.email || '').toLowerCase() === needle) || null;
 }
 
-async function create({ username, passwordHash, role, email, provider }) {
+async function create({ username, passwordHash, role, email, provider, accountKey }) {
   const userId = crypto.randomUUID();
   const now    = new Date().toISOString();
 
@@ -136,8 +137,9 @@ async function create({ username, passwordHash, role, email, provider }) {
     const existing = await findByUsername(username);
     if (existing) throw new Error('Username already exists');
     const user = { userId, username: String(username).trim(), passwordHash, role, createdAt: now };
-    if (email)    user.email    = String(email).trim().toLowerCase();
-    if (provider) user.provider = provider;
+    if (email)      user.email      = String(email).trim().toLowerCase();
+    if (provider)   user.provider   = provider;
+    if (accountKey) user.accountKey = accountKey;
     await convexMutation('users:upsertUser', user);
     return publicView(user);
   }
@@ -148,8 +150,9 @@ async function create({ username, passwordHash, role, email, provider }) {
     throw new Error('Username already exists');
   }
   const user = { id: userId, username: String(username).trim(), passwordHash, role, createdAt: now, lastLoginAt: null };
-  if (email)    user.email    = String(email).trim().toLowerCase();
-  if (provider) user.provider = provider;
+  if (email)      user.email      = String(email).trim().toLowerCase();
+  if (provider)   user.provider   = provider;
+  if (accountKey) user.accountKey = accountKey;
   users.push(user);
   localSave(users);
   return publicView(user);

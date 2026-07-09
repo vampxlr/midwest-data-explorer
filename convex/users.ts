@@ -18,6 +18,7 @@ export const upsertUser = mutation({
     lastLoginAt: v.optional(v.string()),
     email: v.optional(v.string()),
     provider: v.optional(v.string()),
+    accountKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db

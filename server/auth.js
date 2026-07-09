@@ -61,20 +61,31 @@ function requireAuth(req, res, next) {
 }
 
 /** Restricts a route to one or more roles. Use AFTER requireAuth.
- *  'superadmin' passes every role gate. */
+ *  Platform roles 'owner' and 'superadmin' pass every normal role gate.
+ *  (Deletion endpoints use requireOwner — superadmins cannot delete.) */
+const PLATFORM_ROLES = ['owner', 'superadmin'];
 function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
-    if (req.user.role !== 'superadmin' && !roles.includes(req.user.role)) {
+    if (!PLATFORM_ROLES.includes(req.user.role) && !roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'You do not have permission to perform this action' });
     }
     next();
   };
 }
 
+/** Owner-only gate — the one role that can delete platform entities. */
+function requireOwner(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
+  if (req.user.role !== 'owner') {
+    return res.status(403).json({ error: 'Only the Owner can perform this action' });
+  }
+  next();
+}
+
 const requireAdmin = requireRole('admin');
 
 module.exports = {
   signToken, verifyToken, hashPassword, verifyPassword,
-  requireAuth, requireRole, requireAdmin,
+  requireAuth, requireRole, requireAdmin, requireOwner,
 };

@@ -42,8 +42,9 @@ export function AuthProvider({ children }) {
   const value = {
     user,
     loading,
-    isAdmin: user?.role === 'admin' || user?.role === 'superadmin',
-    isSuperAdmin: user?.role === 'superadmin',
+    isAdmin: ['admin', 'superadmin', 'owner'].includes(user?.role),
+    isSuperAdmin: ['superadmin', 'owner'].includes(user?.role), // platform-level access
+    isOwner: user?.role === 'owner',
     login,
     logout,
   };

@@ -15,6 +15,7 @@ import Login        from './pages/Login.jsx';
 import Users        from './pages/Users.jsx';
 import Landing      from './pages/Landing.jsx';
 import SuperAdmin   from './pages/SuperAdmin.jsx';
+import CompanyDashboard from './pages/CompanyDashboard.jsx';
 import { api }      from './api.jsx';
 import { useAuth }  from './AuthContext.jsx';
 import SearchableSelect from './components/SearchableSelect.jsx';
@@ -40,7 +41,7 @@ function getInitialTheme() {
 }
 
 export default function App() {
-  const { user, loading: authLoading, logout, isSuperAdmin } = useAuth();
+  const { user, loading: authLoading, logout, isSuperAdmin, isOwner } = useAuth();
   // Logged-out visitors see the marketing landing page first; "Sign in" flips
   // to the login form. OAuth round-trips (?gerror / #gtoken) skip the landing.
   const [showLogin, setShowLogin] = useState(() =>
@@ -135,6 +136,19 @@ export default function App() {
       : <Landing onSignIn={() => setShowLogin(true)} />;
   }
 
+  // ── Company dashboard — customer users linked to a company account ───────
+  // (No SportsEngine boot; entering one of their orgs starts it.)
+  if (!isSuperAdmin && user.accountKey && !getActiveOrg()) {
+    return (
+      <>
+        <Toaster position="top-right" toastOptions={{
+          style: { background:'var(--bg-card)', color:'var(--text-1)', border:'1px solid var(--border)' }
+        }} />
+        <CompanyDashboard />
+      </>
+    );
+  }
+
   // ── Super admin standalone dashboard ─────────────────────────────────────
   // A superadmin who hasn't entered an organization gets a completely
   // separate shell: no SportsEngine boot sequence, no org sidebar. The boot
@@ -154,7 +168,9 @@ export default function App() {
             <div style={{ display:'flex', alignItems:'center', gap:10 }}>
               <span style={{ fontSize:22 }}>👑</span>
               <div>
-                <div style={{ fontSize:14, fontWeight:800, color:'#a855f7', letterSpacing:'-0.3px' }}>Super Admin</div>
+                <div style={{ fontSize:14, fontWeight:800, color: isOwner ? '#f59e0b' : '#a855f7', letterSpacing:'-0.3px' }}>
+                  {isOwner ? 'Owner' : 'Super Admin'}
+                </div>
                 <div style={{ fontSize:10, color:'var(--text-4)', textTransform:'uppercase', letterSpacing:'0.3px' }}>Platform Control</div>
               </div>
             </div>
@@ -212,7 +228,13 @@ export default function App() {
               {isSuperAdmin && (
                 <button onClick={exitActiveOrg} className="nav-item"
                   style={{ color:'#a855f7', width:'100%', background:'none', border:'none', cursor:'pointer', font:'inherit', textAlign:'left' }}>
-                  <span>👑</span> Super Admin Panel
+                  <span>👑</span> {isOwner ? 'Owner Panel' : 'Super Admin Panel'}
+                </button>
+              )}
+              {!isSuperAdmin && user.accountKey && (
+                <button onClick={() => { sessionStorage.removeItem('mw3-active-org'); window.location.href = '/'; }} className="nav-item"
+                  style={{ color:'var(--accent-light)', width:'100%', background:'none', border:'none', cursor:'pointer', font:'inherit', textAlign:'left' }}>
+                  <span>🏢</span> Company Dashboard
                 </button>
               )}
               <NavLink to="/"           end onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📊</span> Dashboard</NavLink>

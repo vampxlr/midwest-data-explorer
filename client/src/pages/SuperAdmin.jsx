@@ -1,6 +1,36 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.jsx';
+import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
+
+// Deletion is disabled platform-wide for safety (PLATFORM_DELETES_ENABLED is
+// off server-side too). The full guard flow — typed name + email 2FA — is
+// implemented and runs the moment the kill-switch is flipped.
+const DELETES_LOCKED = true;
+
+async function guardedDelete({ kind, name, key, apiDelete }) {
+  if (DELETES_LOCKED) { toast.error('Deletion is disabled platform-wide for safety'); return false; }
+  if (!window.confirm(`Delete ${kind} "${name}"? This cannot be undone.`)) return false;
+  if (!window.confirm(`FINAL WARNING — all of "${name}" will be permanently removed. Continue?`)) return false;
+  const typed = window.prompt(`Type the exact ${kind} name to confirm:\n\n${name}`);
+  if (typed !== name) { toast.error('Name did not match — deletion aborted'); return false; }
+  try {
+    const rq = await api.requestDelete({ targetType: kind === 'company' ? 'account' : 'org', targetKey: key });
+    let code;
+    if (rq.data.emailConfigured) {
+      code = window.prompt(rq.data.emailSent
+        ? 'A 6-digit confirmation code was sent to your email. Enter it:'
+        : 'Email delivery failed — check RESEND_API_KEY. Enter the code if you received one:');
+      if (!code) return false;
+    }
+    await apiDelete(key, { confirmName: typed, code });
+    toast.success(`${kind} deleted`);
+    return true;
+  } catch (err) {
+    toast.error(err.response?.data?.error || err.message);
+    return false;
+  }
+}
 
 /**
  * Super admin panel — /superadmin (role 'superadmin' only).
@@ -237,15 +267,13 @@ function CompaniesPanel() {
   async function removeCompany(a) {
     const count = orgs.filter(o => o.accountKey === a.accountKey).length;
     if (count > 0) { toast.error('Delete or reassign its organizations first'); return; }
-    if (!window.confirm(`Delete company "${a.name}"?`)) return;
-    try { await api.deleteAccount(a.accountKey); toast.success('Deleted'); setSelected(null); load(); }
-    catch (err) { toast.error(err.message); }
+    const ok = await guardedDelete({ kind: 'company', name: a.name, key: a.accountKey, apiDelete: api.deleteAccount });
+    if (ok) { setSelected(null); load(); }
   }
 
   async function remove(o) {
-    if (!window.confirm(`Delete organization "${o.name}"? Its stored SE credentials will be removed.`)) return;
-    try { await api.deleteOrg(o.orgKey); toast.success('Deleted'); load(); }
-    catch (err) { toast.error(err.message); }
+    const ok = await guardedDelete({ kind: 'org', name: o.name, key: o.orgKey, apiDelete: api.deleteOrg });
+    if (ok) load();
   }
 
   const selectedAccount = accounts.find(a => a.accountKey === selected);
@@ -306,9 +334,11 @@ function CompaniesPanel() {
         </div>
         <div style={{ display:'flex', gap:8 }}>
           {!editing && <button className="btn-primary" onClick={() => setEditing(emptyOrg(selected))}>+ Add organization</button>}
-          <button onClick={() => removeCompany(selectedAccount)}
-            style={{ background:'none', border:'1px solid rgba(239,68,68,0.35)', color:'var(--danger-text)', borderRadius:999, padding:'6px 12px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
-            Delete company
+          <button onClick={() => removeCompany(selectedAccount)} disabled={DELETES_LOCKED}
+            title={DELETES_LOCKED ? 'Deletion is disabled platform-wide for safety' : 'Requires typed confirmation + email code'}
+            style={{ background:'none', border:'1px solid rgba(239,68,68,0.35)', color:'var(--danger-text)', borderRadius:999, padding:'6px 12px', fontSize:12, fontWeight:600,
+              cursor: DELETES_LOCKED ? 'not-allowed' : 'pointer', opacity: DELETES_LOCKED ? 0.4 : 1 }}>
+            🔒 Delete company
           </button>
         </div>
       </div>
@@ -350,9 +380,11 @@ function CompaniesPanel() {
                       Enter Data Explorer →
                     </button>
                     <button className="btn-chart" style={{ marginRight:6 }} onClick={() => setEditing(o)}>Edit</button>
-                    <button onClick={() => remove(o)}
-                      style={{ background:'none', border:'1px solid rgba(239,68,68,0.35)', color:'var(--danger-text)', borderRadius:999, padding:'6px 12px', fontSize:12, fontWeight:600, cursor:'pointer' }}>
-                      Delete
+                    <button onClick={() => remove(o)} disabled={DELETES_LOCKED}
+                      title={DELETES_LOCKED ? 'Deletion is disabled platform-wide for safety' : 'Requires typed confirmation + email code'}
+                      style={{ background:'none', border:'1px solid rgba(239,68,68,0.35)', color:'var(--danger-text)', borderRadius:999, padding:'6px 12px', fontSize:12, fontWeight:600,
+                        cursor: DELETES_LOCKED ? 'not-allowed' : 'pointer', opacity: DELETES_LOCKED ? 0.4 : 1 }}>
+                      🔒 Delete
                     </button>
                   </td>
                 </tr>
@@ -365,7 +397,103 @@ function CompaniesPanel() {
   );
 }
 
-// ── 3. Billing (Stripe-ready, dormant) ────────────────────────────────────────
+// ── 3. Users & Permissions (platform-wide) ────────────────────────────────────
+const PLATFORM_ROLE_INFO = {
+  owner:      { label: 'Owner',       color: '#f59e0b', desc: 'Platform owner — everything, including (guarded) deletes' },
+  superadmin: { label: 'Super Admin', color: '#a855f7', desc: 'Everything except deleting anything' },
+  admin:      { label: 'Admin',       color: '#ef4444', desc: 'Full org access incl. purge and user management' },
+  editor:     { label: 'Editor',      color: '#3b82f6', desc: 'Data refresh, aggregation, exports' },
+};
+
+function PlatformUsersPanel() {
+  const { isOwner, user: me } = useAuth();
+  const [users, setUsers] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [u, a] = await Promise.all([api.listUsers(), api.listAccounts()]);
+      setUsers(u.data.users || []);
+      setAccounts(a.data.accounts || []);
+    } catch (err) { toast.error('Failed to load users: ' + (err.response?.data?.error || err.message)); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  async function setRole(u, role) {
+    try {
+      await api.updateUser(u.id, { role });
+      toast.success(`"${u.username}" is now ${PLATFORM_ROLE_INFO[role]?.label || role} — applies at their next sign-in`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || err.message); }
+  }
+
+  async function setCompany(u, accountKey) {
+    try {
+      await api.updateUser(u.id, { accountKey });
+      toast.success(accountKey ? 'Linked to company' : 'Unlinked from company');
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || err.message); }
+  }
+
+  return (
+    <div className="card">
+      <h2>Users & Permissions</h2>
+      <p style={{ fontSize:12, color:'var(--text-3)', margin:'0 0 6px', lineHeight:1.6 }}>
+        <strong style={{ color:PLATFORM_ROLE_INFO.owner.color }}>Owner</strong> — {PLATFORM_ROLE_INFO.owner.desc}. {' '}
+        <strong style={{ color:PLATFORM_ROLE_INFO.superadmin.color }}>Super Admin</strong> — {PLATFORM_ROLE_INFO.superadmin.desc}. {' '}
+        <strong style={{ color:PLATFORM_ROLE_INFO.admin.color }}>Admin</strong> / <strong style={{ color:PLATFORM_ROLE_INFO.editor.color }}>Editor</strong> — org-level roles.
+      </p>
+      <p style={{ fontSize:11, color:'var(--text-4)', margin:'0 0 14px' }}>
+        {isOwner ? 'Only you (Owner) can grant Owner or Super Admin.' : 'Only the Owner can grant Owner or Super Admin roles.'}
+        {' '}Linking a user to a company gives them that company’s dashboard instead of the Midwest explorer.
+      </p>
+      {loading ? <div className="no-data">Loading…</div> : (
+        <div style={{ overflowX:'auto' }}>
+          <table className="data-table">
+            <thead><tr><th>User</th><th>Email</th><th>Platform role</th><th>Company</th><th>Last login</th></tr></thead>
+            <tbody>
+              {users.map(u => {
+                const info = PLATFORM_ROLE_INFO[u.role] || { label: u.role, color: 'var(--text-3)' };
+                const isSelf = u.id === me?.id;
+                return (
+                  <tr key={u.id}>
+                    <td style={{ color:'var(--text-1)', fontWeight:600 }}>
+                      {u.username}{isSelf && <span style={{ color:'var(--text-4)', fontWeight:400 }}> (you)</span>}
+                      <div><span style={{ fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:999, background:`${info.color}1a`, color:info.color }}>{info.label}</span></div>
+                    </td>
+                    <td style={{ fontSize:12, color:'var(--text-3)' }}>{u.email || '—'}</td>
+                    <td>
+                      <select className="field-input" style={{ width:135 }} value={u.role} disabled={isSelf || (!isOwner && ['owner','superadmin'].includes(u.role))}
+                        onChange={e => setRole(u, e.target.value)}>
+                        <option value="editor">Editor</option>
+                        <option value="admin">Admin</option>
+                        <option value="superadmin" disabled={!isOwner}>Super Admin</option>
+                        <option value="owner" disabled={!isOwner}>Owner</option>
+                      </select>
+                    </td>
+                    <td>
+                      <select className="field-input" style={{ width:160 }} value={u.accountKey || ''} disabled={isSelf}
+                        onChange={e => setCompany(u, e.target.value)}>
+                        <option value="">— none (Midwest) —</option>
+                        {accounts.map(a => <option key={a.accountKey} value={a.accountKey}>{a.name}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ fontSize:12, color:'var(--text-3)' }}>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'Never'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 4. Billing (Stripe-ready, dormant) ────────────────────────────────────────
 function BillingPanel() {
   return (
     <div className="card">
@@ -389,13 +517,15 @@ function BillingPanel() {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function SuperAdmin() {
+  const { isOwner } = useAuth();
   return (
     <div>
       <div className="page-header">
-        <h1>Super Admin</h1>
-        <p>Platform controls — landing page content, pricing, customer organizations, billing</p>
+        <h1>{isOwner ? 'Owner' : 'Super Admin'} Panel</h1>
+        <p>Platform controls — companies, users & permissions, landing page, billing{!isOwner && ' · deletions require the Owner'}</p>
       </div>
       <CompaniesPanel />
+      <PlatformUsersPanel />
       <SiteSettingsEditor />
       <BillingPanel />
     </div>

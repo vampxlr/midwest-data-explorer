@@ -115,6 +115,7 @@ export default defineSchema({
     lastLoginAt: v.optional(v.string()),
     email: v.optional(v.string()),       // set for Google sign-in accounts
     provider: v.optional(v.string()),    // 'google' | undefined (password)
+    accountKey: v.optional(v.string()),  // company this user belongs to
   }).index("by_userId", ["userId"]).index("by_username", ["username"]),
 
   // Per-user UI preferences (dashboard slot selections etc.) — survives
