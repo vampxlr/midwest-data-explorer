@@ -410,6 +410,8 @@ function PlatformUsersPanel() {
   const [users, setUsers] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ username:'', password:'', email:'', role:'editor', accountKey:'' });
 
   async function load() {
     setLoading(true);
@@ -438,9 +440,69 @@ function PlatformUsersPanel() {
     } catch (err) { toast.error(err.response?.data?.error || err.message); }
   }
 
+  async function addUser(e) {
+    e.preventDefault();
+    try {
+      await api.createUser({
+        username: form.username.trim(),
+        password: form.password,
+        role: form.role,
+        email: form.email.trim() || undefined,
+        accountKey: form.accountKey || undefined,
+      });
+      toast.success(`Created "${form.username.trim()}"${form.email ? ' — they can also use Sign in with Google' : ''}`);
+      setForm({ username:'', password:'', email:'', role:'editor', accountKey:'' });
+      setAdding(false);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || err.message); }
+  }
+
   return (
     <div className="card">
-      <h2>Users & Permissions</h2>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+        <h2 style={{ margin:0 }}>Users & Permissions</h2>
+        {!adding && <button className="btn-primary" onClick={() => setAdding(true)}>+ Add user</button>}
+      </div>
+      {adding && (
+        <form onSubmit={addUser} style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'flex-end',
+          background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:12, margin:'8px 0 14px' }}>
+          <div>
+            <label className="field-label">Username *</label>
+            <input className="field-input" style={{ width:150 }} required autoFocus
+              value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
+          </div>
+          <div>
+            <label className="field-label">Password * (8+ chars)</label>
+            <input className="field-input" type="password" style={{ width:160 }} required minLength={8}
+              value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+          </div>
+          <div>
+            <label className="field-label">Google email (optional)</label>
+            <input className="field-input" type="email" style={{ width:210 }} placeholder="enables Google sign-in"
+              value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+          </div>
+          <div>
+            <label className="field-label">Role</label>
+            <select className="field-input" style={{ width:135 }} value={form.role}
+              onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
+              <option value="editor">Editor</option>
+              <option value="admin">Admin</option>
+              {isOwner && <option value="superadmin">Super Admin</option>}
+              {isOwner && <option value="owner">Owner</option>}
+            </select>
+          </div>
+          <div>
+            <label className="field-label">Company</label>
+            <select className="field-input" style={{ width:160 }} value={form.accountKey}
+              onChange={e => setForm(f => ({ ...f, accountKey: e.target.value }))}>
+              <option value="">— none (Midwest) —</option>
+              {accounts.map(a => <option key={a.accountKey} value={a.accountKey}>{a.name}</option>)}
+            </select>
+          </div>
+          <button type="submit" className="btn-primary">Create user</button>
+          <button type="button" className="btn-chart" onClick={() => setAdding(false)}>Cancel</button>
+        </form>
+      )}
       <p style={{ fontSize:12, color:'var(--text-3)', margin:'0 0 6px', lineHeight:1.6 }}>
         <strong style={{ color:PLATFORM_ROLE_INFO.owner.color }}>Owner</strong> — {PLATFORM_ROLE_INFO.owner.desc}. {' '}
         <strong style={{ color:PLATFORM_ROLE_INFO.superadmin.color }}>Super Admin</strong> — {PLATFORM_ROLE_INFO.superadmin.desc}. {' '}
