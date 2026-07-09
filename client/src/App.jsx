@@ -16,6 +16,7 @@ import Users        from './pages/Users.jsx';
 import { api }      from './api.jsx';
 import { useAuth }  from './AuthContext.jsx';
 import SearchableSelect from './components/SearchableSelect.jsx';
+import { isDemoMode, setDemoMode, maskDeep } from './demoMask.js';
 import './App.css';
 
 const ORG_ID = '8008';
@@ -64,10 +65,19 @@ export default function App() {
 
   function handleBootReady(data) {
     setConnected(true);
-    const list = data?.recentEvents || [];
+    // Boot arrives over SSE (not axios), so demo-mode masking applies here.
+    const payload = isDemoMode() ? maskDeep(data) : data;
+    const list = payload?.recentEvents || [];
     setRecentRegs(list);
     if (list.length > 0) setSelectedReg(list[0]);
     setBooting(false);
+  }
+
+  function toggleDemoMode() {
+    setDemoMode(!isDemoMode());
+    // Data already on screen was fetched unmasked (or masked) — reload so
+    // every request replays through the masking interceptor.
+    window.location.reload();
   }
 
   function handleRegChange(val) {
@@ -124,7 +134,7 @@ export default function App() {
             <div className="logo">
               <span className="logo-icon">🏀</span>
               <div>
-                <div className="logo-title">Midwest 3on3</div>
+                <div className="logo-title">{isDemoMode() ? 'Demo Org' : 'Midwest 3on3'}</div>
                 <div className="logo-sub">Data Explorer</div>
               </div>
               <button className="theme-toggle" onClick={toggleTheme} title="Switch theme">
@@ -180,8 +190,22 @@ export default function App() {
 
             <div className="sidebar-footer">
               {connected
-                ? <div className="status-ok">● Connected · Org {ORG_ID}</div>
+                ? <div className="status-ok">● Connected · Org {isDemoMode() ? '****' : ORG_ID}</div>
                 : <div className="status-err">● Disconnected</div>}
+              {user.role === 'admin' && (
+                <button
+                  onClick={toggleDemoMode}
+                  title="Demo/stream mode masks org, league, and contact details for screen recording"
+                  style={{
+                    marginTop:8, width:'100%', padding:'7px 10px', borderRadius:8,
+                    fontSize:12, fontWeight:700, cursor:'pointer',
+                    border: isDemoMode() ? '1px solid rgba(249,115,22,0.5)' : '1px solid var(--border)',
+                    background: isDemoMode() ? 'rgba(249,115,22,0.12)' : 'var(--bg-hover)',
+                    color: isDemoMode() ? 'var(--accent-2)' : 'var(--text-3)',
+                  }}>
+                  {isDemoMode() ? '🎥 Demo Mode ON — click to exit' : '🎥 Demo / Stream Mode'}
+                </button>
+              )}
               <div style={{ fontSize:11, color:'#334155', marginTop:3 }}>
                 All registrations / All time
               </div>

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { isDemoMode, maskDeep } from './demoMask.js';
 
 // On Vercel: API is on the same origin, so '/api' works.
 // For local dev: vite.config.js proxies '/api' to localhost:3001.
@@ -21,6 +22,16 @@ axios.interceptors.request.use((config) => {
   const token = getAuthToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
+});
+
+// Demo/stream mode — mask sensitive data in EVERY API response centrally,
+// so screen recordings never show real org/league/contact details.
+// (Prefs are exempt so the dashboard's own config round-trips unmasked.)
+axios.interceptors.response.use((res) => {
+  if (isDemoMode() && res.data && !String(res.config?.url || '').includes('/prefs/')) {
+    try { res.data = maskDeep(res.data); } catch {}
+  }
+  return res;
 });
 
 // On a 401 (expired/invalid session), clear the stored token and notify

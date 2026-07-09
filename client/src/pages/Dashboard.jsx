@@ -1,4 +1,5 @@
 import React from 'react';
+import { isDemoMode } from '../demoMask.js';
 import useSmartUpdate from '../hooks/useSmartUpdate.js';
 import SmartUpdateBar from '../components/SmartUpdateBar.jsx';
 import SmartUpdateLog from '../components/SmartUpdateLog.jsx';
@@ -18,7 +19,7 @@ export default function Dashboard({ ctx }) {
     <div>
       <div className="page-header">
         <h1>Dashboard</h1>
-        <p>Midwest 3 on 3 · quick glance at recent activity</p>
+        <p>{isDemoMode() ? 'Demo organization' : 'Midwest 3 on 3'} · quick glance at recent activity</p>
       </div>
 
       {/* ── Quick glance: Smart Update + Daily Activity (same as Reports) ─── */}
