@@ -153,6 +153,7 @@ export const api = {
   // ── Registration deadlines (scraped from midwest3on3.com) ─────────────────
   scrapeDeadlines: ()            => axios.post(`${BASE}/admin/scrape-deadlines`),
   getDeadlines:    ()            => axios.get(`${BASE}/deadlines`),
+  deadlineCoverage:(year)        => axios.get(`${BASE}/deadlines-coverage`, { params: { year } }),
   setDeadline:     (eventId, b)  => axios.put(`${BASE}/deadlines/${encodeURIComponent(eventId)}`, b),
 
   // ── Super admin: site settings + organizations ─────────────────────────────

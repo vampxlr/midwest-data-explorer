@@ -222,13 +222,25 @@ function EventTerminal({ eventId, orgId, eventName, eventStatus, resultsComplete
 // ── Registration deadlines (scraped from midwest3on3.com) ─────────────────────
 function DeadlinesCard() {
   const [deadlines, setDeadlines] = useState({});
+  const [coverage, setCoverage] = useState(null);
   const [scraping, setScraping] = useState(false);
   const [editing, setEditing] = useState(null); // eventId
 
   async function load() {
-    try { const r = await api.getDeadlines(); setDeadlines(r.data.deadlines || {}); } catch {}
+    try {
+      const [d, c] = await Promise.all([api.getDeadlines(), api.deadlineCoverage()]);
+      setDeadlines(d.data.deadlines || {});
+      setCoverage(c.data);
+    } catch {}
   }
   useEffect(() => { load(); }, []);
+
+  // "Add manually" for an uncovered event: create an empty manual row and open it
+  async function addMissing(ev) {
+    await api.setDeadline(ev.id, { eventName: ev.name });
+    await load();
+    setEditing(ev.id);
+  }
 
   async function scrape() {
     setScraping(true);
@@ -265,6 +277,23 @@ function DeadlinesCard() {
         matched to SportsEngine events, and shown as EB/Final markers on the YoY comparison charts.
         Edits here become manual overrides that scraping never overwrites.
       </p>
+      {/* Coverage: which of this year's events still lack deadlines */}
+      {coverage && (
+        <div style={{ marginBottom:14, padding:'10px 14px', borderRadius:10,
+          background: coverage.covered === coverage.total ? 'rgba(34,197,94,0.08)' : 'rgba(249,115,22,0.08)',
+          border: `1px solid ${coverage.covered === coverage.total ? 'rgba(34,197,94,0.3)' : 'rgba(249,115,22,0.3)'}` }}>
+          <div style={{ fontSize:12, fontWeight:700, color: coverage.covered === coverage.total ? 'var(--viz-up)' : 'var(--accent-2)', marginBottom: coverage.covered === coverage.total ? 0 : 8 }}>
+            {coverage.year} coverage: {coverage.covered}/{coverage.total} events have deadlines
+          </div>
+          {coverage.events.filter(e => !e.has).map(ev => (
+            <div key={ev.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, padding:'3px 0', fontSize:12 }}>
+              <span style={{ color:'var(--text-2)' }}>✗ {ev.name}</span>
+              <button className="btn-chart" style={{ padding:'3px 10px', fontSize:11 }} onClick={() => addMissing(ev)}>+ Add manually</button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {entries.length === 0 ? <div className="no-data">No deadlines yet — run the scraper.</div> : (
         <div style={{ overflowX:'auto' }}>
           <table className="data-table">

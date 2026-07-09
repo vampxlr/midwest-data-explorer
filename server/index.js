@@ -3619,43 +3619,58 @@ function parseDeadlineDate(text, year) {
 
 function parsePage(html) {
   const text = htmlToText(html);
-  const title = (text.match(/\b(20\d{2})\b[^.]{0,90}?(league|tournament|camp|clinic)/i) || [])[0] || null;
+  // Title may contain periods ("St. Michael") — don't stop at sentence ends
+  const title = (text.match(/\b(20\d{2})\b.{0,90}?\b(league|tournament|camp|clinic)\b/i) || [])[0] || null;
   const year  = title ? (title.match(/\b(20\d{2})\b/) || [])[1] : (text.match(/\b(20\d{2})\b/) || [])[1];
-  const eb    = text.match(/EARLY\s*BIRD\s*Registration\s*ends[^$]{0,80}/i);
-  const fin   = text.match(/FINAL\s*Registration\s*ends[^$]{0,80}/i);
-  const priceNear = (idx) => {
-    if (idx < 0) return null;
-    const m = text.slice(idx, idx + 220).match(/\$\s?(\d{2,4})/);
-    return m ? parseInt(m[1]) : null;
-  };
-  return {
-    title, year: year || null,
-    earlyBird:      eb  ? parseDeadlineDate(eb[0], year)  : null,
-    finalDeadline:  fin ? parseDeadlineDate(fin[0], year) : null,
-    earlyBirdPrice: eb  ? priceNear(text.indexOf(eb[0]))  : null,
-    finalPrice:     fin ? priceNear(text.indexOf(fin[0])) : null,
-  };
+
+  // The site mixes two formats:
+  //   "EARLY BIRD Registration ends at midnight on Thursday, July 23 … $285"
+  //   "Early Bird - Ends at midnight Wednesday, July 22 $105 per team"
+  //   "Registration - Ends at midnight Wednesday, August 5 $125 per team"
+  // Walk every "ends at midnight" sentence; its prefix decides EB vs final.
+  let earlyBird = null, finalDeadline = null, earlyBirdPrice = null, finalPrice = null;
+  for (const m of text.matchAll(/.{0,45}ends\s+at\s+midnight.{0,60}/gi)) {
+    const sentence = m[0];
+    const midnightAt = sentence.toLowerCase().indexOf('midnight');
+    const date = parseDeadlineDate(sentence.slice(midnightAt), year);
+    if (!date) continue;
+    // Price search starts AT the deadline (not the sentence prefix), so a
+    // "$12/each t-shirt" mention just before doesn't win over "$125 per team"
+    const priceM = text.slice(m.index + midnightAt, m.index + midnightAt + 200).match(/\$\s?(\d{2,4})/);
+    const price = priceM ? parseInt(priceM[1]) : null;
+    if (/early\s*bird/i.test(sentence)) {
+      if (!earlyBird) { earlyBird = date; earlyBirdPrice = price; }
+    } else if (!finalDeadline) {
+      finalDeadline = date; finalPrice = price;
+    }
+  }
+  return { title, year: year || null, earlyBird, finalDeadline, earlyBirdPrice, finalPrice };
 }
 
 // Scraped page title → SE event (same year, best token overlap)
 const SCRAPE_STOP = new Set(['the','of','and','a','an','in','on','at','registration','league','leagues','basketball','annual']);
 function scrapeTokens(n) {
+  // Keep bare numbers — "Session 1" vs "Session 2" must not collapse
   return String(n || '').toLowerCase().replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/).filter(w => w && !SCRAPE_STOP.has(w) && !/^\d+(st|nd|rd|th)?$/.test(w));
+    .split(/\s+/).filter(w => w && !SCRAPE_STOP.has(w) && !/^\d+(st|nd|rd|th)$/.test(w));
 }
-function matchScrapedEvent(parsed, events) {
-  if (!parsed.title) return null;
+// Returns ALL events tied at the best score — SportsEngine sometimes has
+// duplicate events for the same league, and both deserve the deadlines.
+function matchScrapedEvents(parsed, events) {
+  if (!parsed.title) return [];
   const tA = new Set(scrapeTokens(parsed.title));
-  let best = null, bs = 0;
+  let bs = 0;
+  const scored = [];
   for (const ev of events) {
     const evYear = ((ev.name || '').match(/\b(20\d{2})\b/) || [])[1] || String(ev.close || ev.open || '').slice(0, 4);
     if (parsed.year && evYear !== parsed.year) continue;
     const tB = new Set(scrapeTokens(ev.name));
     let inter = 0; for (const t of tA) if (tB.has(t)) inter++;
     const s = inter / (new Set([...tA, ...tB]).size || 1);
-    if (s > bs) { bs = s; best = ev; }
+    scored.push({ ev, s });
+    if (s > bs) bs = s;
   }
-  return bs >= 0.3 ? best : null;
+  return bs >= 0.3 ? scored.filter(x => x.s >= bs - 0.001).map(x => x.ev) : [];
 }
 
 async function fetchSitePage(url) {
@@ -3670,9 +3685,17 @@ app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, r
     for (const p of listingPaths) {
       try {
         const html = await fetchSitePage(SITE_BASE + p);
-        for (const m of String(html).matchAll(/href="(\/[a-z0-9\-\/]*(?:league|tournament|camp|clinic)[a-z0-9\-\/]*)"/gi)) {
-          const path = m[1];
-          if (!listingPaths.includes(path) && !path.includes('#')) subpages.add(path);
+        for (const m of String(html).matchAll(/href="([^"]+)"/gi)) {
+          // Normalize the three formats the site mixes: absolute URLs,
+          // /rooted paths, and hrefs missing the leading slash.
+          let path = m[1].replace(/^https?:\/\/(www\.)?midwest3on3\.com/i, '');
+          if (/^https?:/i.test(path)) continue;              // external site
+          if (!path.startsWith('/')) path = '/' + path;
+          path = path.split(/[#?]/)[0].replace(/\/$/, '');
+          if (!path || listingPaths.includes(path)) continue;
+          if (/^\/(leagues|tournaments|camps)\//.test(path) || /(league|tournament|camp|clinic)/.test(path)) {
+            if (!/start-a-new/.test(path)) subpages.add(path);
+          }
         }
       } catch (e) { console.warn('[scrape] listing failed:', p, e.message); }
     }
@@ -3693,29 +3716,47 @@ app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, r
     let matched = 0;
     for (const r of results) {
       if (r.error || (!r.earlyBird && !r.finalDeadline)) continue;
-      const ev = matchScrapedEvent(r, events);
-      if (!ev) continue;
-      const id = String(ev.id);
-      if (existing[id]?.manual) continue;          // manual overrides always win
-      existing[id] = {
-        eventName: ev.name,
-        earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
-        earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
-        source: r.path, scrapedAt: new Date().toISOString(),
-      };
-      matched++;
+      for (const ev of matchScrapedEvents(r, events)) {
+        const id = String(ev.id);
+        if (existing[id]?.manual) continue;        // manual overrides always win
+        existing[id] = {
+          eventName: ev.name,
+          earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
+          earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
+          source: r.path, scrapedAt: new Date().toISOString(),
+        };
+        matched++;
+      }
     }
     await kvSet('deadlines:all', existing);
     res.json({
       pagesScanned: paths.length, matched,
       withDeadlines: results.filter(r => r.earlyBird || r.finalDeadline).length,
-      unmatched: results.filter(r => (r.earlyBird || r.finalDeadline) && !matchScrapedEvent(r, events)).map(r => r.title || r.path),
+      unmatched: results.filter(r => (r.earlyBird || r.finalDeadline) && matchScrapedEvents(r, events).length === 0).map(r => r.title || r.path),
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/deadlines', async (req, res) => {
   res.json({ deadlines: (await kvGet('deadlines:all')) || {} });
+});
+
+// Coverage: which of this year's events have deadlines vs still missing
+app.get('/api/deadlines-coverage', async (req, res) => {
+  const year = req.query.year || String(new Date().getFullYear());
+  try {
+    const db = await store.load();
+    const all = (await kvGet('deadlines:all')) || {};
+    const yearOf = ev => ((ev.name || '').match(/\b(20\d{2})\b/) || [])[1] || String(ev.close || ev.open || '').slice(0, 4);
+    const events = Object.values(db.events)
+      .filter(ev => yearOf(ev) === String(year))
+      .map(ev => {
+        const d = all[String(ev.id)];
+        return { id: String(ev.id), name: ev.name, has: !!(d && (d.earlyBird || d.finalDeadline)) };
+      })
+      .sort((a, b) => Number(a.has) - Number(b.has) || a.name.localeCompare(b.name));
+    res.json({ year, total: events.length, covered: events.filter(e => e.has).length, events });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/deadlines/:eventId', auth.requireRole('admin'), async (req, res) => {

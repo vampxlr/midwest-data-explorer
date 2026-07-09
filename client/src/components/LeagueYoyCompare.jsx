@@ -173,6 +173,15 @@ function PairChart({ currentEv, priorEv, deadlines }) {
     ? yA + Math.max(0, priorFinal - yB)
     : null;
 
+  // Dotted projection curve: from yesterday onward, current count grows by the
+  // prior season's day-by-day increments — ends exactly at `projected`.
+  const plotData = projected === null ? chartData : chartData.map(d => ({
+    ...d,
+    proj: d.mmdd >= yesterdayMD
+      ? (d.mmdd === yesterdayMD ? yA : yA + Math.max(0, d.cumB - yB))
+      : undefined,
+  }));
+
   return (
     <div style={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:'12px 14px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8, marginBottom:6 }}>
@@ -198,7 +207,7 @@ function PairChart({ currentEv, priorEv, deadlines }) {
 
       {!loading && chartData.length > 0 && (
         <ResponsiveContainer width="100%" height={140}>
-          <ComposedChart data={chartData} margin={{ top:4, right:8, left:0, bottom:0 }}>
+          <ComposedChart data={plotData} margin={{ top:4, right:8, left:0, bottom:0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--viz-grid)" vertical={false} />
             <XAxis dataKey="label" stroke="var(--viz-grid)" tickLine={false} tick={{ fill:'var(--viz-axis)', fontSize:9 }}
               interval={Math.max(1, Math.floor(chartData.length/6))} />
@@ -219,6 +228,9 @@ function PairChart({ currentEv, priorEv, deadlines }) {
             )}
             <Line type="monotone" dataKey="cumA" name="Selected" stroke="var(--viz-1)" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--viz-muted)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
+            {projected !== null && (
+              <Line type="monotone" dataKey="proj" name="Projected" stroke="var(--accent-2)" strokeWidth={2} dot={false} strokeDasharray="2 5" />
+            )}
           </ComposedChart>
         </ResponsiveContainer>
       )}
