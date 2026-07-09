@@ -6,7 +6,7 @@ import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 import SearchableSelect from './SearchableSelect.jsx';
 import Collapsible from './Collapsible.jsx';
-import { DeadlineToggle, useDeadlinesOn, useDeadlineMap, nearestLabel, ProjectionToggle, useProjectionOn } from '../deadlines.jsx';
+import { DeadlineToggle, useDeadlinesOn, useDeadlineMap, nearestLabel } from '../deadlines.jsx';
 
 const MAX_SLOTS     = 10;
 const DEFAULT_COUNT = 5;
@@ -113,12 +113,11 @@ function shiftDay(dateStr, delta) {
   return d.toISOString().slice(0, 10);
 }
 
-function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
+function PairChart({ currentEv, priorEv, deadlines }) {
   const [seriesA, setSeriesA] = useState([]);
   const [seriesB, setSeriesB] = useState([]);
   const [loading, setLoading] = useState(true);
   const showDeadlines = useDeadlinesOn();
-  const showProjection = useProjectionOn();
 
   useEffect(() => {
     let cancelled = false;
@@ -138,13 +137,8 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
   const todayMD     = todayCDT().slice(5);
   const yesterdayMD = shiftDay(todayCDT(), -1).slice(5);
 
-  // ── Deadline-anchored projection ──────────────────────────────────────────
-  // Registrations spike on early-bird and final-deadline days, but the prior
-  // season's deadlines fall on DIFFERENT calendar dates. So the prior curve
-  // is used as a template and time-warped so its spikes land on THIS season's
-  // scraped EB/FR dates. The prior season's own deadline days are detected
-  // from its graph — its two largest single-day jumps.
-  const { plotData, projected, priorFinal, totalA, totalB } = useMemo(() => {
+  // Daily grid with cumulative sums for both seasons (calendar-overlaid).
+  const { plotData, totalA, totalB } = useMemo(() => {
     const dayNum  = (mmdd) => Math.round((new Date(`2000-${mmdd}T12:00:00Z`) - new Date('2000-01-01T12:00:00Z')) / 86400000);
     const numDay  = (n) => new Date(new Date('2000-01-01T12:00:00Z').getTime() + n * 86400000).toISOString().slice(5, 10);
 
@@ -152,44 +146,14 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
     for (const r of seriesA) addA[r.date.slice(5)] = (addA[r.date.slice(5)] || 0) + r.total;
     for (const r of seriesB) addB[r.date.slice(5)] = (addB[r.date.slice(5)] || 0) + r.total;
     const keys = [...new Set([...Object.keys(addA), ...Object.keys(addB)])].sort();
-    if (!keys.length) return { plotData: [], projected: null, priorFinal: 0, totalA: 0, totalB: 0 };
+    if (!keys.length) return { plotData: [], totalA: 0, totalB: 0 };
 
-    const yNum = dayNum(yesterdayMD), tNum = dayNum(todayMD);
+    const tNum = dayNum(todayMD);
     const dMin = dayNum(keys[0]);
     const lastBNum = dayNum([...Object.keys(addB)].sort().pop() || keys[keys.length - 1]);
     const lastANum = dayNum([...Object.keys(addA)].sort().pop() || keys[0]);
+    const dMax = Math.max(lastBNum, lastANum, tNum);
 
-    // Prior-season anchors: prefer the SCRAPED deadlines for the prior event
-    // (exact), else detect its two biggest single-day jumps — with a sanity
-    // guard that they're ≥5 days apart (else they're both the same deadline
-    // rush and can't serve as separate EB/FR anchors).
-    let pEB = priorDeadlines?.earlyBird     ? dayNum(priorDeadlines.earlyBird.slice(5))     : null;
-    let pFR = priorDeadlines?.finalDeadline ? dayNum(priorDeadlines.finalDeadline.slice(5)) : null;
-    if (pEB == null || pFR == null || pEB >= pFR) {
-      const bSpikes = Object.entries(addB).sort((a, b) => b[1] - a[1]).slice(0, 2)
-        .map(([d]) => dayNum(d)).sort((a, b) => a - b);
-      if (bSpikes.length === 2 && bSpikes[1] - bSpikes[0] >= 5) {
-        pEB = bSpikes[0]; pFR = bSpikes[1];
-      } else {
-        pEB = null; pFR = null; // ambiguous — fall back to calendar alignment
-      }
-    }
-    const pEnd = lastBNum;
-    // Current-season anchors = scraped deadlines
-    const cEB = deadlines?.earlyBird     ? dayNum(deadlines.earlyBird.slice(5))     : null;
-    const cFR = deadlines?.finalDeadline ? dayNum(deadlines.finalDeadline.slice(5)) : null;
-
-    const canWarp = cEB != null && cFR != null && pEB != null && pFR != null &&
-                    cEB < cFR && pEB < pFR && pFR <= pEnd;
-    // Registrations effectively stop at the final deadline — compress the
-    // prior season's straggler tail (late/manual adds weeks after FR) into a
-    // short grace window so the projected line doesn't crawl on "more than
-    // normal". The full remaining amount still lands, just within ~a week.
-    const GRACE = 7;
-    const cEnd = canWarp ? cFR + Math.min(pEnd - pFR, GRACE) : Math.max(lastBNum, lastANum);
-    const dMax = Math.max(lastBNum, lastANum, cEnd, tNum);
-
-    // Daily grid with cumulative sums
     const rows = [];
     let cumA = 0, cumB = 0;
     for (let n = dMin; n <= dMax; n++) {
@@ -199,47 +163,14 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
       rows.push({ n, mmdd, label: fmtMD(mmdd), cumA, cumB });
     }
     const at = (n) => rows[Math.min(Math.max(n - dMin, 0), rows.length - 1)];
-    const yA = at(yNum).cumA, yB0 = at(yNum).cumB;
-    const priorFinalV = at(pEnd).cumB;
-
-    // Piecewise warp: current day → equivalent prior-season day
-    const aStart = dayNum([...Object.keys(addA)].sort()[0] || keys[0]);
-    const bStart = dayNum([...Object.keys(addB)].sort()[0] || keys[0]);
-    const anchors = canWarp
-      ? [[Math.min(aStart, cEB - 1), Math.min(bStart, pEB - 1)], [cEB, pEB], [cFR, pFR], [cEnd, pEnd]]
-      : null;
-    const warp = (n) => {
-      if (!anchors) return n;
-      for (let i = 1; i < anchors.length; i++) {
-        const [c0, p0] = anchors[i - 1], [c1, p1] = anchors[i];
-        if (n <= c1 || i === anchors.length - 1) {
-          const f = c1 === c0 ? 1 : (n - c0) / (c1 - c0);
-          return p0 + f * (p1 - p0);
-        }
-      }
-      return pEnd;
-    };
-    const priorCumAt = (p) => {           // linear interp of cumB at (fractional) prior day
-      const lo = at(Math.floor(p)), hi = at(Math.ceil(p));
-      return lo.cumB + (hi.cumB - lo.cumB) * (p - Math.floor(p));
-    };
-
-    const baseline = priorCumAt(Math.min(warp(yNum), pEnd));
-    let projectedV = null;
-    for (const r of rows) {
-      if (r.n > tNum)  r.cumA = undefined;                       // don't draw current line into the future
-      if (r.n > pEnd)  r.cumB = undefined;
-      // The projection ENDS at cEnd (shortly after the final deadline) —
-      // never a flat line crawling to the edge of the axis.
-      if (yA > 0 && priorFinalV > 0 && r.n >= yNum && r.n <= cEnd) {
-        const p = Math.min(warp(r.n), pEnd);
-        r.proj = Math.round(yA + Math.max(0, priorCumAt(p) - baseline));
-        projectedV = r.proj;                                     // last one = projected finish
-      }
-    }
     const asToday = at(Math.min(tNum, dMax));
-    return { plotData: rows, projected: projectedV, priorFinal: priorFinalV, totalA: asToday.cumA ?? yA, totalB: asToday.cumB };
-  }, [seriesA, seriesB, deadlines, priorDeadlines, todayMD, yesterdayMD]);
+    const totals = { totalA: asToday.cumA, totalB: asToday.cumB };
+    for (const r of rows) {
+      if (r.n > tNum)     r.cumA = undefined;   // don't draw current line into the future
+      if (r.n > lastBNum) r.cumB = undefined;
+    }
+    return { plotData: rows, ...totals };
+  }, [seriesA, seriesB, todayMD]);
 
   const chartData = plotData;
   const delta = totalA - totalB;
@@ -291,9 +222,6 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
             )}
             <Line type="monotone" dataKey="cumA" name="Selected" stroke="var(--viz-1)" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--viz-muted)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
-            {showProjection && projected !== null && (
-              <Line type="monotone" dataKey="proj" name="Projected" stroke="var(--accent-2)" strokeWidth={2} dot={false} strokeDasharray="2 5" />
-            )}
           </ComposedChart>
         </ResponsiveContainer>
       )}
@@ -302,12 +230,6 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
         <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)', fontVariantNumeric:'tabular-nums', flexWrap:'wrap' }}>
           <span>Through today: <strong style={{ color:'var(--viz-1)' }}>{totalA}</strong></span>
           <span>Same day last yr: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
-          {showProjection && projected !== null && (
-            <span title="Prior season's curve time-warped onto this season's deadline dates, from yesterday's count">
-              🔮 Projected finish: <strong style={{ color:'var(--accent-2)' }}>~{projected}</strong>
-              <span style={{ color:'var(--text-4)' }}> (prior: {priorFinal})</span>
-            </span>
-          )}
         </div>
       )}
     </div>
@@ -539,7 +461,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         title="Comparison Charts"
         defaultOpen
         style={{ marginTop:16 }}
-        right={<><DeadlineToggle /><ProjectionToggle /></>}
+        right={<DeadlineToggle />}
       >
         <div className="grid-3">
           {slots.map((slot, i) => {
@@ -547,9 +469,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
             const currentEv = eventById[slot.currentId];
             const priorEv = eventById[slot.priorId];
             if (!currentEv || !priorEv) return null;
-            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv}
-              deadlines={deadlineMap[String(currentEv.id)]}
-              priorDeadlines={deadlineMap[String(priorEv.id)]} />;
+            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} deadlines={deadlineMap[String(currentEv.id)]} />;
           })}
         </div>
         {slots.every(s => !s.currentId || !s.priorId) && (

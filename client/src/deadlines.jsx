@@ -54,43 +54,6 @@ export function DeadlineToggle({ style }) {
   );
 }
 
-// ── Projection toggle (dotted forecast line + estimation badge) ───────────────
-const PROJ_KEY = 'mw3-show-projection';
-
-export function isProjectionOn() {
-  try { return localStorage.getItem(PROJ_KEY) !== '0'; } catch { return true; }
-}
-
-export function useProjectionOn() {
-  const [on, setOn] = useState(isProjectionOn());
-  useEffect(() => {
-    const f = () => setOn(isProjectionOn());
-    window.addEventListener('mw3-projection-toggle', f);
-    return () => window.removeEventListener('mw3-projection-toggle', f);
-  }, []);
-  return on;
-}
-
-export function ProjectionToggle({ style }) {
-  const on = useProjectionOn();
-  return (
-    <button
-      onClick={() => {
-        try { localStorage.setItem(PROJ_KEY, on ? '0' : '1'); } catch {}
-        window.dispatchEvent(new Event('mw3-projection-toggle'));
-      }}
-      title="Show the projected-finish estimate and its dotted forecast curve"
-      style={{
-        padding:'4px 10px', borderRadius:999, fontSize:11, fontWeight:700, cursor:'pointer',
-        border: on ? '1px solid rgba(249,115,22,0.5)' : '1px solid var(--border)',
-        background: on ? 'rgba(249,115,22,0.12)' : 'var(--bg-hover)',
-        color: on ? 'var(--accent-2)' : 'var(--text-3)', ...style,
-      }}>
-      🔮 Projection {on ? 'ON' : 'OFF'}
-    </button>
-  );
-}
-
 /** Nearest x-axis label to a deadline's MM-DD on a category axis — so the
  *  marker shows even when nobody registered on the exact deadline day. */
 export function nearestLabel(chartData, isoDate, mmddKey = 'mmdd', labelKey = 'label') {
