@@ -134,53 +134,96 @@ function PairChart({ currentEv, priorEv, deadlines }) {
     return () => { cancelled = true; };
   }, [currentEv.id, priorEv.id]);
 
-  const chartData = useMemo(() => {
-    const map = {};
-    for (const r of seriesA) {
-      const mmdd = r.date.slice(5);
-      if (!map[mmdd]) map[mmdd] = { mmdd, label: fmtMD(mmdd), A: 0, B: 0 };
-      map[mmdd].A += r.total;
-    }
-    for (const r of seriesB) {
-      const mmdd = r.date.slice(5);
-      if (!map[mmdd]) map[mmdd] = { mmdd, label: fmtMD(mmdd), A: 0, B: 0 };
-      map[mmdd].B += r.total;
-    }
-    const sorted = Object.values(map).sort((a, b) => a.mmdd.localeCompare(b.mmdd));
-    let cumA = 0, cumB = 0;
-    for (const d of sorted) { cumA += d.A; cumB += d.B; d.cumA = cumA; d.cumB = cumB; }
-    return sorted;
-  }, [seriesA, seriesB]);
-
-  // "As of today" — clip the comparison to the same calendar day so a fully-
-  // completed prior season isn't compared against a still-in-progress one.
   const todayMD     = todayCDT().slice(5);
   const yesterdayMD = shiftDay(todayCDT(), -1).slice(5);
-  const asOfToday     = [...chartData].filter(d => d.mmdd <= todayMD).pop()     || null;
-  const asOfYesterday = [...chartData].filter(d => d.mmdd <= yesterdayMD).pop() || null;
 
-  const totalA = asOfToday ? asOfToday.cumA : 0;
-  const totalB = asOfToday ? asOfToday.cumB : 0;
-  const delta  = totalA - totalB;
+  // ── Deadline-anchored projection ──────────────────────────────────────────
+  // Registrations spike on early-bird and final-deadline days, but the prior
+  // season's deadlines fall on DIFFERENT calendar dates. So the prior curve
+  // is used as a template and time-warped so its spikes land on THIS season's
+  // scraped EB/FR dates. The prior season's own deadline days are detected
+  // from its graph — its two largest single-day jumps.
+  const { plotData, projected, priorFinal, totalA, totalB } = useMemo(() => {
+    const dayNum  = (mmdd) => Math.round((new Date(`2000-${mmdd}T12:00:00Z`) - new Date('2000-01-01T12:00:00Z')) / 86400000);
+    const numDay  = (n) => new Date(new Date('2000-01-01T12:00:00Z').getTime() + n * 86400000).toISOString().slice(5, 10);
 
-  // Forecast — uses data only through YESTERDAY (today is still filling in)
-  // and extrapolates purely from the prior season's remaining tail:
-  // projected = current-through-yesterday + (prior final − prior-through-yesterday).
-  const yA = asOfYesterday ? asOfYesterday.cumA : 0;
-  const yB = asOfYesterday ? asOfYesterday.cumB : 0;
-  const priorFinal = chartData.length ? chartData[chartData.length - 1].cumB : 0;
-  const projected = (yA > 0 && priorFinal > 0)
-    ? yA + Math.max(0, priorFinal - yB)
-    : null;
+    const addA = {}, addB = {};
+    for (const r of seriesA) addA[r.date.slice(5)] = (addA[r.date.slice(5)] || 0) + r.total;
+    for (const r of seriesB) addB[r.date.slice(5)] = (addB[r.date.slice(5)] || 0) + r.total;
+    const keys = [...new Set([...Object.keys(addA), ...Object.keys(addB)])].sort();
+    if (!keys.length) return { plotData: [], projected: null, priorFinal: 0, totalA: 0, totalB: 0 };
 
-  // Dotted projection curve: from yesterday onward, current count grows by the
-  // prior season's day-by-day increments — ends exactly at `projected`.
-  const plotData = projected === null ? chartData : chartData.map(d => ({
-    ...d,
-    proj: d.mmdd >= yesterdayMD
-      ? (d.mmdd === yesterdayMD ? yA : yA + Math.max(0, d.cumB - yB))
-      : undefined,
-  }));
+    const yNum = dayNum(yesterdayMD), tNum = dayNum(todayMD);
+    const dMin = dayNum(keys[0]);
+    const lastBNum = dayNum([...Object.keys(addB)].sort().pop() || keys[keys.length - 1]);
+    const lastANum = dayNum([...Object.keys(addA)].sort().pop() || keys[0]);
+
+    // Prior-season anchors = its two biggest single-day jumps, in date order
+    const bSpikes = Object.entries(addB).sort((a, b) => b[1] - a[1]).slice(0, 2)
+      .map(([d]) => dayNum(d)).sort((a, b) => a - b);
+    const pEB = bSpikes[0], pFR = bSpikes[1], pEnd = lastBNum;
+    // Current-season anchors = scraped deadlines
+    const cEB = deadlines?.earlyBird     ? dayNum(deadlines.earlyBird.slice(5))     : null;
+    const cFR = deadlines?.finalDeadline ? dayNum(deadlines.finalDeadline.slice(5)) : null;
+
+    const canWarp = cEB != null && cFR != null && pEB != null && pFR != null &&
+                    cEB < cFR && pEB < pFR && pFR <= pEnd;
+    const cEnd = canWarp ? cFR + (pEnd - pFR) : Math.max(lastBNum, lastANum);
+    const dMax = Math.max(lastBNum, lastANum, cEnd, tNum);
+
+    // Daily grid with cumulative sums
+    const rows = [];
+    let cumA = 0, cumB = 0;
+    for (let n = dMin; n <= dMax; n++) {
+      const mmdd = numDay(n);
+      cumA += addA[mmdd] || 0;
+      cumB += addB[mmdd] || 0;
+      rows.push({ n, mmdd, label: fmtMD(mmdd), cumA, cumB });
+    }
+    const at = (n) => rows[Math.min(Math.max(n - dMin, 0), rows.length - 1)];
+    const yA = at(yNum).cumA, yB0 = at(yNum).cumB;
+    const priorFinalV = at(pEnd).cumB;
+
+    // Piecewise warp: current day → equivalent prior-season day
+    const aStart = dayNum([...Object.keys(addA)].sort()[0] || keys[0]);
+    const bStart = dayNum([...Object.keys(addB)].sort()[0] || keys[0]);
+    const anchors = canWarp
+      ? [[Math.min(aStart, cEB - 1), Math.min(bStart, pEB - 1)], [cEB, pEB], [cFR, pFR], [cEnd, pEnd]]
+      : null;
+    const warp = (n) => {
+      if (!anchors) return n;
+      for (let i = 1; i < anchors.length; i++) {
+        const [c0, p0] = anchors[i - 1], [c1, p1] = anchors[i];
+        if (n <= c1 || i === anchors.length - 1) {
+          const f = c1 === c0 ? 1 : (n - c0) / (c1 - c0);
+          return p0 + f * (p1 - p0);
+        }
+      }
+      return pEnd;
+    };
+    const priorCumAt = (p) => {           // linear interp of cumB at (fractional) prior day
+      const lo = at(Math.floor(p)), hi = at(Math.ceil(p));
+      return lo.cumB + (hi.cumB - lo.cumB) * (p - Math.floor(p));
+    };
+
+    const baseline = priorCumAt(Math.min(warp(yNum), pEnd));
+    let projectedV = null;
+    for (const r of rows) {
+      if (r.n > tNum)  r.cumA = undefined;                       // don't draw current line into the future
+      if (r.n > pEnd)  r.cumB = undefined;
+      if (yA > 0 && priorFinalV > 0 && r.n >= yNum) {
+        const p = Math.min(warp(r.n), pEnd);
+        r.proj = Math.round(yA + Math.max(0, priorCumAt(p) - baseline));
+        projectedV = r.proj;                                     // last one = projected finish
+      }
+    }
+    const asToday = at(Math.min(tNum, dMax));
+    return { plotData: rows, projected: projectedV, priorFinal: priorFinalV, totalA: asToday.cumA ?? yA, totalB: asToday.cumB };
+  }, [seriesA, seriesB, deadlines, todayMD, yesterdayMD]);
+
+  const chartData = plotData;
+  const delta = totalA - totalB;
+  const asOfYesterday = chartData.find(d => d.mmdd === yesterdayMD) || null;
 
   return (
     <div style={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:'12px 14px' }}>
