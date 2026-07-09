@@ -16,7 +16,6 @@ function fmt10(phone) {
   return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
 }
 import SearchableSelect from '../components/SearchableSelect.jsx';
-import Panel from '../components/Panel.jsx';
 
 const PIE_COLORS  = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6'];
 const curYear     = new Date().getFullYear().toString();
@@ -513,7 +512,7 @@ function LapsedContactsPanel({ recentRegs }) {
   }
 
   return (
-    <Panel id="audiences-panel-1" style={{ marginTop: 24 }}>
+    <div className="card" style={{ marginTop: 24 }}>
       <h2 style={{ margin: '0 0 4px' }}>Lapsed Contacts</h2>
       <p style={{ color:'var(--text-4)', fontSize:12, margin:'0 0 16px', lineHeight:1.6 }}>
         Find every individual player from past leagues who did <strong style={{color:'var(--text-2)'}}>not</strong> sign up
@@ -777,7 +776,7 @@ function LapsedContactsPanel({ recentRegs }) {
           )}
         </>
       )}
-    </Panel>
+    </div>
   );
 }
 
@@ -792,9 +791,9 @@ export default function Audiences({ ctx }) {
         <p>Build targeted Facebook Custom Audience CSV exports from your aggregated data — no extra API calls.</p>
       </div>
 
-      <Panel id="audiences-panel-2">
+      <div className="card">
         <AudienceBuilder recentRegs={recentRegs} />
-      </Panel>
+      </div>
 
       {/* Lapsed Contacts — full width below */}
       <LapsedContactsPanel recentRegs={recentRegs} />

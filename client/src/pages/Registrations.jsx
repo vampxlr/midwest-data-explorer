@@ -1,7 +1,6 @@
 ﻿import React, { useEffect, useState } from 'react';
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
-import Panel from '../components/Panel.jsx';
 
 export default function Registrations({ ctx }) {
   const { orgId, recentRegs, fromYear } = ctx;
@@ -101,7 +100,7 @@ export default function Registrations({ ctx }) {
         </div>
       )}
 
-      <Panel id="registrations-panel-1" style={{padding:0,overflow:'hidden'}}>
+      <div className="card" style={{padding:0,overflow:'hidden'}}>
         {loading
           ? <div className="no-data">Loading…</div>
           : (
@@ -126,7 +125,7 @@ export default function Registrations({ ctx }) {
               </table>
             </div>
           )}
-      </Panel>
+      </div>
     </div>
   );
 }

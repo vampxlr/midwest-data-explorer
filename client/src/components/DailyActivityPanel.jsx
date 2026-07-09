@@ -5,7 +5,6 @@ import {
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 import { DeadlineToggle, useDeadlinesOn, useDeadlineMap } from '../deadlines.jsx';
-import Panel from './Panel.jsx';
 
 const ChartTip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
@@ -152,8 +151,14 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
           {/* Week sparkline — glow border follows the cursor; bars glow on hover
               and clicking a bar jumps to that day */}
           {activityData.weekDays?.length > 0 && (
-            <Panel id="dashboard-week-sparkline" style={{ marginBottom:16 }} onMouseLeave={()=>setHoverBar(-1)}
-              title="This Week — Day by Day" subtitle="Click a bar to jump to that day" right={<DeadlineToggle />}>
+            <div className="card" style={{ marginBottom:16 }} onMouseLeave={()=>setHoverBar(-1)}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+                <div>
+                  <h3 style={{ marginBottom:2 }}>This Week — Day by Day</h3>
+                  <p style={{ margin:'0 0 10px', fontSize:11, color:'var(--text-4)' }}>Click a bar to jump to that day</p>
+                </div>
+                <DeadlineToggle />
+              </div>
               <ResponsiveContainer width="100%" height={130}>
                 <BarChart data={activityData.weekDays.map(d=>({...d,label:fmt(d.date)}))} margin={{top:8,right:8,left:0,bottom:4}} barCategoryGap="18%">
                   <XAxis dataKey="label" stroke="var(--viz-grid)" tickLine={false} tick={{fill:'var(--viz-axis)',fontSize:11}}/>
@@ -187,7 +192,7 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </Panel>
+            </div>
           )}
 
           {/* League breakdown */}
@@ -199,7 +204,8 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
               </div>
             </div>
           ) : (
-            <Panel id="dashboard-league-breakdown" title={`League Breakdown — ${fmt(activityDate)}`}>
+            <div className="card">
+              <h2>League Breakdown — {fmt(activityDate)}</h2>
               <div style={{ overflowX:'auto' }}>
                 <table className="data-table">
                   <thead>
@@ -258,7 +264,7 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
                   </tfoot>
                 </table>
               </div>
-            </Panel>
+            </div>
           )}
         </>
       )}

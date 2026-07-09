@@ -15,7 +15,6 @@ import LeagueDetailPanel from '../components/LeagueDetailPanel.jsx';
 import LeagueOverlap    from '../components/LeagueOverlap.jsx';
 import LeagueScatter   from '../components/LeagueScatter.jsx';
 import DailyActivityPanel from '../components/DailyActivityPanel.jsx';
-import Panel from '../components/Panel.jsx';
 
 const COLORS = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6','#eab308','#06b6d4','#f43f5e','#84cc16'];
 const YEAR_COLORS = { '2023':'var(--text-3)','2024':'#a855f7','2025':'#f97316','2026':'#3b82f6','2027':'#22c55e','2028':'#ec4899' };
@@ -391,7 +390,7 @@ export default function Reports({ ctx }) {
           </div>
 
           {/* ── Global filter card ────────────────────────────────────────── */}
-          <Panel id="reports-panel-1" style={{ borderRadius:'0 0 10px 10px', marginBottom:16 }}>
+          <div className="card" style={{ borderRadius:'0 0 10px 10px', marginBottom:16 }}>
             {/* Display pills */}
             <div style={{ marginBottom: tab!=='compare' ? 12 : 0 }}>
               {DisplayFilters}
@@ -446,14 +445,14 @@ export default function Reports({ ctx }) {
                 </div>
               </div>
             )}
-          </Panel>
+          </div>
 
           {/* ════════════════════════════════════════════════════════════════ */}
           {/* TAB: Day-by-Day                                                 */}
           {/* ════════════════════════════════════════════════════════════════ */}
           {tab === 'overview' && (
             <div>
-              <Panel id="reports-panel-2">
+              <div className="card">
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:16, flexWrap:'wrap', gap:8 }}>
                   <h2 style={{ margin:0 }}>Registrations Per Day</h2>
                   {daily.length > 0 && (
@@ -499,9 +498,9 @@ export default function Reports({ ctx }) {
                     )}
                   </ResponsiveContainer>
                 )}
-              </Panel>
+              </div>
               {recent?.daily30?.length > 0 && (
-                <Panel id="reports-panel-3">
+                <div className="card">
                   <h2>Last 30 Days</h2>
                   <div style={{ overflowX:'auto', maxHeight:320, overflowY:'auto' }}>
                     <table className="data-table">
@@ -524,7 +523,7 @@ export default function Reports({ ctx }) {
                       </tbody>
                     </table>
                   </div>
-                </Panel>
+                </div>
               )}
             </div>
           )}
@@ -539,7 +538,7 @@ export default function Reports({ ctx }) {
           {/* ════════════════════════════════════════════════════════════════ */}
           {tab === 'monthly' && (
             <div>
-              <Panel id="reports-panel-4">
+              <div className="card">
                 <h2>Registrations Per Month</h2>
                 {monthly.length===0 ? <div className="no-data">No data.</div> : (
                   <ResponsiveContainer width="100%" height={340}>
@@ -564,8 +563,8 @@ export default function Reports({ ctx }) {
                     )}
                   </ResponsiveContainer>
                 )}
-              </Panel>
-              <Panel id="reports-panel-5">
+              </div>
+              <div className="card">
                 <h2>Monthly Totals</h2>
                 <table className="data-table">
                   <thead><tr><th>Month</th><th>Registrations</th><th>Share</th></tr></thead>
@@ -586,7 +585,7 @@ export default function Reports({ ctx }) {
                     })}
                   </tbody>
                 </table>
-              </Panel>
+              </div>
             </div>
           )}
 
@@ -604,7 +603,7 @@ export default function Reports({ ctx }) {
                 </a>
               </div>
 
-              <Panel id="reports-panel-6">
+              <div className="card">
                 <h2>Registrations by League{(openOnly||thisYearOnly)&&<span style={{fontSize:13,fontWeight:400,color:'var(--text-3)',marginLeft:8}}>({filteredEvents.length} shown)</span>}</h2>
                 {filteredEvents.length===0 ? <div className="no-data">No events match filters.</div> : (
                   <ResponsiveContainer width="100%" height={Math.max(200,Math.min(filteredEvents.length,20)*28+40)}>
@@ -619,9 +618,9 @@ export default function Reports({ ctx }) {
                     </BarChart>
                   </ResponsiveContainer>
                 )}
-              </Panel>
+              </div>
 
-              <Panel id="reports-panel-7">
+              <div className="card">
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:12,flexWrap:'wrap',gap:8}}>
                   <h2 style={{margin:0}}>League Detail</h2>
                   <span style={{fontSize:12,color:'var(--text-4)'}}>
@@ -702,7 +701,7 @@ export default function Reports({ ctx }) {
                     </tfoot>
                   </table>
                 </div>
-              </Panel>
+              </div>
             </div>
           )}
 
@@ -711,7 +710,7 @@ export default function Reports({ ctx }) {
           {/* ════════════════════════════════════════════════════════════════ */}
           {tab === 'gradyear' && (
             <div>
-              <Panel id="reports-panel-8">
+              <div className="card">
                 <h2>Graduation Year Distribution</h2>
                 {gradYears.length===0 ? <div className="no-data">No grad year data.</div> : (
                   <ResponsiveContainer width="100%" height={320}>
@@ -726,8 +725,8 @@ export default function Reports({ ctx }) {
                     </BarChart>
                   </ResponsiveContainer>
                 )}
-              </Panel>
-              <Panel id="reports-panel-9">
+              </div>
+              <div className="card">
                 <h2>Grad Year Table</h2>
                 <table className="data-table">
                   <thead><tr><th>Grad Year</th><th>Players</th><th>%</th></tr></thead>
@@ -744,7 +743,7 @@ export default function Reports({ ctx }) {
                     })}
                   </tbody>
                 </table>
-              </Panel>
+              </div>
             </div>
           )}
 
@@ -754,7 +753,7 @@ export default function Reports({ ctx }) {
           {tab === 'yoy' && (
             <div>
               {/* ── Day-by-Day Pace ─────────────────────────────────── */}
-              <Panel id="reports-panel-10" style={{marginBottom:16}}>
+              <div className="card" style={{marginBottom:16}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',flexWrap:'wrap',gap:8,marginBottom:12}}>
                   <h2 style={{margin:0}}>Registration Pace — Year over Year</h2>
                   <button onClick={()=>loadYoyDaily()} style={{fontSize:11,color:'var(--text-4)',background:'none',border:'none',cursor:'pointer'}}>↻ Refresh</button>
@@ -895,10 +894,10 @@ export default function Reports({ ctx }) {
                   League = 3-on-3 teams (1 registration = 1 team). Camp/Clinic = individual players. Tournament = single-elimination events.
                   Revenue data requires a separate SportsEngine price feed — not yet available.
                 </p>
-              </Panel>
+              </div>
 
               {/* ── Participant Retention Analysis ──────────────────── */}
-              <Panel id="reports-panel-11" style={{marginBottom:16}}>
+              <div className="card" style={{marginBottom:16}}>
                 <h2 style={{margin:'0 0 4px'}}>Participant Retention</h2>
                 <p style={{color:'var(--text-4)',fontSize:12,margin:'0 0 14px'}}>
                   How many participants from one year's events came back the next year?
@@ -1080,22 +1079,22 @@ export default function Reports({ ctx }) {
                     </>
                   );
                 })()}
-              </Panel>
+              </div>
 
               {yoyLoading && <div className="no-data">Computing year-over-year…</div>}
               {!yoyLoading && yoyData && (
                 <>
-                  <Panel id="reports-panel-12" style={{ marginBottom:12, padding:'12px 16px', background:'var(--bg-hover)', border:'1px solid var(--chip-bg)' }}>
+                  <div className="card" style={{ marginBottom:12, padding:'12px 16px', background:'var(--bg-hover)', border:'1px solid var(--chip-bg)' }}>
                     <p style={{ margin:0, fontSize:13, color:'var(--accent-light)', lineHeight:1.6 }}>
                       <strong>How this works:</strong> Leagues are grouped by base name (year stripped).
                       "Maple Grove 2025" and "Maple Grove 2026" appear as one row.
                       Use this to compare ad performance season-over-season.
                     </p>
-                  </Panel>
+                  </div>
 
                   {/* Grouped bar chart */}
                   {yoyData.groups.length > 0 && yoyData.allYears.length > 1 && (
-                    <Panel id="reports-panel-13">
+                    <div className="card">
                       <h2>Registration Count by Season Year (top 15)</h2>
                       <ResponsiveContainer width="100%" height={380}>
                         <BarChart
@@ -1117,11 +1116,11 @@ export default function Reports({ ctx }) {
                           ))}
                         </BarChart>
                       </ResponsiveContainer>
-                    </Panel>
+                    </div>
                   )}
 
                   {/* Detail table */}
-                  <Panel id="reports-panel-14">
+                  <div className="card">
                     <h2>Season-over-Season Table</h2>
                     <div style={{overflowX:'auto',maxHeight:500,overflowY:'auto'}}>
                       <table className="data-table">
@@ -1157,7 +1156,7 @@ export default function Reports({ ctx }) {
                         </tbody>
                       </table>
                     </div>
-                  </Panel>
+                  </div>
                 </>
               )}
               {!yoyLoading && !yoyData && (
@@ -1173,7 +1172,7 @@ export default function Reports({ ctx }) {
             const nameA = filteredEvents.find(e=>String(e.id)===compareEventA)?.name?.slice(0,32) || 'League A';
             // ── League Email Export helper ──────────────────────────────────────
             const leagueEmailCard = (
-              <Panel id="reports-panel-15" style={{marginBottom:16}}>
+              <div className="card" style={{marginBottom:16}}>
                 <h2 style={{margin:'0 0 4px'}}>All Emails for a League</h2>
                 <p style={{color:'var(--text-4)',fontSize:12,margin:'0 0 12px'}}>
                   Pick any league to see every email and phone number across all its registrations — including all players on each team.
@@ -1297,7 +1296,7 @@ export default function Reports({ ctx }) {
                     </>
                   );
                 })()}
-              </Panel>
+              </div>
             );
             // ────────────────────────────────────────────────────────────────────
             const nameB = filteredEvents.find(e=>String(e.id)===compareEventB)?.name?.slice(0,32) || 'League B';
@@ -1340,7 +1339,7 @@ export default function Reports({ ctx }) {
               <div>
                 {leagueEmailCard}
                 {/* League selectors + view controls */}
-                <Panel id="reports-panel-16" style={{marginBottom:16}}>
+                <div className="card" style={{marginBottom:16}}>
                   <div style={{display:'flex',gap:16,flexWrap:'wrap',marginBottom:16}}>
                     <div style={{flex:1}}>
                       <label className="field-label" style={{color:'var(--accent-light)'}}>League A</label>
@@ -1401,7 +1400,7 @@ export default function Reports({ ctx }) {
                       </span>
                     )}
                   </div>
-                </Panel>
+                </div>
 
                 {/* League summary cards */}
                 {(compareEventA||compareEventB) && (
@@ -1451,7 +1450,7 @@ export default function Reports({ ctx }) {
 
                 {/* Main chart */}
                 {compareData.length > 0 && (
-                  <Panel id="reports-panel-17">
+                  <div className="card">
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:12,flexWrap:'wrap',gap:8}}>
                       <h2 style={{margin:0}}>
                         {compareAlign ? 'Year-Aligned' : 'Day-by-Day'} — {nameA} vs {nameB}
@@ -1532,7 +1531,7 @@ export default function Reports({ ctx }) {
                         </div>
                       ))}
                     </div>
-                  </Panel>
+                  </div>
                 )}
                 {/* Where Did They Go — scatter analysis */}
                 <LeagueScatter events={filteredEvents} />
@@ -1548,7 +1547,7 @@ export default function Reports({ ctx }) {
         subtitle="Quick purge-and-refetch, full mode control (year/type/custom selection), and the live console — for maintenance, not day-to-day use."
       >
         {/* ── Quick Purge & Re-fetch ──────────────────────────────────────── */}
-        <Panel id="reports-panel-18" style={{ marginBottom:16, borderLeft:'3px solid var(--chip-bg)' }}>
+        <div className="card" style={{ marginBottom:16, borderLeft:'3px solid var(--chip-bg)' }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12 }}>
             <div>
               <h3 style={{ margin:'0 0 2px', fontSize:14 }}>Quick Purge & Re-fetch</h3>
@@ -1569,7 +1568,7 @@ export default function Reports({ ctx }) {
               </button>
             </div>
           </div>
-        </Panel>
+        </div>
 
         {/* ── Aggregate panel ─────────────────────────────────────────────── */}
         <AggregatePanel

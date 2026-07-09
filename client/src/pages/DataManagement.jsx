@@ -2,7 +2,6 @@
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
-import Panel from '../components/Panel.jsx';
 
 // ── level colours (same palette as BootTerminal) ────────────────────────────
 const LC = {
@@ -266,7 +265,7 @@ function DeadlinesCard() {
   const entries = Object.entries(deadlines).sort((a, b) => (b[1].earlyBird || '').localeCompare(a[1].earlyBird || ''));
 
   return (
-    <Panel id="datamanagement-panel-1" style={{ marginTop:20 }}>
+    <div className="card" style={{ marginTop:20 }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8, marginBottom:8 }}>
         <h2 style={{ margin:0 }}>Registration Deadlines</h2>
         <button className="btn-primary" onClick={scrape} disabled={scraping}>
@@ -316,7 +315,7 @@ function DeadlinesCard() {
           </table>
         </div>
       )}
-    </Panel>
+    </div>
   );
 }
 
@@ -468,7 +467,7 @@ export default function DataManagement({ ctx }) {
       {loading && <div className="no-data">Loading…</div>}
 
       {!loading && (
-        <Panel id="datamanagement-panel-2" style={{ padding:0, overflow:'hidden' }}>
+        <div className="card" style={{ padding:0, overflow:'hidden' }}>
           <div style={{ overflowX:'auto' }}>
             <table className="data-table">
               <thead>
@@ -598,7 +597,7 @@ export default function DataManagement({ ctx }) {
               </tbody>
             </table>
           </div>
-        </Panel>
+        </div>
       )}
 
       {/* Registration deadlines — scraped from midwest3on3.com, editable */}
@@ -606,7 +605,7 @@ export default function DataManagement({ ctx }) {
 
       {/* Admin: Recompute dashboard stats (fixes double-counting after purge+refetch on Vercel) */}
       {isAdmin && isVercel && (
-        <Panel id="datamanagement-panel-3" style={{ marginTop:20 }}>
+        <div className="card" style={{ marginTop:20 }}>
           <h2 style={{ marginBottom:6 }}>Recompute Stats & Sync Counts</h2>
           <p style={{ color:'var(--text-3)', fontSize:12, marginBottom:14, lineHeight:1.6 }}>
             Fixes two Convex-only issues: (1) Smart Update skipping events that are actually
@@ -623,7 +622,7 @@ export default function DataManagement({ ctx }) {
               background:'rgba(59,130,246,0.08)', color:'#3b82f6', opacity:recomputing?0.5:1 }}>
             {recomputing ? '⟳ Starting recompute…' : '⟳ Recompute Stats from Convex Data'}
           </button>
-        </Panel>
+        </div>
       )}
     </div>
   );

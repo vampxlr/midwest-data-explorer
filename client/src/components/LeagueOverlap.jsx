@@ -11,7 +11,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
-import Panel from './Panel.jsx';
 
 const TAB_CONFIG = [
   { id: 'lapsed',    label: 'Didn\'t Return', color: '#ef4444', desc: 'Were in League A — not in League B. Send reminders.' },
@@ -292,9 +291,9 @@ export default function LeagueOverlap({ eventIdA, eventIdB, nameA, nameB }) {
 
   if (!eventIdA || !eventIdB) return null;
   if (eventIdA === eventIdB) return (
-    <Panel id="leagueoverlap-panel-1" style={{ marginTop: 16 }}>
+    <div className="card" style={{ marginTop: 16 }}>
       <p style={{ color: 'var(--text-4)', fontSize: 13, margin: 0 }}>Select two different leagues to see participant overlap.</p>
-    </Panel>
+    </div>
   );
 
   const activeTab = TAB_CONFIG.find(t => t.id === tab);
@@ -304,7 +303,7 @@ export default function LeagueOverlap({ eventIdA, eventIdB, nameA, nameB }) {
   const hasContact = data?.hasContactData;
 
   return (
-    <Panel id="leagueoverlap-panel-2" style={{ marginTop: 16 }}>
+    <div className="card" style={{ marginTop: 16 }}>
       <div style={{ marginBottom: 14 }}>
         <h2 style={{ margin: '0 0 4px' }}>Participant Overlap</h2>
         <p style={{ color: 'var(--text-4)', fontSize: 12, margin: 0 }}>
@@ -403,6 +402,6 @@ export default function LeagueOverlap({ eventIdA, eventIdB, nameA, nameB }) {
           <ParticipantTable rows={tabRows} mode={tab} nameA={nameA?.slice(0, 20) || 'A'} nameB={nameB?.slice(0, 20) || 'B'} />
         </>
       )}
-    </Panel>
+    </div>
   );
 }

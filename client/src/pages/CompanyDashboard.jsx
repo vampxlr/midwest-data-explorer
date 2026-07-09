@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
-import Panel from '../components/Panel.jsx';
 
 /**
  * Company-level dashboard — standalone shell for customer admins (users
@@ -61,7 +60,7 @@ export default function CompanyDashboard() {
 
       <main style={{ maxWidth:1000, margin:'0 auto', padding:'28px clamp(14px, 3vw, 32px) 60px' }}>
         {/* Organizations */}
-        <Panel id="companydashboard-panel-1">
+        <div className="card">
           <h2>Your Organizations</h2>
           {!data ? <div className="no-data">Loading…</div> : data.orgs.length === 0 ? (
             <div className="no-data" style={{ padding:'24px' }}>
@@ -86,10 +85,10 @@ export default function CompanyDashboard() {
               ))}
             </div>
           )}
-        </Panel>
+        </div>
 
         {/* Company users */}
-        <Panel id="companydashboard-panel-2">
+        <div className="card">
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
             <h2 style={{ margin:0 }}>Team Members</h2>
             {isAdmin && !adding && <button className="btn-primary" onClick={() => setAdding(true)}>+ Add member</button>}
@@ -122,7 +121,7 @@ export default function CompanyDashboard() {
               </tbody>
             </table>
           )}
-        </Panel>
+        </div>
       </main>
     </div>
   );
