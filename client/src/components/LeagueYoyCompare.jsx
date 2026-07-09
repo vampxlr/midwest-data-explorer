@@ -7,6 +7,7 @@ import { toast } from 'react-hot-toast';
 import SearchableSelect from './SearchableSelect.jsx';
 import Collapsible from './Collapsible.jsx';
 import { DeadlineToggle, useDeadlinesOn, useDeadlineMap, nearestLabel, ProjectionToggle, useProjectionOn } from '../deadlines.jsx';
+import Panel from './Panel.jsx';
 
 const MAX_SLOTS     = 10;
 const DEFAULT_COUNT = 5;
@@ -446,8 +447,6 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         defaultOpen
       >
         <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:12 }}>
-          <DeadlineToggle />
-          <ProjectionToggle />
           <button onClick={() => setState(prev => ({ ...prev, aiAssist: !prev.aiAssist }))}
             title="When ON: picking a league auto-selects its prior-season counterpart (matched by name, session number, and season timing), and the compare dropdown is ordered best-match-first"
             style={{ padding:'5px 12px', borderRadius:8, fontSize:11, fontWeight:700, cursor:'pointer',
@@ -518,7 +517,8 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         </div>
       </Collapsible>
 
-      <div className="card" style={{ marginTop:16 }}>
+      <Panel id="dashboard-yoy-charts" style={{ marginTop:16 }}
+        title="Comparison Charts" right={<><DeadlineToggle /><ProjectionToggle /></>}>
         <div className="grid-3">
           {slots.map((slot, i) => {
             if (!slot.currentId || !slot.priorId) return null;
@@ -531,7 +531,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         {slots.every(s => !s.currentId || !s.priorId) && (
           <div className="no-data">Select leagues above to see comparison charts.</div>
         )}
-      </div>
+      </Panel>
     </div>
   );
 }

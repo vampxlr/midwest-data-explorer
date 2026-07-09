@@ -13,6 +13,7 @@ import { api, withToken } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
 import SearchableSelect from './SearchableSelect.jsx';
+import Panel from './Panel.jsx';
 
 const BAR_COLOR = {
   idle: 'var(--text-5)', discovering: '#f97316', fetching: '#3b82f6', done: '#22c55e', error: '#ef4444',
@@ -378,7 +379,7 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
   }
 
   return (
-    <div className="card">
+    <Panel id="aggregatepanel-panel-1">
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
         <div>
           <h2 style={{margin:0}}>Data Aggregation {isVercel&&<span style={{fontSize:11,color:'#f97316',fontWeight:400,marginLeft:6}}>client-driven mode</span>}</h2>
@@ -612,6 +613,6 @@ export default function AggregatePanel({ orgId = '8008', onComplete, recentRegs 
         </>
       )}
       <style>{`@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(200%)}}`}</style>
-    </div>
+    </Panel>
   );
 }

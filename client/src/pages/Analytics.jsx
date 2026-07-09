@@ -6,6 +6,7 @@ import {
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 import AggregatePanel from '../components/AggregatePanel.jsx';
+import Panel from '../components/Panel.jsx';
 
 const COLORS = ['#3b82f6','#f97316','#22c55e','#a855f7','#ec4899','#14b8a6','#eab308','#06b6d4','#f43f5e','#84cc16'];
 
@@ -118,7 +119,7 @@ export default function Analytics({ ctx }) {
       </div>
 
       {/* ── Data panel (collapsible) ────────────────────────────────────── */}
-      <div className="card" style={{ marginBottom:16, borderLeft:'3px solid var(--chip-bg)' }}>
+      <Panel id="analytics-panel-1" style={{ marginBottom:16, borderLeft:'3px solid var(--chip-bg)' }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:12 }}>
           <div>
             <h3 style={{ margin:'0 0 2px', fontSize:14 }}>Data Fetching</h3>
@@ -155,7 +156,7 @@ export default function Analytics({ ctx }) {
             />
           </div>
         )}
-      </div>
+      </Panel>
 
       {/* Mode toggle */}
       <div style={{display:'flex',gap:8,marginBottom:16}}>
@@ -172,7 +173,7 @@ export default function Analytics({ ctx }) {
       </div>
 
       {/* Scenario buttons */}
-      <div className="card" style={{marginBottom:16}}>
+      <Panel id="analytics-panel-2" style={{marginBottom:16}}>
         <h3 style={{marginBottom:10,color:'var(--text-2)'}}>Pre-built Scenarios</h3>
         <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           {SCENARIOS.map(s => (
@@ -189,7 +190,7 @@ export default function Analytics({ ctx }) {
           ))}
         </div>
         {aggLoading && <p style={{color:'var(--text-4)',fontSize:12,marginTop:8}}>Aggregating {recentRegs.length} events…</p>}
-      </div>
+      </Panel>
 
       {/* Tabs */}
       <div className="tabs">
@@ -213,7 +214,7 @@ function GradYearTab({ rows, total, label }) {
   if (!rows.length) return <div className="no-data">No data. Run a scenario or switch to Aggregate mode.</div>;
   return (
     <div>
-      <div className="card">
+      <Panel id="analytics-panel-3">
         <h2>Registrants by Graduation Year — {label}</h2>
         <ResponsiveContainer width="100%" height={360}>
           <BarChart data={sorted} margin={{top:10,right:20,left:0,bottom:24}}>
@@ -226,9 +227,9 @@ function GradYearTab({ rows, total, label }) {
             </Bar>
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </Panel>
       <div className="grid-2">
-        <div className="card">
+        <Panel id="analytics-panel-4">
           <h2>Pie Distribution</h2>
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
@@ -240,8 +241,8 @@ function GradYearTab({ rows, total, label }) {
               <Legend />
             </PieChart>
           </ResponsiveContainer>
-        </div>
-        <div className="card">
+        </Panel>
+        <Panel id="analytics-panel-5">
           <h2>Trend (Area)</h2>
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={sorted} margin={{top:10,right:20,left:0,bottom:24}}>
@@ -258,9 +259,9 @@ function GradYearTab({ rows, total, label }) {
               <Area type="monotone" dataKey="count" name="Players" stroke="#3b82f6" fill="url(#gBlue)" />
             </AreaChart>
           </ResponsiveContainer>
-        </div>
+        </Panel>
       </div>
-      <div className="card">
+      <Panel id="analytics-panel-6">
         <h2>Detail Table</h2>
         <table className="data-table">
           <thead><tr><th>Grad Year</th><th>Players</th><th>%</th><th>Bar</th></tr></thead>
@@ -279,7 +280,7 @@ function GradYearTab({ rows, total, label }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </Panel>
     </div>
   );
 }
@@ -289,7 +290,7 @@ function DivisionTab({ data }) {
   const sorted = [...rows].sort((a,b)=>a.name.localeCompare(b.name));
   return (
     <div>
-      <div className="card">
+      <Panel id="analytics-panel-7">
         <h2>Teams by Division</h2>
         <ResponsiveContainer width="100%" height={320}>
           <BarChart data={sorted} margin={{top:10,right:20,left:0,bottom:24}}>
@@ -302,9 +303,9 @@ function DivisionTab({ data }) {
             </Bar>
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </Panel>
       <div className="grid-2">
-        <div className="card">
+        <Panel id="analytics-panel-8">
           <h2>Division Pie</h2>
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
@@ -315,8 +316,8 @@ function DivisionTab({ data }) {
               <Tooltip content={<ChartTip />} />
             </PieChart>
           </ResponsiveContainer>
-        </div>
-        <div className="card">
+        </Panel>
+        <Panel id="analytics-panel-9">
           <h2>Division Table</h2>
           <table className="data-table">
             <thead><tr><th>Division</th><th>Teams</th><th>%</th></tr></thead>
@@ -330,7 +331,7 @@ function DivisionTab({ data }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </Panel>
       </div>
     </div>
   );
@@ -340,7 +341,7 @@ function GenderTab({ data }) {
   const rows = data?.gender || [];
   return (
     <div className="grid-2">
-      <div className="card">
+      <Panel id="analytics-panel-10">
         <h2>Gender — Pie</h2>
         <ResponsiveContainer width="100%" height={320}>
           <PieChart>
@@ -352,8 +353,8 @@ function GenderTab({ data }) {
             <Legend />
           </PieChart>
         </ResponsiveContainer>
-      </div>
-      <div className="card">
+      </Panel>
+      <Panel id="analytics-panel-11">
         <h2>Gender — Bar</h2>
         <ResponsiveContainer width="100%" height={280}>
           <BarChart data={rows} margin={{top:10,right:20,left:0,bottom:10}}>
@@ -378,7 +379,7 @@ function GenderTab({ data }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </Panel>
     </div>
   );
 }
@@ -388,7 +389,7 @@ function GeoTab({ data }) {
   const top15Cities = (data?.city||[]).slice(0,15);
   return (
     <div>
-      <div className="card">
+      <Panel id="analytics-panel-12">
         <h2>Top 10 States</h2>
         <ResponsiveContainer width="100%" height={300}>
           <BarChart data={top10States} layout="vertical" margin={{top:10,right:30,left:30,bottom:10}}>
@@ -401,9 +402,9 @@ function GeoTab({ data }) {
             </Bar>
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </Panel>
       <div className="grid-2">
-        <div className="card">
+        <Panel id="analytics-panel-13">
           <h2>State Pie</h2>
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
@@ -414,8 +415,8 @@ function GeoTab({ data }) {
               <Tooltip content={<ChartTip />} />
             </PieChart>
           </ResponsiveContainer>
-        </div>
-        <div className="card">
+        </Panel>
+        <Panel id="analytics-panel-14">
           <h2>Top Cities</h2>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={top15Cities} layout="vertical" margin={{top:0,right:20,left:60,bottom:0}}>
@@ -426,9 +427,9 @@ function GeoTab({ data }) {
               <Bar dataKey="count" name="Teams" fill="#22c55e" radius={[0,4,4,0]} />
             </BarChart>
           </ResponsiveContainer>
-        </div>
+        </Panel>
       </div>
-      <div className="card">
+      <Panel id="analytics-panel-15">
         <h2>All States</h2>
         <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
           {(data?.state||[]).map((row,i) => (
@@ -438,7 +439,7 @@ function GeoTab({ data }) {
             </div>
           ))}
         </div>
-      </div>
+      </Panel>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
+import Panel from '../components/Panel.jsx';
 
 const ROLE_INFO = {
   superadmin: { label: 'Super Admin', desc: 'Platform owner — everything Admin can do, plus the Super Admin panel (landing page, pricing, organizations, billing)', color: '#a855f7' },
@@ -238,7 +239,7 @@ export default function Users() {
 
       <CreateUserForm onCreated={load} />
 
-      <div className="card">
+      <Panel id="users-panel-1">
         <h3>Accounts ({users.length})</h3>
         {loading ? (
           <div style={{ color:'var(--text-3)', fontSize:13 }}>Loading…</div>
@@ -265,7 +266,7 @@ export default function Users() {
             </table>
           </div>
         )}
-      </div>
+      </Panel>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 import SearchableSelect from './SearchableSelect.jsx';
+import Panel from './Panel.jsx';
 
 function fmt10(phone) {
   if (!phone) return '—';
@@ -272,7 +273,7 @@ export default function LeagueScatter({ events = [] }) {
   const nowherePct  = data?.source.matchable ? Math.round((data.stats?.nowhere ?? data.nowhere.count) / data.source.matchable * 100) : 0;
 
   return (
-    <div className="card" style={{ marginTop:16 }}>
+    <Panel id="leaguescatter-panel-1" style={{ marginTop:16 }}>
       <div style={{ marginBottom:14 }}>
         <h2 style={{ margin:'0 0 4px' }}>Where Did They Go?</h2>
         <p style={{ color:'var(--text-4)', fontSize:12, margin:0 }}>
@@ -501,6 +502,6 @@ export default function LeagueScatter({ events = [] }) {
           </div>
         </div>
       )}
-    </div>
+    </Panel>
   );
 }

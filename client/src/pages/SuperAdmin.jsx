@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
+import Panel from '../components/Panel.jsx';
 
 // Deletion is disabled platform-wide for safety (PLATFORM_DELETES_ENABLED is
 // off server-side too). The full guard flow — typed name + email 2FA — is
@@ -74,7 +75,7 @@ function SiteSettingsEditor() {
   if (!s) return <div className="no-data">Loading…</div>;
 
   return (
-    <div className="card">
+    <Panel id="superadmin-panel-1">
       <h2>Landing Page & Pricing</h2>
       <div className="grid-2" style={{ gap:14 }}>
         <Field label="App name">
@@ -121,7 +122,7 @@ function SiteSettingsEditor() {
           Preview landing page ↗
         </a>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -282,7 +283,7 @@ function CompaniesPanel() {
   // ── Companies list view ──
   if (!selected) {
     return (
-      <div className="card">
+      <Panel id="superadmin-panel-2">
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
           <h2 style={{ margin:0 }}>Companies</h2>
           {!addingCompany && <button className="btn-primary" onClick={() => setAddingCompany(true)}>+ Add company</button>}
@@ -320,13 +321,13 @@ function CompaniesPanel() {
             })}
           </div>
         )}
-      </div>
+      </Panel>
     );
   }
 
   // ── Single company view: its organizations ──
   return (
-    <div className="card">
+    <Panel id="superadmin-panel-3">
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, flexWrap:'wrap', gap:8 }}>
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <button className="btn-chart" onClick={() => { setSelected(null); setEditing(null); }}>← Companies</button>
@@ -393,7 +394,7 @@ function CompaniesPanel() {
           </table>
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -458,7 +459,7 @@ function PlatformUsersPanel() {
   }
 
   return (
-    <div className="card">
+    <Panel id="superadmin-panel-4">
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
         <h2 style={{ margin:0 }}>Users & Permissions</h2>
         {!adding && <button className="btn-primary" onClick={() => setAdding(true)}>+ Add user</button>}
@@ -551,14 +552,14 @@ function PlatformUsersPanel() {
           </table>
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
 // ── 4. Billing (Stripe-ready, dormant) ────────────────────────────────────────
 function BillingPanel() {
   return (
-    <div className="card">
+    <Panel id="superadmin-panel-5">
       <h2>Billing</h2>
       <div style={{
         display:'flex', alignItems:'center', gap:12, padding:'14px 16px', borderRadius:10,
@@ -573,7 +574,7 @@ function BillingPanel() {
           </div>
         </div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
