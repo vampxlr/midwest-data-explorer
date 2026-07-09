@@ -80,6 +80,8 @@ function toConvexArgs(u) {
     createdAt:    u.createdAt,
   };
   if (u.lastLoginAt) args.lastLoginAt = u.lastLoginAt;
+  if (u.email)       args.email       = u.email;
+  if (u.provider)    args.provider    = u.provider;
   return args;
 }
 
@@ -114,7 +116,19 @@ async function findById(id) {
   return users.find(u => u.id === id) || null;
 }
 
-async function create({ username, passwordHash, role }) {
+async function findByEmail(email) {
+  const needle = String(email || '').trim().toLowerCase();
+  if (!needle) return null;
+  if (IS_CONVEX) {
+    const users = await convexQuery('users:getAll', {});
+    const found = users.find(u => (u.email || '').toLowerCase() === needle) || null;
+    return withId(found);
+  }
+  const users = localLoad();
+  return users.find(u => (u.email || '').toLowerCase() === needle) || null;
+}
+
+async function create({ username, passwordHash, role, email, provider }) {
   const userId = crypto.randomUUID();
   const now    = new Date().toISOString();
 
@@ -122,6 +136,8 @@ async function create({ username, passwordHash, role }) {
     const existing = await findByUsername(username);
     if (existing) throw new Error('Username already exists');
     const user = { userId, username: String(username).trim(), passwordHash, role, createdAt: now };
+    if (email)    user.email    = String(email).trim().toLowerCase();
+    if (provider) user.provider = provider;
     await convexMutation('users:upsertUser', user);
     return publicView(user);
   }
@@ -132,6 +148,8 @@ async function create({ username, passwordHash, role }) {
     throw new Error('Username already exists');
   }
   const user = { id: userId, username: String(username).trim(), passwordHash, role, createdAt: now, lastLoginAt: null };
+  if (email)    user.email    = String(email).trim().toLowerCase();
+  if (provider) user.provider = provider;
   users.push(user);
   localSave(users);
   return publicView(user);
@@ -177,4 +195,4 @@ async function count() {
   return localLoad().length;
 }
 
-module.exports = { list, findByUsername, findById, create, update, remove, recordLogin, count, publicView };
+module.exports = { list, findByUsername, findById, findByEmail, create, update, remove, recordLogin, count, publicView };

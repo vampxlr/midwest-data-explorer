@@ -8,6 +8,13 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Google OAuth callback lands on /login#gtoken=<jwt> — adopt it as the
+    // session token (hash fragment never reaches server logs).
+    const m = window.location.hash.match(/gtoken=([^&]+)/);
+    if (m) {
+      setAuthToken(decodeURIComponent(m[1]));
+      history.replaceState(null, '', window.location.pathname);
+    }
     if (!getAuthToken()) { setLoading(false); return; }
     api.me()
       .then(res => setUser(res.data?.user || null))
@@ -35,7 +42,8 @@ export function AuthProvider({ children }) {
   const value = {
     user,
     loading,
-    isAdmin: user?.role === 'admin',
+    isAdmin: user?.role === 'admin' || user?.role === 'superadmin',
+    isSuperAdmin: user?.role === 'superadmin',
     login,
     logout,
   };

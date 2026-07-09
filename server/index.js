@@ -44,7 +44,10 @@ app.use(rateLimit({
 // Every /api/* route requires a valid session EXCEPT the ones listed here.
 // SSE endpoints (EventSource can't send custom headers) accept the token via
 // a `?token=` query parameter as a fallback — see auth.requireAuth.
-const PUBLIC_API_PATHS = new Set(['/api/auth/login', '/api/health', '/api/runtime']);
+const PUBLIC_API_PATHS = new Set([
+  '/api/auth/login', '/api/health', '/api/runtime',
+  '/api/auth/google', '/api/auth/google/callback',
+]);
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/') || PUBLIC_API_PATHS.has(req.path)) return next();
   return auth.requireAuth(req, res, next);
@@ -72,6 +75,102 @@ app.get('/api/auth/me', async (req, res) => {
   const user = await userStore.findById(req.user.id);
   if (!user) return res.status(401).json({ error: 'Account no longer exists' });
   res.json({ user: userStore.publicView(user) });
+});
+
+// ── Sign in with Google ────────────────────────────────────────────────────────
+//
+// GET /api/auth/google           → redirect to Google's consent screen
+// GET /api/auth/google/callback  → exchange code, find-or-provision user, issue
+//                                  the app JWT, redirect to the SPA with #gtoken=
+//
+// Access policy: SUPER_ADMIN_EMAIL is auto-provisioned as role 'superadmin'.
+// Any other Google account must match the email of an existing user (added via
+// the Users page) — no open signup.
+
+const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const SUPER_ADMIN_EMAIL    = (process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+
+// Where the API lives (must match a redirect URI registered on the OAuth client)
+// and where the SPA lives (where we send the browser back with the token).
+function googleUrls(req) {
+  const onVercel = process.env.VERCEL === '1';
+  const apiOrigin    = onVercel ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
+  const clientOrigin = onVercel ? apiOrigin : (process.env.CLIENT_ORIGIN || 'http://localhost:5173');
+  return { redirectUri: `${apiOrigin}/api/auth/google/callback`, clientOrigin };
+}
+
+app.get('/api/auth/google', (req, res) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return res.status(503).json({ error: 'Google sign-in is not configured' });
+  }
+  const { redirectUri } = googleUrls(req);
+  // Signed short-lived state to reject forged callbacks
+  const state = auth.signToken({ id: 'oauth-state', username: 'state', role: 'state' });
+  const params = new URLSearchParams({
+    client_id:     GOOGLE_CLIENT_ID,
+    redirect_uri:  redirectUri,
+    response_type: 'code',
+    scope:         'openid email profile',
+    prompt:        'select_account',
+    state,
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const { redirectUri, clientOrigin } = googleUrls(req);
+  const fail = (msg) => res.redirect(`${clientOrigin}/login?gerror=${encodeURIComponent(msg)}`);
+
+  if (error) return fail(String(error));
+  if (!code)  return fail('Missing authorization code');
+  try { auth.verifyToken(String(state || '')); } catch { return fail('Invalid sign-in state — try again'); }
+
+  try {
+    // Exchange the code for tokens
+    const tokenRes = await axios.post('https://oauth2.googleapis.com/token', new URLSearchParams({
+      code:          String(code),
+      client_id:     GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      redirect_uri:  redirectUri,
+      grant_type:    'authorization_code',
+    }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+
+    // id_token is a JWT signed by Google; we just received it over TLS directly
+    // from Google's token endpoint, so decoding the payload is sufficient here.
+    const idToken = tokenRes.data.id_token;
+    const claims  = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url').toString('utf8'));
+    const email   = String(claims.email || '').trim().toLowerCase();
+    const name    = String(claims.name || email.split('@')[0]);
+    if (!email || claims.email_verified === false) return fail('Google account has no verified email');
+
+    // Find or provision the user
+    let user = await userStore.findByEmail(email);
+    if (!user && email === SUPER_ADMIN_EMAIL) {
+      // First-ever super admin sign-in — provision the account
+      const randomPw = await auth.hashPassword(require('crypto').randomUUID());
+      user = await userStore.create({
+        username: name || 'Super Admin',
+        passwordHash: randomPw,
+        role: 'superadmin',
+        email, provider: 'google',
+      });
+      user = await userStore.findByEmail(email); // re-read with internal id
+    } else if (user && email === SUPER_ADMIN_EMAIL && user.role !== 'superadmin') {
+      await userStore.update(user.id, { role: 'superadmin' });
+      user = await userStore.findByEmail(email);
+    }
+    if (!user) return fail('No account for this Google email — ask the admin to add you');
+
+    await userStore.recordLogin(user.id);
+    const token = auth.signToken(user);
+    // Hash fragment keeps the token out of server/proxy logs
+    res.redirect(`${clientOrigin}/login#gtoken=${encodeURIComponent(token)}`);
+  } catch (err) {
+    const detail = err.response?.data?.error_description || err.response?.data?.error || err.message;
+    fail(`Google sign-in failed: ${detail}`);
+  }
 });
 
 // ── User management (admin only) ──────────────────────────────────────────────
