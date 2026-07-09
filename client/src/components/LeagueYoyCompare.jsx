@@ -98,6 +98,17 @@ function PairChart({ currentEv, priorEv }) {
   const totalB = asOfToday ? asOfToday.cumB : 0;
   const delta  = totalA - totalB;
 
+  // Forecast: current count + the registrations the PRIOR season still gained
+  // after this same calendar day. Scaled by current pace vs prior pace so a
+  // hotter year projects higher. Only meaningful once the prior season has
+  // finished and we have some current data.
+  const priorFinal = chartData.length ? chartData[chartData.length - 1].cumB : 0;
+  const priorRemaining = Math.max(0, priorFinal - totalB);
+  const paceRatio = totalB > 0 ? totalA / totalB : 1;
+  const projected = (totalA > 0 && priorFinal > totalB)
+    ? Math.round(totalA + priorRemaining * Math.min(Math.max(paceRatio, 0.5), 2))
+    : null;
+
   return (
     <div style={{ background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:'12px 14px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8, marginBottom:6 }}>
@@ -140,9 +151,15 @@ function PairChart({ currentEv, priorEv }) {
       )}
 
       {!loading && (
-        <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)', fontVariantNumeric:'tabular-nums' }}>
+        <div style={{ display:'flex', gap:14, marginTop:6, fontSize:11, color:'var(--text-4)', fontVariantNumeric:'tabular-nums', flexWrap:'wrap' }}>
           <span>Through today: <strong style={{ color:'var(--viz-1)' }}>{totalA}</strong></span>
           <span>Same day last yr: <strong style={{ color:'var(--text-3)' }}>{totalB}</strong></span>
+          {projected !== null && (
+            <span title="Current count + what the prior season still gained after this date, scaled by this year's pace">
+              🔮 Projected finish: <strong style={{ color:'var(--accent-2)' }}>~{projected}</strong>
+              <span style={{ color:'var(--text-4)' }}> (prior: {priorFinal})</span>
+            </span>
+          )}
         </div>
       )}
     </div>
