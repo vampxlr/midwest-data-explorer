@@ -112,7 +112,7 @@ function shiftDay(dateStr, delta) {
   return d.toISOString().slice(0, 10);
 }
 
-function PairChart({ currentEv, priorEv }) {
+function PairChart({ currentEv, priorEv, deadlines }) {
   const [seriesA, setSeriesA] = useState([]);
   const [seriesB, setSeriesB] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -206,6 +206,15 @@ function PairChart({ currentEv, priorEv }) {
               <ReferenceLine x={asOfYesterday.label} stroke="var(--accent-2)" strokeDasharray="3 3"
                 label={{ value:'Yesterday', position:'insideTopRight', fill:'var(--accent-2)', fontSize:9 }} />
             )}
+            {/* Registration deadlines (scraped from midwest3on3.com) */}
+            {deadlines?.earlyBird && chartData.some(d => d.mmdd === deadlines.earlyBird.slice(5)) && (
+              <ReferenceLine x={fmtMD(deadlines.earlyBird.slice(5))} stroke="var(--viz-2)" strokeDasharray="4 3"
+                label={{ value:'EB', position:'insideTop', fill:'var(--viz-2)', fontSize:9 }} />
+            )}
+            {deadlines?.finalDeadline && chartData.some(d => d.mmdd === deadlines.finalDeadline.slice(5)) && (
+              <ReferenceLine x={fmtMD(deadlines.finalDeadline.slice(5))} stroke="var(--viz-6)" strokeDasharray="4 3"
+                label={{ value:'Final', position:'insideTop', fill:'var(--viz-6)', fontSize:9 }} />
+            )}
             <Line type="monotone" dataKey="cumA" name="Selected" stroke="var(--viz-1)" strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="cumB" name="Compared" stroke="var(--viz-muted)" strokeWidth={2} dot={false} strokeDasharray="4 3" />
           </ComposedChart>
@@ -233,6 +242,10 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
   // selections survive across devices, browsers, and localhost vs production.
   const [state, setState] = useState(loadSaved);
   const { count, slots, aiAssist } = state;
+  const [deadlineMap, setDeadlineMap] = useState({});
+  useEffect(() => {
+    api.getDeadlines().then(r => setDeadlineMap(r.data.deadlines || {})).catch(() => {});
+  }, []);
   const hydratedRef = React.useRef(false);
   const saveTimerRef = React.useRef(null);
 
@@ -455,7 +468,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
             const currentEv = eventById[slot.currentId];
             const priorEv = eventById[slot.priorId];
             if (!currentEv || !priorEv) return null;
-            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} />;
+            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} deadlines={deadlineMap[String(currentEv.id)]} />;
           })}
         </div>
         {slots.every(s => !s.currentId || !s.priorId) && (

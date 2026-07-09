@@ -150,6 +150,11 @@ export const api = {
 
   recomputeStats: () => axios.post(`${BASE}/admin/recompute-stats`),
 
+  // ── Registration deadlines (scraped from midwest3on3.com) ─────────────────
+  scrapeDeadlines: ()            => axios.post(`${BASE}/admin/scrape-deadlines`),
+  getDeadlines:    ()            => axios.get(`${BASE}/deadlines`),
+  setDeadline:     (eventId, b)  => axios.put(`${BASE}/deadlines/${encodeURIComponent(eventId)}`, b),
+
   // ── Super admin: site settings + organizations ─────────────────────────────
   getSiteSettings: ()      => axios.get(`${BASE}/site-settings`),
   setSiteSettings: (body)  => axios.put(`${BASE}/site-settings`, body),

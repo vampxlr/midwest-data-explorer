@@ -3592,6 +3592,146 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), (req
   res.json({ received: true });
 });
 
+// ── Deadline scraper — midwest3on3.com early-bird/final registration dates ────
+// Scrapes /leagues, /tournaments, /camps subpages for deadline + price info,
+// matches each page to a SportsEngine event by name/year, and stores the lot
+// as one KV blob. Manual overrides via PUT /api/deadlines/:eventId.
+
+const SITE_BASE = 'https://www.midwest3on3.com';
+const MONTHS = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12 };
+
+function htmlToText(html) {
+  return String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ');
+}
+
+// "midnight on Thursday, July 23" + a year → "2026-07-23"
+function parseDeadlineDate(text, year) {
+  const m = text.match(/(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})/i);
+  if (!m || !year) return null;
+  const mo = MONTHS[m[1].toLowerCase()], day = parseInt(m[2]);
+  return `${year}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function parsePage(html) {
+  const text = htmlToText(html);
+  const title = (text.match(/\b(20\d{2})\b[^.]{0,90}?(league|tournament|camp|clinic)/i) || [])[0] || null;
+  const year  = title ? (title.match(/\b(20\d{2})\b/) || [])[1] : (text.match(/\b(20\d{2})\b/) || [])[1];
+  const eb    = text.match(/EARLY\s*BIRD\s*Registration\s*ends[^$]{0,80}/i);
+  const fin   = text.match(/FINAL\s*Registration\s*ends[^$]{0,80}/i);
+  const priceNear = (idx) => {
+    if (idx < 0) return null;
+    const m = text.slice(idx, idx + 220).match(/\$\s?(\d{2,4})/);
+    return m ? parseInt(m[1]) : null;
+  };
+  return {
+    title, year: year || null,
+    earlyBird:      eb  ? parseDeadlineDate(eb[0], year)  : null,
+    finalDeadline:  fin ? parseDeadlineDate(fin[0], year) : null,
+    earlyBirdPrice: eb  ? priceNear(text.indexOf(eb[0]))  : null,
+    finalPrice:     fin ? priceNear(text.indexOf(fin[0])) : null,
+  };
+}
+
+// Scraped page title → SE event (same year, best token overlap)
+const SCRAPE_STOP = new Set(['the','of','and','a','an','in','on','at','registration','league','leagues','basketball','annual']);
+function scrapeTokens(n) {
+  return String(n || '').toLowerCase().replace(/\b(19|20)\d{2}\b/g, ' ').replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/).filter(w => w && !SCRAPE_STOP.has(w) && !/^\d+(st|nd|rd|th)?$/.test(w));
+}
+function matchScrapedEvent(parsed, events) {
+  if (!parsed.title) return null;
+  const tA = new Set(scrapeTokens(parsed.title));
+  let best = null, bs = 0;
+  for (const ev of events) {
+    const evYear = ((ev.name || '').match(/\b(20\d{2})\b/) || [])[1] || String(ev.close || ev.open || '').slice(0, 4);
+    if (parsed.year && evYear !== parsed.year) continue;
+    const tB = new Set(scrapeTokens(ev.name));
+    let inter = 0; for (const t of tA) if (tB.has(t)) inter++;
+    const s = inter / (new Set([...tA, ...tB]).size || 1);
+    if (s > bs) { bs = s; best = ev; }
+  }
+  return bs >= 0.3 ? best : null;
+}
+
+async function fetchSitePage(url) {
+  const r = await axios.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MW3-DataExplorer)' }, timeout: 15000 });
+  return r.data;
+}
+
+app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const listingPaths = ['/leagues', '/tournaments', '/camps'];
+    const subpages = new Set();
+    for (const p of listingPaths) {
+      try {
+        const html = await fetchSitePage(SITE_BASE + p);
+        for (const m of String(html).matchAll(/href="(\/[a-z0-9\-\/]*(?:league|tournament|camp|clinic)[a-z0-9\-\/]*)"/gi)) {
+          const path = m[1];
+          if (!listingPaths.includes(path) && !path.includes('#')) subpages.add(path);
+        }
+      } catch (e) { console.warn('[scrape] listing failed:', p, e.message); }
+    }
+
+    const db = await store.load();
+    const events = Object.values(db.events);
+    const results = [];
+    const paths = [...subpages];
+    for (let i = 0; i < paths.length; i += 5) {
+      const batch = await Promise.all(paths.slice(i, i + 5).map(async (path) => {
+        try { return { path, ...parsePage(await fetchSitePage(SITE_BASE + path)) }; }
+        catch { return { path, error: true }; }
+      }));
+      results.push(...batch);
+    }
+
+    const existing = (await kvGet('deadlines:all')) || {};
+    let matched = 0;
+    for (const r of results) {
+      if (r.error || (!r.earlyBird && !r.finalDeadline)) continue;
+      const ev = matchScrapedEvent(r, events);
+      if (!ev) continue;
+      const id = String(ev.id);
+      if (existing[id]?.manual) continue;          // manual overrides always win
+      existing[id] = {
+        eventName: ev.name,
+        earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
+        earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
+        source: r.path, scrapedAt: new Date().toISOString(),
+      };
+      matched++;
+    }
+    await kvSet('deadlines:all', existing);
+    res.json({
+      pagesScanned: paths.length, matched,
+      withDeadlines: results.filter(r => r.earlyBird || r.finalDeadline).length,
+      unmatched: results.filter(r => (r.earlyBird || r.finalDeadline) && !matchScrapedEvent(r, events)).map(r => r.title || r.path),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/deadlines', async (req, res) => {
+  res.json({ deadlines: (await kvGet('deadlines:all')) || {} });
+});
+
+app.put('/api/deadlines/:eventId', auth.requireRole('admin'), async (req, res) => {
+  const { earlyBird, finalDeadline, earlyBirdPrice, finalPrice, eventName } = req.body || {};
+  const all = (await kvGet('deadlines:all')) || {};
+  all[String(req.params.eventId)] = {
+    ...(all[String(req.params.eventId)] || {}),
+    eventName: eventName || all[String(req.params.eventId)]?.eventName,
+    earlyBird: earlyBird || null, finalDeadline: finalDeadline || null,
+    earlyBirdPrice: earlyBirdPrice ?? null, finalPrice: finalPrice ?? null,
+    manual: true, updatedAt: new Date().toISOString(),
+  };
+  await kvSet('deadlines:all', all);
+  res.json({ ok: true });
+});
+
 // ── Recompute dashboard stats + per-event counts from Convex results ──────────
 // Fixes (1) double-counted daily stats after a purge, and (2) inflated/stale
 // per-event resultCount/resultsCompleted that caused Smart Update to skip events
