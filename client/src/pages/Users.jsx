@@ -4,6 +4,7 @@ import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 
 const ROLE_INFO = {
+  superadmin: { label: 'Super Admin', desc: 'Platform owner — everything Admin can do, plus the Super Admin panel (landing page, pricing, organizations, billing)', color: '#a855f7' },
   admin:  { label: 'Admin',  desc: 'Full access — including purge/delete and user management', color: '#ef4444' },
   editor: { label: 'Editor', desc: 'Can run data refresh/aggregation/exports — cannot purge or manage users', color: '#3b82f6' },
 };
@@ -65,10 +66,11 @@ function CreateUserForm({ onCreated }) {
         </div>
         <div>
           <label className="field-label" htmlFor="new-role">Role</label>
-          <select id="new-role" className="field-input" style={{ width:140 }}
+          <select id="new-role" className="field-input" style={{ width:150 }}
                   value={role} onChange={e=>setRole(e.target.value)}>
             <option value="editor">Editor</option>
             <option value="admin">Admin</option>
+            <option value="superadmin">Super Admin</option>
           </select>
         </div>
         <button type="submit" className="btn-primary" disabled={busy}>
@@ -109,7 +111,7 @@ function UserRow({ u, isSelf, onChanged }) {
     setBusy(true);
     try {
       await api.updateUser(u.id, { role });
-      toast.success(`Updated role for "${u.username}"`);
+      toast.success(`Updated role for "${u.username}" — they must sign out and back in for it to apply`);
       onChanged();
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to update role');
@@ -150,10 +152,11 @@ function UserRow({ u, isSelf, onChanged }) {
     <tr>
       <td style={{ fontWeight:600 }}>{u.username}{isSelf && <span style={{ color:'var(--text-3)', fontWeight:400 }}> (you)</span>}</td>
       <td>
-        <select className="field-input" style={{ width:120 }} value={u.role} disabled={busy || isSelf}
+        <select className="field-input" style={{ width:135 }} value={u.role} disabled={busy || isSelf}
                 onChange={e => changeRole(e.target.value)}>
           <option value="editor">Editor</option>
           <option value="admin">Admin</option>
+          <option value="superadmin">Super Admin</option>
         </select>
       </td>
       <td><RoleBadge role={u.role} /></td>

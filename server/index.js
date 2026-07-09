@@ -186,8 +186,8 @@ app.post('/api/users', auth.requireAdmin, async (req, res) => {
   if (!username || !password || !role) {
     return res.status(400).json({ error: 'username, password, and role are required' });
   }
-  if (!['admin', 'editor'].includes(role)) {
-    return res.status(400).json({ error: 'role must be "admin" or "editor"' });
+  if (!['admin', 'editor', 'superadmin'].includes(role)) {
+    return res.status(400).json({ error: 'role must be "admin", "editor", or "superadmin"' });
   }
   if (String(password).length < 8) {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
@@ -205,8 +205,8 @@ app.patch('/api/users/:id', auth.requireAdmin, async (req, res) => {
   const { role, password, email } = req.body || {};
   const patch = {};
   if (role !== undefined) {
-    if (!['admin', 'editor'].includes(role)) {
-      return res.status(400).json({ error: 'role must be "admin" or "editor"' });
+    if (!['admin', 'editor', 'superadmin'].includes(role)) {
+      return res.status(400).json({ error: 'role must be "admin", "editor", or "superadmin"' });
     }
     patch.role = role;
   }
