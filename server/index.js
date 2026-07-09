@@ -3853,12 +3853,15 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
       limit: 200,
     }, token);
 
-    // 2. Daily insights for the whole account this year (one query, paginated)
+    // 2. Daily insights for the whole account this year, at AD SET level —
+    //    custom pixel events come back account-global at campaign level, but each
+    //    adset is optimized for one custom conversion, so adset rows are the unit
+    //    of analysis (the UI locks a campaign to one adset).
     const sinceYear = `${new Date().getFullYear()}-01-01`;
     const today = new Date().toISOString().slice(0, 10);
     const rawInsights = await metaGetAll(`act_${acct}/insights`, {
-      level: 'campaign', time_increment: '1',
-      fields: 'campaign_id,campaign_name,spend,impressions,clicks,actions',
+      level: 'adset', time_increment: '1',
+      fields: 'campaign_id,adset_id,spend,impressions,clicks,actions',
       time_range: JSON.stringify({ since: sinceYear, until: today }),
       limit: 500,
     }, token, 8000);
@@ -3866,16 +3869,21 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
     // Keep only report-relevant action types; discover metric names as we go
     const KEEP_ACTIONS = /^(link_click|landing_page_view|video_view|offsite_conversion\.)/;
     const discovered = new Set();
-    const insights = rawInsights.map(r => {
+    const pickActions = (raw) => {
       const actions = {};
-      for (const a of (r.actions || [])) {
+      for (const a of (raw || [])) {
         if (KEEP_ACTIONS.test(a.action_type)) {
           actions[a.action_type] = Number(a.value) || 0;
           discovered.add(a.action_type);
         }
       }
-      return { c: r.campaign_id, d: r.date_start, spend: Number(r.spend) || 0, imp: Number(r.impressions) || 0, clicks: Number(r.clicks) || 0, actions };
-    });
+      return actions;
+    };
+    const insights = rawInsights.map(r => ({
+      c: r.campaign_id, as: r.adset_id, d: r.date_start,
+      spend: Number(r.spend) || 0, imp: Number(r.impressions) || 0,
+      clicks: Number(r.clicks) || 0, actions: pickActions(r.actions),
+    }));
 
     // 3. "Really active" = ACTIVE status + any spend in the last 21 days
     //    (the account has dozens of zombie ACTIVE campaigns from past years)
@@ -3885,7 +3893,25 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
     const activeCampaigns = campaigns.filter(c => (recentSpend[c.id] || 0) > 0);
     const activeIds = activeCampaigns.map(c => c.id);
 
-    // 4. Ads + creatives for the really-active campaigns (thumbnail, video, landing URL)
+    // 4a. Ad sets for the really-active campaigns — each carries its conversion
+    //     goal (promoted_object.custom_event_str, e.g. InitiateRegistration)
+    let adsets = [];
+    if (activeIds.length) {
+      const rawAdsets = await metaGetAll(`act_${acct}/adsets`, {
+        fields: 'id,name,campaign_id,effective_status,optimization_goal,daily_budget,promoted_object',
+        filtering: JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: activeIds }]),
+        limit: 300,
+      }, token);
+      adsets = rawAdsets.map(s => ({
+        id: s.id, name: s.name, campaignId: s.campaign_id, status: s.effective_status,
+        optimizationGoal: s.optimization_goal || null,
+        dailyBudget: s.daily_budget ? Number(s.daily_budget) / 100 : null,
+        goalEvent: s.promoted_object?.custom_event_str || null,
+        goalCustomConversionId: s.promoted_object?.custom_conversion_id || null,
+      }));
+    }
+
+    // 4b. Ads + creatives for the really-active campaigns (thumbnail, video, landing URL)
     let ads = [];
     if (activeIds.length) {
       const rawAds = await metaGetAll(`act_${acct}/ads`, {
@@ -3910,6 +3936,21 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
           title: cr.title || null, landingUrl: landing,
         };
       });
+    }
+
+    // 4c. Lifetime-this-year performance per ad (one row per ad, no time series) —
+    //     powers the "which creative gets the cheapest results" ranking
+    if (activeIds.length) {
+      const rawAdPerf = await metaGetAll(`act_${acct}/insights`, {
+        level: 'ad',
+        fields: 'ad_id,adset_id,spend,actions',
+        time_range: JSON.stringify({ since: sinceYear, until: today }),
+        filtering: JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: activeIds }]),
+        limit: 500,
+      }, token);
+      const perfByAd = {};
+      for (const r of rawAdPerf) perfByAd[r.ad_id] = { spend: Number(r.spend) || 0, actions: pickActions(r.actions) };
+      for (const a of ads) a.perf = perfByAd[a.id] || null;
     }
 
     // 5. Custom conversion id → friendly name (for offsite_conversion.custom.<id>)
@@ -3965,6 +4006,7 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
     const data = {
       syncedAt: new Date().toISOString(), adAccountId: acct,
       campaigns: campaignsOut,
+      adsets,
       ads,
       insights: insights.filter(i => activeIds.includes(i.c)),
       ccNames,
@@ -3991,6 +4033,7 @@ app.put('/api/ads/map/:campaignId', auth.requireRole('admin', 'editor'), async (
   all[req.params.campaignId] = {
     ...cur,
     ...(eventId !== undefined ? { eventId: eventId || null } : {}),
+    ...(req.body?.adsetId !== undefined ? { adsetId: req.body.adsetId || null } : {}),
     ...(alias !== undefined ? { alias: alias || null } : {}),
     ...(adAliases !== undefined ? { adAliases: { ...(cur.adAliases || {}), ...adAliases } } : {}),
     updatedAt: new Date().toISOString(),

@@ -98,7 +98,7 @@ function SettingsCard({ settings, onSaved, firstRun }) {
 }
 
 /* ── Per-campaign report card ───────────────────────────────────────────── */
-function CampaignCard({ c, ads, insights, mapping, ccNames, metrics, eventOptions, eventById, canEdit, adAccountId, onMap }) {
+function CampaignCard({ c, adsets, ads, insights, mapping, ccNames, metrics, eventOptions, eventById, canEdit, adAccountId, onMap }) {
   const alias = mapping?.alias || null;
   const eventId = mapping?.eventId !== undefined && mapping?.eventId !== null
     ? String(mapping.eventId) : (c.suggestedEventId ? String(c.suggestedEventId) : '');
@@ -108,6 +108,44 @@ function CampaignCard({ c, ads, insights, mapping, ccNames, metrics, eventOption
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState(alias || '');
   const [series, setSeries] = useState({ cur: [], prior: [], priorName: null });
+
+  // The dropdown lists only this-year sold events, but a mapped/suggested
+  // league may not have sold yet — keep it selectable so the select shows it
+  const optionsWithCurrent = useMemo(() => {
+    if (eventId && !eventOptions.some(o => o.value === eventId)) {
+      const ev = eventById[eventId];
+      if (ev) return [{ value: eventId, label: `${ev.name} (no sales yet)` }, ...eventOptions];
+    }
+    return eventOptions;
+  }, [eventOptions, eventId, eventById]);
+
+  // Lock the analysis to one ad set (each adset targets one custom conversion).
+  // Default = the adset with the most spend; '' = all adsets combined.
+  const myAdsets = useMemo(() => {
+    const spendBy = {};
+    for (const i of insights) if (i.c === c.id) spendBy[i.as] = (spendBy[i.as] || 0) + i.spend;
+    return adsets.filter(s => s.campaignId === c.id)
+      .map(s => ({ ...s, spend: spendBy[s.id] || 0 }))
+      .sort((a, b) => b.spend - a.spend);
+  }, [adsets, insights, c.id]);
+  const lockedAdsetId = mapping?.adsetId !== undefined
+    ? (mapping.adsetId || '')                       // saved choice ('' = all)
+    : (myAdsets[0]?.id || '');
+  const lockedAdset = myAdsets.find(s => s.id === lockedAdsetId) || null;
+  const goalName = lockedAdset
+    ? (lockedAdset.goalEvent
+        || ccNames[`offsite_conversion.custom.${lockedAdset.goalCustomConversionId}`]
+        || lockedAdset.optimizationGoal)
+    : null;
+  // Which action counts as a "result" for this adset (Custom Conversion is
+  // per-event; otherwise the pixel's custom events come lumped together)
+  const resultKey = lockedAdset?.goalCustomConversionId
+    ? `offsite_conversion.custom.${lockedAdset.goalCustomConversionId}`
+    : 'offsite_conversion.fb_pixel_custom';
+  const labelFor = (m) =>
+    m === 'offsite_conversion.fb_pixel_custom' && goalName
+      ? `Custom events (goal: ${goalName})`
+      : metricLabel(m, ccNames);
 
   // SE registration pace for the mapped league (+ prior season for acceleration)
   useEffect(() => {
@@ -124,9 +162,17 @@ function CampaignCard({ c, ads, insights, mapping, ccNames, metrics, eventOption
   }, [eventId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rows = useMemo(() => {
-    const mine = insights.filter(i => i.c === c.id).sort((a, b) => a.d.localeCompare(b.d));
+    const mine = insights
+      .filter(i => i.c === c.id && (!lockedAdsetId || i.as === lockedAdsetId))
+      .sort((a, b) => a.d.localeCompare(b.d));
     if (!mine.length) return [];
-    const byDay = {}; for (const i of mine) byDay[i.d] = i;
+    // several adset rows can share a day — aggregate
+    const byDay = {};
+    for (const i of mine) {
+      const t = byDay[i.d] || (byDay[i.d] = { spend: 0, actions: {} });
+      t.spend += i.spend;
+      for (const [k, v] of Object.entries(i.actions || {})) t.actions[k] = (t.actions[k] || 0) + v;
+    }
     const start = mine[0].d, end = new Date().toISOString().slice(0, 10);
     const regs = {}; for (const r of series.cur) regs[r.date] = (regs[r.date] || 0) + r.total;
     // prior season overlaid by same MM-DD one year earlier
@@ -150,12 +196,36 @@ function CampaignCard({ c, ads, insights, mapping, ccNames, metrics, eventOption
       out.push(row);
     }
     return out;
-  }, [insights, c.id, metrics, series]);
+  }, [insights, c.id, lockedAdsetId, metrics, series]);
 
   const last = rows[rows.length - 1] || {};
   const yesterdaySpend = rows.length > 1 ? rows[rows.length - 2].spend : 0;
-  const myAds = ads.filter(a => a.campaignId === c.id);
   const cls = CLASS_STYLE[c.classification] || CLASS_STYLE.unknown;
+
+  // Results + cost/result for the locked adset window
+  const { totalResults, totalSpendLocked } = useMemo(() => {
+    let res = 0, sp = 0;
+    for (const i of insights) {
+      if (i.c !== c.id || (lockedAdsetId && i.as !== lockedAdsetId)) continue;
+      res += i.actions?.[resultKey] || 0; sp += i.spend;
+    }
+    return { totalResults: res, totalSpendLocked: sp };
+  }, [insights, c.id, lockedAdsetId, resultKey]);
+
+  // Creatives ranked by cost per result (cheapest first); ties broken by volume
+  const myAds = useMemo(() => {
+    const list = ads
+      .filter(a => a.campaignId === c.id && (!lockedAdsetId || a.adsetId === lockedAdsetId))
+      .map(a => {
+        const results = a.perf?.actions?.[resultKey] || 0;
+        const spend = a.perf?.spend || 0;
+        return { ...a, results, cpr: results > 0 ? spend / results : null };
+      })
+      .sort((x, y) => (x.cpr ?? Infinity) - (y.cpr ?? Infinity) || y.results - x.results);
+    const bestCpr = list.find(a => a.cpr != null)?.id;
+    const mostRes = list.reduce((m, a) => (a.results > (m?.results || 0) ? a : m), null)?.id;
+    return list.map(a => ({ ...a, isBestCpr: a.id === bestCpr && a.cpr != null, isMostResults: a.id === mostRes && a.results > 0 }));
+  }, [ads, c.id, lockedAdsetId, resultKey]);
 
   function saveAlias() {
     setEditingAlias(false);
@@ -189,21 +259,37 @@ function CampaignCard({ c, ads, insights, mapping, ccNames, metrics, eventOption
           </div>
         </div>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Kpi label="Total spend" value={fmtUsd(last.cumSpend ?? c.totalSpend)} />
+          <Kpi label="Spend" value={fmtUsd(totalSpendLocked)} />
           <Kpi label="Yesterday" value={fmtUsd(yesterdaySpend)} />
+          <Kpi label="Results" value={totalResults.toLocaleString()} />
+          {totalResults > 0 && <Kpi label="Cost / result" value={'$' + (totalSpendLocked / totalResults).toFixed(2)} />}
           {mappedEv && last.regs !== undefined && <Kpi label="Sales (campaign window)" value={last.regs} accent />}
           <a className="btn" href={adsManagerUrl(adAccountId)} target="_blank" rel="noreferrer"
             title="Open this account in Meta Ads Manager">↗ Ads Manager</a>
         </div>
       </div>
 
-      {/* league mapping */}
+      {/* adset lock-in — the unit of analysis (each adset targets one custom event) */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-4)' }}>Ad set:</span>
+        {canEdit ? (
+          <select value={lockedAdsetId} onChange={e => onMap(c.id, { adsetId: e.target.value || null })} style={{ maxWidth: 340, fontSize: 12 }}>
+            <option value="">All ad sets (combined)</option>
+            {myAdsets.map(s => <option key={s.id} value={s.id}>{s.name} — {fmtUsd(s.spend)}</option>)}
+          </select>
+        ) : (
+          <span style={{ fontSize: 12 }}>{lockedAdset?.name || 'All ad sets'}</span>
+        )}
+        {goalName && <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: '2px 9px', background: 'rgba(240,180,60,0.14)', color: 'var(--viz-5)' }}>🎯 {goalName}</span>}
+      </div>
+
+      {/* league mapping */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 11, color: 'var(--text-4)' }}>Mapped league:</span>
         {canEdit ? (
           <select value={eventId} onChange={e => onMap(c.id, { eventId: e.target.value || null })} style={{ maxWidth: 360, fontSize: 12 }}>
             <option value="">— not mapped —</option>
-            {eventOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {optionsWithCurrent.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         ) : (
           <span style={{ fontSize: 12 }}>{mappedEv?.name || '— not mapped —'}</span>
@@ -240,7 +326,7 @@ function CampaignCard({ c, ads, insights, mapping, ccNames, metrics, eventOption
                 <Tooltip contentStyle={{ background: 'var(--surface-1)', border: '1px solid var(--line)', fontSize: 11 }} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
                 {metrics.map((m, i) => (
-                  <Line key={m} dataKey={m} name={metricLabel(m, ccNames)} stroke={METRIC_COLORS[i % METRIC_COLORS.length]}
+                  <Line key={m} dataKey={m} name={labelFor(m)} stroke={METRIC_COLORS[i % METRIC_COLORS.length]}
                     strokeWidth={1.7} dot={false} type="monotone" />
                 ))}
                 {last.regs !== undefined &&
@@ -258,20 +344,35 @@ function CampaignCard({ c, ads, insights, mapping, ccNames, metrics, eventOption
       {myAds.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 11, color: 'var(--text-4)', marginBottom: 6 }}>
-            Creatives ({myAds.length}) — click to open in Ads Manager{myAds.some(a => a.videoId) && ' (videos play there)'}
+            Creatives ({myAds.length}), cheapest cost-per-result first — click to open in Ads Manager{myAds.some(a => a.videoId) && ' (videos play there)'}
           </div>
           <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
             {myAds.map(a => (
               <a key={a.id} href={adsManagerUrl(adAccountId, a.id)} target="_blank" rel="noreferrer"
                 title={(mapping?.adAliases?.[a.id] || a.title || a.name) + ' — open in Ads Manager'}
-                style={{ flexShrink: 0, width: 96, textDecoration: 'none', color: 'var(--text-3)' }}>
-                <div style={{ position: 'relative', width: 96, height: 96, borderRadius: 8, overflow: 'hidden', background: 'var(--bg-hover)', border: '1px solid var(--line)' }}>
+                style={{ flexShrink: 0, width: 104, textDecoration: 'none', color: 'var(--text-3)' }}>
+                <div style={{
+                  position: 'relative', width: 104, height: 104, borderRadius: 8, overflow: 'hidden',
+                  background: 'var(--bg-hover)',
+                  border: a.isBestCpr ? '2px solid var(--viz-2)' : a.isMostResults ? '2px solid var(--viz-5)' : '1px solid var(--line)',
+                  boxShadow: a.isBestCpr ? '0 0 10px rgba(25,158,112,0.45)' : 'none',
+                }}>
                   {a.thumbnailUrl
                     ? <img src={a.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     : <span style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>🖼️</span>}
                   {a.videoId && <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, textShadow: '0 1px 6px rgba(0,0,0,0.7)' }}>▶</span>}
+                  {(a.isBestCpr || a.isMostResults) && (
+                    <span style={{
+                      position: 'absolute', top: 3, left: 3, fontSize: 9, fontWeight: 800, borderRadius: 6,
+                      padding: '1px 5px', color: '#fff',
+                      background: a.isBestCpr ? 'rgba(25,158,112,0.9)' : 'rgba(240,150,40,0.9)',
+                    }}>{a.isBestCpr ? '🏆 best $' : '🔥 most'}</span>
+                  )}
                 </div>
-                <div style={{ fontSize: 9, lineHeight: 1.25, marginTop: 3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, marginTop: 3, fontVariantNumeric: 'tabular-nums', color: a.cpr != null ? (a.isBestCpr ? 'var(--viz-2)' : 'var(--text-2)') : 'var(--text-4)' }}>
+                  {a.cpr != null ? `$${a.cpr.toFixed(2)}/res · ${a.results.toLocaleString()}` : (a.perf ? `${fmtUsd(a.perf.spend)} · 0 res` : 'no delivery')}
+                </div>
+                <div style={{ fontSize: 9, lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
                   {mapping?.adAliases?.[a.id] || a.title || a.name}
                 </div>
               </a>
@@ -354,10 +455,18 @@ export default function AdsReport({ ctx }) {
     } catch { toast.error('Could not save'); }
   }
 
-  const eventOptions = useMemo(() => (ctx?.recentRegs || [])
-    .slice()
-    .sort((a, b) => (b.close || b.open || '').localeCompare(a.close || a.open || ''))
-    .map(r => ({ value: String(r.id), label: r.name })), [ctx?.recentRegs]);
+  // Mapping dropdown lists only this year's events that have actually sold —
+  // old seasons/camps are irrelevant for live campaigns
+  const eventOptions = useMemo(() => {
+    const thisYear = String(new Date().getFullYear());
+    return (ctx?.recentRegs || [])
+      .filter(r => {
+        const y = ((r.name || '').match(/\b(20\d{2})\b/) || [])[1] || String(r.close || r.open || '').slice(0, 4);
+        return y === thisYear && (r.resultsCompleted || 0) > 0;
+      })
+      .sort((a, b) => (b.close || b.open || '').localeCompare(a.close || a.open || ''))
+      .map(r => ({ value: String(r.id), label: r.name }));
+  }, [ctx?.recentRegs]);
   const eventById = useMemo(() => {
     const m = {}; for (const r of (ctx?.recentRegs || [])) m[String(r.id)] = r; return m;
   }, [ctx?.recentRegs]);
@@ -421,7 +530,7 @@ export default function AdsReport({ ctx }) {
       )}
 
       {data && campaigns.map(c => (
-        <CampaignCard key={c.id} c={c} ads={data.ads || []} insights={data.insights || []}
+        <CampaignCard key={c.id} c={c} adsets={data.adsets || []} ads={data.ads || []} insights={data.insights || []}
           mapping={mappings?.[c.id]} ccNames={data.ccNames || {}} metrics={metrics}
           eventOptions={eventOptions} eventById={eventById}
           canEdit={canSync} adAccountId={adAccountId || data.adAccountId} onMap={onMap} />
