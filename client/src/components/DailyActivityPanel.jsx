@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
-  BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, Cell,
+  BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from 'recharts';
 import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
+import { DeadlineToggle, useDeadlinesOn, useDeadlineMap } from '../deadlines.jsx';
 
 const ChartTip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
@@ -59,6 +60,19 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
   const [activityData, setActivityData] = useState(null);
   const [activityLoading, setActivityLoading] = useState(false);
   const [hoverBar, setHoverBar] = useState(-1);
+  const showDeadlines = useDeadlinesOn();
+  const deadlineMap = useDeadlineMap();
+
+  // Deadlines that land inside the displayed week → { 'YYYY-MM-DD': 'EB'|'Final' }
+  function weekDeadlines(weekDays) {
+    const days = new Set((weekDays || []).map(d => d.date));
+    const out = {};
+    for (const d of Object.values(deadlineMap)) {
+      if (d.earlyBird && days.has(d.earlyBird))         out[d.earlyBird] = 'EB';
+      if (d.finalDeadline && days.has(d.finalDeadline)) out[d.finalDeadline] = 'Final';
+    }
+    return out;
+  }
 
   useEffect(() => { loadActivity(activityDate); }, [refreshToken]);
 
@@ -138,12 +152,22 @@ export default function DailyActivityPanel({ recentRegs = [], refreshToken }) {
               and clicking a bar jumps to that day */}
           {activityData.weekDays?.length > 0 && (
             <div className="card" style={{ marginBottom:16 }} onMouseLeave={()=>setHoverBar(-1)}>
-              <h3 style={{ marginBottom:2 }}>This Week — Day by Day</h3>
-              <p style={{ margin:'0 0 10px', fontSize:11, color:'var(--text-4)' }}>Click a bar to jump to that day</p>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8 }}>
+                <div>
+                  <h3 style={{ marginBottom:2 }}>This Week — Day by Day</h3>
+                  <p style={{ margin:'0 0 10px', fontSize:11, color:'var(--text-4)' }}>Click a bar to jump to that day</p>
+                </div>
+                <DeadlineToggle />
+              </div>
               <ResponsiveContainer width="100%" height={130}>
                 <BarChart data={activityData.weekDays.map(d=>({...d,label:fmt(d.date)}))} margin={{top:8,right:8,left:0,bottom:4}} barCategoryGap="18%">
                   <XAxis dataKey="label" stroke="var(--viz-grid)" tickLine={false} tick={{fill:'var(--viz-axis)',fontSize:11}}/>
                   <Tooltip content={<ChartTip/>} cursor={{ fill:'var(--bg-hover)' }}/>
+                  {showDeadlines && Object.entries(weekDeadlines(activityData.weekDays)).map(([date, kind]) => (
+                    <ReferenceLine key={date} x={fmt(date)}
+                      stroke={kind === 'EB' ? 'var(--viz-2)' : 'var(--viz-6)'} strokeDasharray="4 3"
+                      label={{ value:'⏰ '+kind, position:'insideTop', fill: kind === 'EB' ? 'var(--viz-2)' : 'var(--viz-6)', fontSize:9 }} />
+                  ))}
                   <Bar dataKey="total" name="Registrations" radius={[4,4,0,0]}
                     onMouseEnter={(_, i)=>setHoverBar(i)}
                     onMouseLeave={()=>setHoverBar(-1)}

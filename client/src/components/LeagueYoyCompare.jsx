@@ -6,6 +6,7 @@ import { api } from '../api.jsx';
 import { toast } from 'react-hot-toast';
 import SearchableSelect from './SearchableSelect.jsx';
 import Collapsible from './Collapsible.jsx';
+import { DeadlineToggle, useDeadlinesOn, useDeadlineMap, nearestLabel } from '../deadlines.jsx';
 
 const MAX_SLOTS     = 10;
 const DEFAULT_COUNT = 5;
@@ -116,6 +117,7 @@ function PairChart({ currentEv, priorEv, deadlines }) {
   const [seriesA, setSeriesA] = useState([]);
   const [seriesB, setSeriesB] = useState([]);
   const [loading, setLoading] = useState(true);
+  const showDeadlines = useDeadlinesOn();
 
   useEffect(() => {
     let cancelled = false;
@@ -206,13 +208,13 @@ function PairChart({ currentEv, priorEv, deadlines }) {
               <ReferenceLine x={asOfYesterday.label} stroke="var(--accent-2)" strokeDasharray="3 3"
                 label={{ value:'Yesterday', position:'insideTopRight', fill:'var(--accent-2)', fontSize:9 }} />
             )}
-            {/* Registration deadlines (scraped from midwest3on3.com) */}
-            {deadlines?.earlyBird && chartData.some(d => d.mmdd === deadlines.earlyBird.slice(5)) && (
-              <ReferenceLine x={fmtMD(deadlines.earlyBird.slice(5))} stroke="var(--viz-2)" strokeDasharray="4 3"
+            {/* Registration deadlines (scraped from midwest3on3.com) — snap to nearest data point */}
+            {showDeadlines && deadlines?.earlyBird && nearestLabel(chartData, deadlines.earlyBird) && (
+              <ReferenceLine x={nearestLabel(chartData, deadlines.earlyBird)} stroke="var(--viz-2)" strokeDasharray="4 3"
                 label={{ value:'EB', position:'insideTop', fill:'var(--viz-2)', fontSize:9 }} />
             )}
-            {deadlines?.finalDeadline && chartData.some(d => d.mmdd === deadlines.finalDeadline.slice(5)) && (
-              <ReferenceLine x={fmtMD(deadlines.finalDeadline.slice(5))} stroke="var(--viz-6)" strokeDasharray="4 3"
+            {showDeadlines && deadlines?.finalDeadline && nearestLabel(chartData, deadlines.finalDeadline) && (
+              <ReferenceLine x={nearestLabel(chartData, deadlines.finalDeadline)} stroke="var(--viz-6)" strokeDasharray="4 3"
                 label={{ value:'Final', position:'insideTop', fill:'var(--viz-6)', fontSize:9 }} />
             )}
             <Line type="monotone" dataKey="cumA" name="Selected" stroke="var(--viz-1)" strokeWidth={2} dot={false} />
@@ -242,10 +244,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
   // selections survive across devices, browsers, and localhost vs production.
   const [state, setState] = useState(loadSaved);
   const { count, slots, aiAssist } = state;
-  const [deadlineMap, setDeadlineMap] = useState({});
-  useEffect(() => {
-    api.getDeadlines().then(r => setDeadlineMap(r.data.deadlines || {})).catch(() => {});
-  }, []);
+  const deadlineMap = useDeadlineMap();
   const hydratedRef = React.useRef(false);
   const saveTimerRef = React.useRef(null);
 
@@ -391,6 +390,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         defaultOpen
       >
         <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:10, flexWrap:'wrap', marginBottom:12 }}>
+          <DeadlineToggle />
           <button onClick={() => setState(prev => ({ ...prev, aiAssist: !prev.aiAssist }))}
             title="When ON: picking a league auto-selects its prior-season counterpart (matched by name, session number, and season timing), and the compare dropdown is ordered best-match-first"
             style={{ padding:'5px 12px', borderRadius:8, fontSize:11, fontWeight:700, cursor:'pointer',
