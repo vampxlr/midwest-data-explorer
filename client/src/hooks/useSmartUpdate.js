@@ -31,6 +31,9 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
   const [cdProgress, setCdProgress] = useState({ current:0, total:0, added:0, skipped:0, errors:0 });
   const [cdPhase,   setCdPhase]   = useState('idle');
   const [storedMap, setStoredMap] = useState({});
+  // True from the moment the user clicks until the backend takes over —
+  // the SE live-count check can take 10-30s and used to look "stuck".
+  const [kicking,   setKicking]   = useState(false);
 
   const esRef   = useRef(null);
   const cdAbort = useRef(false);
@@ -47,7 +50,10 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
     if (isVercel !== false) return;
     const es = new EventSource(withToken('/api/aggregate/stream'));
     esRef.current = es;
-    es.addEventListener('state', e => { const s=JSON.parse(e.data); setSseState(s); if(s.log) setSseLog(s.log.slice().reverse()); });
+    es.addEventListener('state', e => {
+      const s=JSON.parse(e.data); setSseState(s); if(s.log) setSseLog(s.log.slice().reverse());
+      if (s.running) setKicking(false);          // backend took over — hand off
+    });
     es.addEventListener('progress', e => { const p=JSON.parse(e.data); setSseState(prev=>prev?{...prev,current:p.current}:prev); });
     es.addEventListener('log', e => setSseLog(prev=>[...prev,JSON.parse(e.data)].slice(-80)));
     es.addEventListener('complete', e => {
@@ -178,19 +184,43 @@ export default function useSmartUpdate({ orgId = '8008', recentRegs = [], onComp
     toast.success(`Smart Update done — ${added} new results saved`);
   }
 
-  async function start() {
-    if (isVercel === true) { startClientDriven(); return; }
-    const { regs, stored } = await fetchFreshData(null);
-    const needs = computeNeeds(regs, stored);
-    if (!needs.length) { toast.success('All events are up-to-date'); return; }
-    try {
-      const res = await api.startAggregate(orgId, 1200, needs, false);
-      if (!res.data.started) toast.error(res.data.message);
-    } catch (err) { toast.error('Failed: ' + err.message); }
+  // Local-log helper for the SSE path pre-flight — instant console feedback
+  // before the backend's own log stream takes over (the 'state' event replaces
+  // these once the run actually starts, which is fine).
+  function sseAddLog(msg, level='info') {
+    const entry = { ts: new Date().toLocaleTimeString('en-US',{hour12:false}), msg, level };
+    setSseLog(prev => [...prev, entry].slice(-80));
   }
 
-  const running = isVercel === true ? cdRunning : !!sseState?.running;
-  const phase   = isVercel === true ? cdPhase   : (sseState?.phase || 'idle');
+  async function start() {
+    if (isVercel === true) { startClientDriven(); return; }
+    setKicking(true);
+    sseAddLog('⚡ Smart Update requested — checking what changed…', 'info');
+    try {
+      const { regs, stored } = await fetchFreshData(sseAddLog);
+      const needs = computeNeeds(regs, stored);
+      if (!needs.length) {
+        sseAddLog('All events are up-to-date — nothing to fetch', 'ok');
+        toast.success('All events are up-to-date');
+        setKicking(false);
+        return;
+      }
+      sseAddLog(`${needs.length} event(s) changed — starting the fetch…`, 'info');
+      const res = await api.startAggregate(orgId, 1200, needs, false);
+      if (!res.data.started) { toast.error(res.data.message); sseAddLog(`✗ ${res.data.message}`, 'error'); setKicking(false); }
+      // started OK → kicking flips off when the SSE 'state' event reports
+      // running:true (safety net below in case the stream is wedged)
+      setTimeout(() => setKicking(false), 20000);
+    } catch (err) {
+      toast.error('Failed: ' + err.message);
+      sseAddLog(`✗ Failed to start: ${err.message}`, 'error');
+      setKicking(false);
+    }
+  }
+
+  const running = isVercel === true ? cdRunning : (kicking || !!sseState?.running);
+  const phase   = isVercel === true ? cdPhase
+    : (kicking && !sseState?.running) ? 'planning' : (sseState?.phase || 'idle');
   const total   = isVercel === true ? cdProgress.total   : (sseState?.total   || 0);
   const current = isVercel === true ? cdProgress.current : (sseState?.current || 0);
   const added   = isVercel === true ? cdProgress.added   : (sseState?.newResults || 0);
