@@ -5,6 +5,7 @@ import { toast } from 'react-hot-toast';
 import PasswordField from '../components/PasswordField.jsx';
 import BillingCard from '../components/BillingCard.jsx';
 import PromoPanel from '../components/PromoPanel.jsx';
+import OnboardingFlow from '../components/OnboardingFlow.jsx';
 
 /**
  * Company-level dashboard — standalone shell for customer admins (users
@@ -17,6 +18,7 @@ export default function CompanyDashboard() {
   const [data, setData] = useState(null);       // { account, orgs }
   const [users, setUsers] = useState([]);
   const [adding, setAdding] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [form, setForm] = useState({ username:'', password:'', email:'', role:'editor' });
 
   async function load() {
@@ -65,10 +67,22 @@ export default function CompanyDashboard() {
         <BillingCard />
         {/* Organizations */}
         <div className="card">
-          <h2>Your Organizations</h2>
-          {!data ? <div className="no-data">Loading…</div> : data.orgs.length === 0 ? (
-            <div className="no-data" style={{ padding:'24px' }}>
-              No organizations yet — contact support to set up your SportsEngine connection.
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8 }}>
+            <h2 style={{ margin:0 }}>Your Organizations</h2>
+            {isAdmin && data?.orgs?.length > 0 && !connecting && (
+              <button className="btn-secondary" style={{ width:'auto', margin:0 }} onClick={() => setConnecting(true)}>
+                + Connect another organization
+              </button>
+            )}
+          </div>
+          {!data ? <div className="no-data">Loading…</div> : (data.orgs.length === 0 || connecting) ? (
+            <div style={{ marginTop:14 }}>
+              <OnboardingFlow
+                videoUrl={data.onboardingVideoUrl}
+                firstOrg={data.orgs.length === 0}
+                onConnected={() => { setConnecting(false); load(); }}
+                onCancel={data.orgs.length > 0 ? () => setConnecting(false) : null}
+              />
             </div>
           ) : (
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(280px, 1fr))', gap:12 }}>

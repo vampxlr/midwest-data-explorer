@@ -670,6 +670,12 @@ function GrowthPanel() {
         </Field>
         <Field label="Stripe price ID (optional)"><input className="field-input" placeholder="auto-created if empty" style={{ width:200 }} value={g.stripePriceId} onChange={e => upd({ stripePriceId: e.target.value })} /></Field>
       </div>
+      <div style={{ marginTop:10 }}>
+        <Field label="Onboarding video URL (YouTube / Loom — shown on the customer's SportsEngine setup screen)">
+          <input className="field-input" placeholder="https://www.youtube.com/watch?v=… or https://www.loom.com/share/…"
+            style={{ width:'min(480px, 100%)' }} value={g.onboardingVideoUrl || ''} onChange={e => upd({ onboardingVideoUrl: e.target.value })} />
+        </Field>
+      </div>
       <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:14 }}>
         <button className="btn-primary" onClick={save}>Save growth settings</button>
         <span style={{ fontSize:12, color:'var(--text-4)' }}>

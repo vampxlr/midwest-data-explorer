@@ -3389,7 +3389,59 @@ app.get('/api/company/me', async (req, res) => {
     const account = accounts.find(a => a.accountKey === me.accountKey);
     const orgs = orgsRes.filter(o => o.accountKey === me.accountKey)
       .map(({ _id, _creationTime, ...o }) => maskOrgSecret(o));
-    res.json({ account: account ? { accountKey: account.accountKey, name: account.name } : null, orgs });
+    const g = await growthSettings();
+    res.json({
+      account: account ? { accountKey: account.accountKey, name: account.name } : null,
+      orgs,
+      onboardingVideoUrl: g.onboardingVideoUrl || '',
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Self-serve SportsEngine connection: the customer pastes their own
+// Client ID + Secret, we verify live against SE, auto-detect the org id and
+// name, encrypt the secret and lock the org — no support ticket needed.
+app.post('/api/company/orgs', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const me = await requireCompanyUser(req, res); if (!me) return;
+    const { seClientId, seClientSecret, name } = req.body || {};
+    if (!seClientId || !seClientSecret) return res.status(400).json({ error: 'Client ID and Client Secret are required' });
+
+    // Live test: token grant + identity lookup (same check the owner uses)
+    const params = new URLSearchParams();
+    params.append('grant_type', 'client_credentials');
+    params.append('client_id', String(seClientId).trim());
+    params.append('client_secret', String(seClientSecret).trim());
+    let seName = '', seOrgIds = [];
+    try {
+      const tok = await axios.post(SE_TOKEN_URL, params, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      const meRes = await axios.get('https://user.sportsengine.com/oauth/me', {
+        headers: { Authorization: `Bearer ${tok.data.access_token}` },
+      });
+      seName   = meRes.data?.result?.client?.name || '';
+      seOrgIds = meRes.data?.result?.client?.organization_ids || [];
+    } catch (err) {
+      return res.status(400).json({
+        error: 'SportsEngine rejected these credentials — double-check the Client ID and Secret',
+        detail: err.response?.data?.error_description || err.response?.data?.error || err.message,
+      });
+    }
+
+    const orgName = String(name || seName || 'My Organization').trim();
+    let orgKey = `${me.accountKey}-${orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}`.slice(0, 50);
+    if (await loadOrg(orgKey)) orgKey = `${orgKey}-${Date.now().toString(36).slice(-4)}`;
+    const doc = {
+      orgKey, accountKey: me.accountKey, name: orgName,
+      seClientId: String(seClientId).trim(),
+      seClientSecretEnc: encryptSecret(String(seClientSecret).trim()),
+      seOrgId: seOrgIds[0] != null ? String(seOrgIds[0]) : undefined,
+      verified: true, verifiedOrgName: seName || undefined,
+      lockedAt: new Date().toISOString(), status: 'active',
+      createdAt: new Date().toISOString(), notes: 'Self-serve onboarding',
+    };
+    await saveOrgDoc(doc);
+    capiSend('SubmitApplication', { email: me.email, ip: req.ip, ua: req.headers['user-agent'] });
+    res.json({ ok: true, org: maskOrgSecret(doc), seName, seOrgIds });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3614,6 +3666,7 @@ async function growthSettings() {
     capiToken: s.capiTokenEnc ? decryptSecret(s.capiTokenEnc) : (process.env.META_CAPI_TOKEN || ''),
     hasCapiToken: !!(s.capiTokenEnc || process.env.META_CAPI_TOKEN),
     stripePriceId: s.stripePriceId || process.env.STRIPE_PRICE_ID || '',
+    onboardingVideoUrl: s.onboardingVideoUrl || '',
   };
 }
 
@@ -3907,6 +3960,7 @@ app.get('/api/admin/growth', auth.requireRole('superadmin'), async (req, res) =>
   const s = await growthSettings();
   res.json({ trialDays: s.trialDays, trialActiveLimit: s.trialActiveLimit, trialMonthlyLimit: s.trialMonthlyLimit,
     ga4Id: s.ga4Id, metaPixelId: s.metaPixelId, hasCapiToken: s.hasCapiToken, stripePriceId: s.stripePriceId,
+    onboardingVideoUrl: s.onboardingVideoUrl,
     stripeEnabled: !!process.env.STRIPE_SECRET_KEY, webhookConfigured: !!process.env.STRIPE_WEBHOOK_SECRET });
 });
 app.put('/api/admin/growth', auth.requireRole('superadmin'), async (req, res) => {
@@ -3914,7 +3968,7 @@ app.put('/api/admin/growth', auth.requireRole('superadmin'), async (req, res) =>
   const cur = (await kvGet('growth:settings')) || {};
   const next = { ...cur };
   for (const k of ['trialDays', 'trialActiveLimit', 'trialMonthlyLimit']) if (b[k] !== undefined) next[k] = Math.max(0, Number(b[k]) || 0);
-  for (const k of ['ga4Id', 'metaPixelId', 'stripePriceId']) if (b[k] !== undefined) next[k] = String(b[k]).trim();
+  for (const k of ['ga4Id', 'metaPixelId', 'stripePriceId', 'onboardingVideoUrl']) if (b[k] !== undefined) next[k] = String(b[k]).trim();
   if (b.capiToken && !/^•+$/.test(b.capiToken)) next.capiTokenEnc = encryptSecret(String(b.capiToken).trim());
   await kvSet('growth:settings', next);
   res.json({ ok: true });

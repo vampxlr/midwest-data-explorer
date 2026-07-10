@@ -170,6 +170,7 @@ export const api = {
   companyMe:    ()              => axios.get(`${BASE}/company/me`),
   companyUsers: ()              => axios.get(`${BASE}/company/users`),
   companyCreateUser: (body)     => axios.post(`${BASE}/company/users`, body),
+  companyCreateOrg:  (body)     => axios.post(`${BASE}/company/orgs`, body),
 
   // ── Growth: signup, billing, offers, feedback ──────────────────────────────
   signupAvailability: () => axios.get(`${BASE}/signup/availability`),
