@@ -176,7 +176,6 @@ export const api = {
   adsSaveSettings: (body)  => axios.put(`${BASE}/ads/settings`, body),
   adsSync:         ()      => axios.post(`${BASE}/ads/sync`),
   adsData:         ()      => axios.get(`${BASE}/ads/data`),
-  adsMap:          (id, b) => axios.put(`${BASE}/ads/map/${encodeURIComponent(id)}`, b),
 
   // ── Per-user UI preferences (server-persisted, survives devices) ──────────
   getPref: (key)        => axios.get(`${BASE}/prefs/${encodeURIComponent(key)}`),

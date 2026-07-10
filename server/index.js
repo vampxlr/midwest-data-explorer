@@ -3853,18 +3853,32 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
       limit: 200,
     }, token);
 
-    // 2. Daily insights for the whole account this year, at AD SET level —
-    //    custom pixel events come back account-global at campaign level, but each
-    //    adset is optimized for one custom conversion, so adset rows are the unit
-    //    of analysis (the UI locks a campaign to one adset).
+    // 2. "Really active" = ACTIVE status + any spend in the last 21 days —
+    //    a small campaign-level totals query (the account has ~70 zombie
+    //    ACTIVE campaigns; an unfiltered ad-level query errors out at Meta)
     const sinceYear = `${new Date().getFullYear()}-01-01`;
     const today = new Date().toISOString().slice(0, 10);
-    const rawInsights = await metaGetAll(`act_${acct}/insights`, {
-      level: 'adset', time_increment: '1',
-      fields: 'campaign_id,adset_id,spend,impressions,clicks,actions',
-      time_range: JSON.stringify({ since: sinceYear, until: today }),
+    const cutoff = new Date(Date.now() - 21 * 86400000).toISOString().slice(0, 10);
+    const recentTotals = await metaGetAll(`act_${acct}/insights`, {
+      level: 'campaign', fields: 'campaign_id,spend',
+      time_range: JSON.stringify({ since: cutoff, until: today }),
       limit: 500,
-    }, token, 8000);
+    }, token);
+    const recentSpend = {};
+    for (const r of recentTotals) recentSpend[r.campaign_id] = (recentSpend[r.campaign_id] || 0) + (Number(r.spend) || 0);
+    const activeCampaigns = campaigns.filter(c => (recentSpend[c.id] || 0) > 0);
+    const activeIds = activeCampaigns.map(c => c.id);
+
+    // 3. Daily insights at AD level for the active campaigns this year — one
+    //    dataset from which campaign/adset/ad totals for any date range are
+    //    derived client-side (the drill-down UI re-aggregates per range).
+    const rawInsights = activeIds.length ? await metaGetAll(`act_${acct}/insights`, {
+      level: 'ad', time_increment: '1',
+      fields: 'campaign_id,adset_id,ad_id,spend,impressions,clicks,actions',
+      time_range: JSON.stringify({ since: sinceYear, until: today }),
+      filtering: JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: activeIds }]),
+      limit: 500,
+    }, token, 12000) : [];
 
     // Keep only report-relevant action types; discover metric names as we go
     const KEEP_ACTIONS = /^(link_click|landing_page_view|video_view|offsite_conversion\.)/;
@@ -3880,18 +3894,10 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
       return actions;
     };
     const insights = rawInsights.map(r => ({
-      c: r.campaign_id, as: r.adset_id, d: r.date_start,
+      c: r.campaign_id, as: r.adset_id, ad: r.ad_id, d: r.date_start,
       spend: Number(r.spend) || 0, imp: Number(r.impressions) || 0,
       clicks: Number(r.clicks) || 0, actions: pickActions(r.actions),
     }));
-
-    // 3. "Really active" = ACTIVE status + any spend in the last 21 days
-    //    (the account has dozens of zombie ACTIVE campaigns from past years)
-    const cutoff = new Date(Date.now() - 21 * 86400000).toISOString().slice(0, 10);
-    const recentSpend = {};
-    for (const i of insights) if (i.d >= cutoff) recentSpend[i.c] = (recentSpend[i.c] || 0) + i.spend;
-    const activeCampaigns = campaigns.filter(c => (recentSpend[c.id] || 0) > 0);
-    const activeIds = activeCampaigns.map(c => c.id);
 
     // 4a. Ad sets for the really-active campaigns — each carries its conversion
     //     goal (promoted_object.custom_event_str, e.g. InitiateRegistration)
@@ -3938,70 +3944,15 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
       });
     }
 
-    // 4c. Lifetime-this-year performance per ad (one row per ad, no time series) —
-    //     powers the "which creative gets the cheapest results" ranking
-    if (activeIds.length) {
-      const rawAdPerf = await metaGetAll(`act_${acct}/insights`, {
-        level: 'ad',
-        fields: 'ad_id,adset_id,spend,actions',
-        time_range: JSON.stringify({ since: sinceYear, until: today }),
-        filtering: JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: activeIds }]),
-        limit: 500,
-      }, token);
-      const perfByAd = {};
-      for (const r of rawAdPerf) perfByAd[r.ad_id] = { spend: Number(r.spend) || 0, actions: pickActions(r.actions) };
-      for (const a of ads) a.perf = perfByAd[a.id] || null;
-    }
-
     // 5. Custom conversion id → friendly name (for offsite_conversion.custom.<id>)
     const ccList = await metaGetAll(`act_${acct}/customconversions`, { fields: 'id,name', limit: 100 }, token).catch(() => []);
     const ccNames = {};
     for (const cc of ccList) ccNames[`offsite_conversion.custom.${cc.id}`] = cc.name;
 
-    // 6. Auto-classification against SportsEngine events (landing URL slug + campaign name)
-    const db = await store.load();
-    const events = Object.values(db.events);
-    const landingByCampaign = {};
-    for (const a of ads) if (a.landingUrl && !landingByCampaign[a.campaignId]) landingByCampaign[a.campaignId] = a.landingUrl;
-    const campaignsOut = activeCampaigns.map(c => {
-      const url = landingByCampaign[c.id] || '';
-      const path = url.replace(/^https?:\/\/[^/]+/, '');
-      let classification = 'unknown', suggestedEventId = null, suggestedEventName = null;
-      if (/^\/tournaments?/.test(path)) classification = 'tournaments';
-      else if (/^\/camps?/.test(path)) classification = 'camps';
-      else if (path === '/leagues' || path === '/leagues/') classification = 'general-leagues';
-      else if (/^\/leagues\//.test(path)) classification = 'league';
-      // Pin a specific league: what fraction of the EVENT's distinctive tokens
-      // (locations like woodbury/menomonie) appear in URL slug + campaign name?
-      const matchTokens = new Set(scrapeTokens(`${path.replace(/[/-]/g, ' ')} ${c.name}`));
-      const thisYear = String(new Date().getFullYear());
-      const AD_GENERIC = new Set(['legacy','hoops','conversion','league','leagues','campaign','basketball','session','eb','fr','v2','cbo','abo','summer','spring','fall','winter','park']);
-      let best = null, bs = -1, bestFrac = 0;
-      const now = Date.now();
-      for (const ev of events) {
-        const evYear = ((ev.name || '').match(/\b(20\d{2})\b/) || [])[1] || String(ev.close || ev.open || '').slice(0, 4);
-        if (evYear !== thisYear) continue;
-        const distinct = scrapeTokens(ev.name).filter(t => /[a-z]/.test(t) && !AD_GENERIC.has(t));
-        if (!distinct.length) continue;
-        const hit = distinct.filter(t => matchTokens.has(t)).length;
-        if (hit < 1) continue;
-        const frac = hit / distinct.length;
-        if (frac < 0.6) continue;
-        // more matched tokens wins; ties → prefer the UPCOMING season (ads sell
-        // what's open now, not the spring league that already closed)
-        const closeMs = new Date(ev.close || ev.open || 0).getTime();
-        const upcoming = closeMs >= now ? 1 / (1 + (closeMs - now) / 86400000 / 30) : 0;
-        const s = hit * 10 + frac + upcoming;
-        if (s > bs) { bs = s; bestFrac = frac; best = ev; }
-      }
-      if (best && bestFrac >= 0.6) { suggestedEventId = String(best.id); suggestedEventName = best.name; if (classification === 'unknown') classification = 'league'; }
-      return {
-        id: c.id, name: c.name, status: c.effective_status, startTime: c.start_time,
-        objective: c.objective, dailyBudget: c.daily_budget ? Number(c.daily_budget) / 100 : null,
-        landingUrl: url || null, classification, suggestedEventId, suggestedEventName,
-        totalSpend: insights.filter(i => i.c === c.id).reduce((s, i) => s + i.spend, 0),
-      };
-    });
+    const campaignsOut = activeCampaigns.map(c => ({
+      id: c.id, name: c.name, status: c.effective_status, startTime: c.start_time,
+      objective: c.objective, dailyBudget: c.daily_budget ? Number(c.daily_budget) / 100 : null,
+    }));
 
     const data = {
       syncedAt: new Date().toISOString(), adAccountId: acct,
@@ -4018,28 +3969,11 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Report data: synced blob + saved mappings/aliases
+// Report data: the synced blob
 app.get('/api/ads/data', async (req, res) => {
-  const [data, mappings] = await Promise.all([kvGet('ads:data'), kvGet('ads:mappings')]);
+  const data = await kvGet('ads:data');
   const s = await adsSettings();
-  res.json({ data: data || null, mappings: mappings || {}, configured: !!(s.token && s.adAccountId), adAccountId: s.adAccountId });
-});
-
-// Save a campaign's league mapping and/or alias (also ad aliases)
-app.put('/api/ads/map/:campaignId', auth.requireRole('admin', 'editor'), async (req, res) => {
-  const { eventId, alias, adAliases } = req.body || {};
-  const all = (await kvGet('ads:mappings')) || {};
-  const cur = all[req.params.campaignId] || {};
-  all[req.params.campaignId] = {
-    ...cur,
-    ...(eventId !== undefined ? { eventId: eventId || null } : {}),
-    ...(req.body?.adsetId !== undefined ? { adsetId: req.body.adsetId || null } : {}),
-    ...(alias !== undefined ? { alias: alias || null } : {}),
-    ...(adAliases !== undefined ? { adAliases: { ...(cur.adAliases || {}), ...adAliases } } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  await kvSet('ads:mappings', all);
-  res.json({ ok: true });
+  res.json({ data: data || null, configured: !!(s.token && s.adAccountId), adAccountId: s.adAccountId });
 });
 
 // ── Recompute dashboard stats + per-event counts from Convex results ──────────

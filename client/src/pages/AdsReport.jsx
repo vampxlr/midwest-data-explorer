@@ -1,39 +1,30 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis,
-  Tooltip, CartesianGrid, Legend,
-} from 'recharts';
 import { toast } from 'react-hot-toast';
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
-import { findPriorMatch } from '../components/LeagueYoyCompare.jsx';
-import Collapsible from '../components/Collapsible.jsx';
 
 /**
- * 📣 Meta Ads — campaign reporting tied to SportsEngine sales pace.
- *  - Setup card: paste a Marketing API token + ad account id in-app (write-only,
- *    encrypted server-side) or fall back to server env vars.
- *  - Sync pulls ACTIVE campaigns w/ recent spend, their ads/creatives and daily
- *    insights; campaigns auto-classify to leagues via landing URL + name.
- *  - Per campaign: alias, league mapping (auto-suggested, manually overridable),
- *    spend chart + cumulative results vs SE registrations pace w/ prior season.
+ * 📣 Meta Ads — a phone-friendly Ads Manager.
+ * Drill down campaigns → ad sets → ads (with creative thumbnails), a few metric
+ * columns at a time so nothing needs horizontal scrolling on a phone. Metrics
+ * and date range switch from chips at the top. Only campaigns actually
+ * spending money (last 21 days) are synced.
  */
 
 const FRIENDLY = {
   link_click: 'Link Clicks',
-  landing_page_view: 'Landing Page Views',
+  landing_page_view: 'Landing Views',
   video_view: 'Video Views',
-  'offsite_conversion.fb_pixel_custom': 'Custom Pixel Events (all)',
-  'offsite_conversion.fb_pixel_lead': 'Leads (pixel)',
-  'offsite_conversion.fb_pixel_complete_registration': 'Complete Registration',
-  'offsite_conversion.fb_pixel_initiate_checkout': 'Initiate Checkout',
+  'offsite_conversion.fb_pixel_custom': 'Custom Events',
+  'offsite_conversion.fb_pixel_lead': 'Leads',
+  'offsite_conversion.fb_pixel_complete_registration': 'Complete Reg.',
+  'offsite_conversion.fb_pixel_initiate_checkout': 'Init. Checkout',
 };
-const DEFAULT_METRICS = ['landing_page_view', 'offsite_conversion.fb_pixel_custom'];
-const STALE_MS = 6 * 3600 * 1000;          // auto re-sync when data older than 6h
-const METRIC_COLORS = ['var(--viz-3)', 'var(--viz-4)', 'var(--viz-6)', 'var(--viz-7)', 'var(--viz-8)'];
+const STALE_MS = 6 * 3600 * 1000;                 // auto re-sync after 6h
+const DEFAULT_VIEW = { metrics: ['spend', 'a:offsite_conversion.fb_pixel_custom', 'clicks'], cols: 3, range: '30d' };
 
-const metricLabel = (m, ccNames = {}) => ccNames[m] || FRIENDLY[m] || m.replace(/^offsite_conversion\./, '');
-const fmtUsd = (n) => '$' + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const fmtUsd = (n) => '$' + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: n >= 100 ? 0 : 2 });
+const fmtNum = (n) => Number(n || 0).toLocaleString();
 const agoLabel = (iso) => {
   if (!iso) return 'never';
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -43,16 +34,19 @@ const agoLabel = (iso) => {
 };
 const adsManagerUrl = (acct, adId) =>
   `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${acct}${adId ? `&selected_ad_ids=${adId}` : ''}`;
+const isoShift = (days) => new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 
-const CLASS_STYLE = {
-  league:            { label: '🏀 League',      bg: 'rgba(25,158,112,0.14)', color: 'var(--viz-2)' },
-  'general-leagues': { label: '🏀 Leagues (general)', bg: 'rgba(90,120,255,0.14)', color: 'var(--viz-1)' },
-  tournaments:       { label: '🏆 Tournaments', bg: 'rgba(240,180,60,0.14)',  color: 'var(--viz-5)' },
-  camps:             { label: '⛺ Camps',       bg: 'rgba(200,90,255,0.14)',  color: 'var(--viz-6)' },
-  unknown:           { label: '❔ Unmapped',    bg: 'var(--bg-hover)',        color: 'var(--text-4)' },
-};
+const RANGES = [
+  { key: 'today', label: 'Today',      calc: () => [isoShift(0), isoShift(0)] },
+  { key: 'yday',  label: 'Yesterday',  calc: () => [isoShift(-1), isoShift(-1)] },
+  { key: '7d',    label: '7D',         calc: () => [isoShift(-6), isoShift(0)] },
+  { key: '14d',   label: '14D',        calc: () => [isoShift(-13), isoShift(0)] },
+  { key: '30d',   label: '30D',        calc: () => [isoShift(-29), isoShift(0)] },
+  { key: 'month', label: 'This month', calc: () => [isoShift(0).slice(0, 8) + '01', isoShift(0)] },
+  { key: 'all',   label: 'All year',   calc: () => [isoShift(0).slice(0, 4) + '-01-01', isoShift(0)] },
+];
 
-/* ── Settings / setup card ──────────────────────────────────────────────── */
+/* ── Settings / setup card (in-app token config, write-only) ────────────── */
 function SettingsCard({ settings, onSaved, firstRun }) {
   const [acct, setAcct]   = useState(settings?.adAccountId || '');
   const [token, setToken] = useState('');
@@ -97,314 +91,20 @@ function SettingsCard({ settings, onSaved, firstRun }) {
   );
 }
 
-/* ── Per-campaign report card ───────────────────────────────────────────── */
-function CampaignCard({ c, adsets, ads, insights, mapping, ccNames, metrics, eventOptions, eventById, canEdit, adAccountId, onMap }) {
-  const alias = mapping?.alias || null;
-  const eventId = mapping?.eventId !== undefined && mapping?.eventId !== null
-    ? String(mapping.eventId) : (c.suggestedEventId ? String(c.suggestedEventId) : '');
-  const mappedEv = eventId ? eventById[eventId] : null;
-  const isAutoMapped = !mapping?.eventId && !!c.suggestedEventId;
-
-  const [editingAlias, setEditingAlias] = useState(false);
-  const [aliasDraft, setAliasDraft] = useState(alias || '');
-  const [series, setSeries] = useState({ cur: [], prior: [], priorName: null });
-
-  // The dropdown lists only this-year sold events, but a mapped/suggested
-  // league may not have sold yet — keep it selectable so the select shows it
-  const optionsWithCurrent = useMemo(() => {
-    if (eventId && !eventOptions.some(o => o.value === eventId)) {
-      const ev = eventById[eventId];
-      if (ev) return [{ value: eventId, label: `${ev.name} (no sales yet)` }, ...eventOptions];
-    }
-    return eventOptions;
-  }, [eventOptions, eventId, eventById]);
-
-  // Lock the analysis to one ad set (each adset targets one custom conversion).
-  // Default = the adset with the most spend; '' = all adsets combined.
-  const myAdsets = useMemo(() => {
-    const spendBy = {};
-    for (const i of insights) if (i.c === c.id) spendBy[i.as] = (spendBy[i.as] || 0) + i.spend;
-    return adsets.filter(s => s.campaignId === c.id)
-      .map(s => ({ ...s, spend: spendBy[s.id] || 0 }))
-      .sort((a, b) => b.spend - a.spend);
-  }, [adsets, insights, c.id]);
-  const lockedAdsetId = mapping?.adsetId !== undefined
-    ? (mapping.adsetId || '')                       // saved choice ('' = all)
-    : (myAdsets[0]?.id || '');
-  const lockedAdset = myAdsets.find(s => s.id === lockedAdsetId) || null;
-  const goalName = lockedAdset
-    ? (lockedAdset.goalEvent
-        || ccNames[`offsite_conversion.custom.${lockedAdset.goalCustomConversionId}`]
-        || lockedAdset.optimizationGoal)
-    : null;
-  // Which action counts as a "result" for this adset (Custom Conversion is
-  // per-event; otherwise the pixel's custom events come lumped together)
-  const resultKey = lockedAdset?.goalCustomConversionId
-    ? `offsite_conversion.custom.${lockedAdset.goalCustomConversionId}`
-    : 'offsite_conversion.fb_pixel_custom';
-  const labelFor = (m) =>
-    m === 'offsite_conversion.fb_pixel_custom' && goalName
-      ? `Custom events (goal: ${goalName})`
-      : metricLabel(m, ccNames);
-
-  // SE registration pace for the mapped league (+ prior season for acceleration)
-  useEffect(() => {
-    let dead = false;
-    if (!mappedEv) { setSeries({ cur: [], prior: [], priorName: null }); return; }
-    const prior = findPriorMatch(mappedEv, Object.values(eventById));
-    Promise.all([
-      api.reportDaily({ eventId: mappedEv.id }),
-      prior ? api.reportDaily({ eventId: prior.id }) : Promise.resolve({ data: { daily: [] } }),
-    ]).then(([a, b]) => {
-      if (!dead) setSeries({ cur: a.data.daily || [], prior: b.data.daily || [], priorName: prior?.name || null });
-    }).catch(() => {});
-    return () => { dead = true; };
-  }, [eventId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const rows = useMemo(() => {
-    const mine = insights
-      .filter(i => i.c === c.id && (!lockedAdsetId || i.as === lockedAdsetId))
-      .sort((a, b) => a.d.localeCompare(b.d));
-    if (!mine.length) return [];
-    // several adset rows can share a day — aggregate
-    const byDay = {};
-    for (const i of mine) {
-      const t = byDay[i.d] || (byDay[i.d] = { spend: 0, actions: {} });
-      t.spend += i.spend;
-      for (const [k, v] of Object.entries(i.actions || {})) t.actions[k] = (t.actions[k] || 0) + v;
-    }
-    const start = mine[0].d, end = new Date().toISOString().slice(0, 10);
-    const regs = {}; for (const r of series.cur) regs[r.date] = (regs[r.date] || 0) + r.total;
-    // prior season overlaid by same MM-DD one year earlier
-    const priorRegs = {}; for (const r of series.prior) priorRegs[r.date.slice(5)] = (priorRegs[r.date.slice(5)] || 0) + r.total;
-    const out = [];
-    let cumSpend = 0, cumRegs = 0, cumPrior = 0;
-    const cumMetrics = Object.fromEntries(metrics.map(m => [m, 0]));
-    for (let d = new Date(start + 'T12:00:00Z'); d.toISOString().slice(0, 10) <= end; d.setUTCDate(d.getUTCDate() + 1)) {
-      const day = d.toISOString().slice(0, 10);
-      const i = byDay[day];
-      cumSpend += i?.spend || 0;
-      cumRegs  += regs[day] || 0;
-      cumPrior += priorRegs[day.slice(5)] || 0;
-      const row = {
-        day, label: day.slice(5).replace('-', '/'),
-        spend: +(i?.spend || 0).toFixed(2), cumSpend: +cumSpend.toFixed(2),
-        regs: series.cur.length ? cumRegs : undefined,
-        priorRegs: series.prior.length ? cumPrior : undefined,
-      };
-      for (const m of metrics) { cumMetrics[m] += i?.actions?.[m] || 0; row[m] = cumMetrics[m]; }
-      out.push(row);
-    }
-    return out;
-  }, [insights, c.id, lockedAdsetId, metrics, series]);
-
-  const last = rows[rows.length - 1] || {};
-  const yesterdaySpend = rows.length > 1 ? rows[rows.length - 2].spend : 0;
-  const cls = CLASS_STYLE[c.classification] || CLASS_STYLE.unknown;
-
-  // Results + cost/result for the locked adset window
-  const { totalResults, totalSpendLocked } = useMemo(() => {
-    let res = 0, sp = 0;
-    for (const i of insights) {
-      if (i.c !== c.id || (lockedAdsetId && i.as !== lockedAdsetId)) continue;
-      res += i.actions?.[resultKey] || 0; sp += i.spend;
-    }
-    return { totalResults: res, totalSpendLocked: sp };
-  }, [insights, c.id, lockedAdsetId, resultKey]);
-
-  // Creatives ranked by cost per result (cheapest first); ties broken by volume
-  const myAds = useMemo(() => {
-    const list = ads
-      .filter(a => a.campaignId === c.id && (!lockedAdsetId || a.adsetId === lockedAdsetId))
-      .map(a => {
-        const results = a.perf?.actions?.[resultKey] || 0;
-        const spend = a.perf?.spend || 0;
-        return { ...a, results, cpr: results > 0 ? spend / results : null };
-      })
-      .sort((x, y) => (x.cpr ?? Infinity) - (y.cpr ?? Infinity) || y.results - x.results);
-    const bestCpr = list.find(a => a.cpr != null)?.id;
-    const mostRes = list.reduce((m, a) => (a.results > (m?.results || 0) ? a : m), null)?.id;
-    return list.map(a => ({ ...a, isBestCpr: a.id === bestCpr && a.cpr != null, isMostResults: a.id === mostRes && a.results > 0 }));
-  }, [ads, c.id, lockedAdsetId, resultKey]);
-
-  function saveAlias() {
-    setEditingAlias(false);
-    if ((aliasDraft.trim() || null) !== alias) onMap(c.id, { alias: aliasDraft.trim() });
-  }
-
-  return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      {/* header: alias / name / class chip / KPIs */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {editingAlias ? (
-              <input autoFocus value={aliasDraft} onChange={e => setAliasDraft(e.target.value)}
-                onBlur={saveAlias} onKeyDown={e => { if (e.key === 'Enter') saveAlias(); }}
-                placeholder="Friendly name for the client" style={{ fontSize: 15, fontWeight: 700, width: 280 }} />
-            ) : (
-              <h3 style={{ margin: 0, fontSize: 16 }}>
-                {alias || c.name}
-                {canEdit && <button onClick={() => { setAliasDraft(alias || ''); setEditingAlias(true); }}
-                  title="Set a friendly alias" style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 12 }}>✏️</button>}
-              </h3>
-            )}
-            <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: '2px 9px', background: cls.bg, color: cls.color }}>{cls.label}</span>
-          </div>
-          {alias && <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 2 }}>{c.name}</div>}
-          <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 2 }}>
-            {c.startTime && <>started {c.startTime.slice(0, 10)} · </>}
-            {c.dailyBudget != null && <>{fmtUsd(c.dailyBudget)}/day budget · </>}
-            {c.landingUrl && <a href={c.landingUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-light)' }}>{c.landingUrl.replace(/^https?:\/\/(www\.)?/, '')}</a>}
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-          <Kpi label="Spend" value={fmtUsd(totalSpendLocked)} />
-          <Kpi label="Yesterday" value={fmtUsd(yesterdaySpend)} />
-          <Kpi label="Results" value={totalResults.toLocaleString()} />
-          {totalResults > 0 && <Kpi label="Cost / result" value={'$' + (totalSpendLocked / totalResults).toFixed(2)} />}
-          {mappedEv && last.regs !== undefined && <Kpi label="Sales (campaign window)" value={last.regs} accent />}
-          <a className="btn" href={adsManagerUrl(adAccountId)} target="_blank" rel="noreferrer"
-            title="Open this account in Meta Ads Manager">↗ Ads Manager</a>
-        </div>
-      </div>
-
-      {/* adset lock-in — the unit of analysis (each adset targets one custom event) */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, color: 'var(--text-4)' }}>Ad set:</span>
-        {canEdit ? (
-          <select value={lockedAdsetId} onChange={e => onMap(c.id, { adsetId: e.target.value || null })} style={{ maxWidth: 340, fontSize: 12 }}>
-            <option value="">All ad sets (combined)</option>
-            {myAdsets.map(s => <option key={s.id} value={s.id}>{s.name} — {fmtUsd(s.spend)}</option>)}
-          </select>
-        ) : (
-          <span style={{ fontSize: 12 }}>{lockedAdset?.name || 'All ad sets'}</span>
-        )}
-        {goalName && <span style={{ fontSize: 11, fontWeight: 700, borderRadius: 999, padding: '2px 9px', background: 'rgba(240,180,60,0.14)', color: 'var(--viz-5)' }}>🎯 {goalName}</span>}
-      </div>
-
-      {/* league mapping */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, color: 'var(--text-4)' }}>Mapped league:</span>
-        {canEdit ? (
-          <select value={eventId} onChange={e => onMap(c.id, { eventId: e.target.value || null })} style={{ maxWidth: 360, fontSize: 12 }}>
-            <option value="">— not mapped —</option>
-            {optionsWithCurrent.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        ) : (
-          <span style={{ fontSize: 12 }}>{mappedEv?.name || '— not mapped —'}</span>
-        )}
-        {isAutoMapped && mappedEv && <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--viz-2)' }}>✨ auto</span>}
-        {isAutoMapped && !mappedEv && c.suggestedEventName &&
-          <span style={{ fontSize: 11, color: 'var(--text-4)' }}>looks like “{c.suggestedEventName}” (no registrations yet)</span>}
-        {series.priorName && <span style={{ fontSize: 11, color: 'var(--text-4)' }}>· pace vs {series.priorName}</span>}
-      </div>
-
-      {/* stacked aligned charts: $ spend on top, counts below (shared x axis) */}
-      {rows.length > 0 && (
-        <>
-          <div style={{ height: 130, marginTop: 12 }}>
-            <ResponsiveContainer>
-              <ComposedChart data={rows} syncId={`ads-${c.id}`} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke="var(--line)" strokeDasharray="2 4" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-4)' }} minTickGap={28} />
-                <YAxis tick={{ fontSize: 9, fill: 'var(--text-4)' }} width={44} tickFormatter={v => '$' + v} />
-                <Tooltip contentStyle={{ background: 'var(--surface-1)', border: '1px solid var(--line)', fontSize: 11 }}
-                  formatter={(v, n) => [n === 'Daily spend' || n === 'Cumulative spend' ? fmtUsd(v) : v, n]} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                <Bar dataKey="spend" name="Daily spend" fill="var(--viz-1)" opacity={0.55} radius={[2, 2, 0, 0]} />
-                <Line dataKey="cumSpend" name="Cumulative spend" stroke="var(--viz-5)" strokeWidth={2} dot={false} type="monotone" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-          <div style={{ height: 170 }}>
-            <ResponsiveContainer>
-              <ComposedChart data={rows} syncId={`ads-${c.id}`} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid stroke="var(--line)" strokeDasharray="2 4" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-4)' }} minTickGap={28} />
-                <YAxis tick={{ fontSize: 9, fill: 'var(--text-4)' }} width={44} allowDecimals={false} />
-                <Tooltip contentStyle={{ background: 'var(--surface-1)', border: '1px solid var(--line)', fontSize: 11 }} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                {metrics.map((m, i) => (
-                  <Line key={m} dataKey={m} name={labelFor(m)} stroke={METRIC_COLORS[i % METRIC_COLORS.length]}
-                    strokeWidth={1.7} dot={false} type="monotone" />
-                ))}
-                {last.regs !== undefined &&
-                  <Line dataKey="regs" name="Registrations (SE)" stroke="var(--viz-2)" strokeWidth={2.4} dot={false} type="monotone" />}
-                {last.priorRegs !== undefined &&
-                  <Line dataKey="priorRegs" name="Last season pace" stroke="var(--viz-2)" strokeWidth={1.6}
-                    strokeDasharray="5 4" opacity={0.6} dot={false} type="monotone" />}
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </>
-      )}
-
-      {/* creatives strip — click opens the ad in Ads Manager (video plays there) */}
-      {myAds.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 11, color: 'var(--text-4)', marginBottom: 6 }}>
-            Creatives ({myAds.length}), cheapest cost-per-result first — click to open in Ads Manager{myAds.some(a => a.videoId) && ' (videos play there)'}
-          </div>
-          <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-            {myAds.map(a => (
-              <a key={a.id} href={adsManagerUrl(adAccountId, a.id)} target="_blank" rel="noreferrer"
-                title={(mapping?.adAliases?.[a.id] || a.title || a.name) + ' — open in Ads Manager'}
-                style={{ flexShrink: 0, width: 104, textDecoration: 'none', color: 'var(--text-3)' }}>
-                <div style={{
-                  position: 'relative', width: 104, height: 104, borderRadius: 8, overflow: 'hidden',
-                  background: 'var(--bg-hover)',
-                  border: a.isBestCpr ? '2px solid var(--viz-2)' : a.isMostResults ? '2px solid var(--viz-5)' : '1px solid var(--line)',
-                  boxShadow: a.isBestCpr ? '0 0 10px rgba(25,158,112,0.45)' : 'none',
-                }}>
-                  {a.thumbnailUrl
-                    ? <img src={a.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    : <span style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>🖼️</span>}
-                  {a.videoId && <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, textShadow: '0 1px 6px rgba(0,0,0,0.7)' }}>▶</span>}
-                  {(a.isBestCpr || a.isMostResults) && (
-                    <span style={{
-                      position: 'absolute', top: 3, left: 3, fontSize: 9, fontWeight: 800, borderRadius: 6,
-                      padding: '1px 5px', color: '#fff',
-                      background: a.isBestCpr ? 'rgba(25,158,112,0.9)' : 'rgba(240,150,40,0.9)',
-                    }}>{a.isBestCpr ? '🏆 best $' : '🔥 most'}</span>
-                  )}
-                </div>
-                <div style={{ fontSize: 10, fontWeight: 700, marginTop: 3, fontVariantNumeric: 'tabular-nums', color: a.cpr != null ? (a.isBestCpr ? 'var(--viz-2)' : 'var(--text-2)') : 'var(--text-4)' }}>
-                  {a.cpr != null ? `$${a.cpr.toFixed(2)}/res · ${a.results.toLocaleString()}` : (a.perf ? `${fmtUsd(a.perf.spend)} · 0 res` : 'no delivery')}
-                </div>
-                <div style={{ fontSize: 9, lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                  {mapping?.adAliases?.[a.id] || a.title || a.name}
-                </div>
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Kpi({ label, value, accent }) {
-  return (
-    <div style={{ textAlign: 'right' }}>
-      <div style={{ fontSize: 10, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: accent ? 'var(--viz-2)' : 'var(--text-1)' }}>{value}</div>
-    </div>
-  );
-}
-
 /* ── Page ───────────────────────────────────────────────────────────────── */
-export default function AdsReport({ ctx }) {
+export default function AdsReport() {
   const { user, isSuperAdmin } = useAuth();
   const canSync = isSuperAdmin || ['admin', 'editor'].includes(user?.role);
   const isAdmin = isSuperAdmin || user?.role === 'admin';
 
-  const [payload, setPayload]   = useState(null);   // {data, mappings, configured, adAccountId}
+  const [payload, setPayload]   = useState(null);
   const [settings, setSettings] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [syncing, setSyncing]   = useState(false);
-  const [metrics, setMetrics]   = useState(DEFAULT_METRICS);
+  const [view, setView]         = useState(DEFAULT_VIEW);   // {metrics, cols, range, from?, to?}
+  const [drill, setDrill]       = useState({ campaignId: null, adsetId: null });
   const autoSynced = useRef(false);
+  const viewLoaded = useRef(false);
 
   async function load() {
     const r = await api.adsData();
@@ -412,7 +112,6 @@ export default function AdsReport({ ctx }) {
     if (isAdmin) api.adsSettings().then(s => setSettings(s.data)).catch(() => {});
     return r.data;
   }
-
   async function sync() {
     setSyncing(true);
     try {
@@ -425,116 +124,256 @@ export default function AdsReport({ ctx }) {
   }
 
   useEffect(() => {
-    api.getPref('ads-metrics').then(r => {
+    api.getPref('ads-view').then(r => {
       const v = r.data?.value && JSON.parse(r.data.value);
-      if (Array.isArray(v) && v.length) setMetrics(v);
-    }).catch(() => {});
+      if (v?.metrics) setView({ ...DEFAULT_VIEW, ...v });
+    }).catch(() => {}).finally(() => { viewLoaded.current = true; });
     load().then(p => {
-      // keep the report fresh without anyone pressing buttons
       const stale = !p?.data?.syncedAt || (Date.now() - new Date(p.data.syncedAt).getTime()) > STALE_MS;
       if (stale && p?.configured && canSync && !autoSynced.current) { autoSynced.current = true; sync(); }
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function toggleMetric(m) {
-    setMetrics(prev => {
-      const next = prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m];
-      api.setPref('ads-metrics', next).catch(() => {});
+  function saveView(patch) {
+    setView(prev => {
+      const next = { ...prev, ...patch };
+      if (viewLoaded.current) api.setPref('ads-view', next).catch(() => {});
       return next;
     });
   }
 
-  async function onMap(campaignId, body) {
-    try {
-      await api.adsMap(campaignId, body);
-      setPayload(p => ({
-        ...p,
-        mappings: { ...p.mappings, [campaignId]: { ...(p.mappings?.[campaignId] || {}), ...body } },
-      }));
-      toast.success('Saved');
-    } catch { toast.error('Could not save'); }
-  }
+  const data = payload?.data;
+  const acct = payload?.adAccountId || data?.adAccountId;
 
-  // Mapping dropdown lists only this year's events that have actually sold —
-  // old seasons/camps are irrelevant for live campaigns
-  const eventOptions = useMemo(() => {
-    const thisYear = String(new Date().getFullYear());
-    return (ctx?.recentRegs || [])
-      .filter(r => {
-        const y = ((r.name || '').match(/\b(20\d{2})\b/) || [])[1] || String(r.close || r.open || '').slice(0, 4);
-        return y === thisYear && (r.resultsCompleted || 0) > 0;
-      })
-      .sort((a, b) => (b.close || b.open || '').localeCompare(a.close || a.open || ''))
-      .map(r => ({ value: String(r.id), label: r.name }));
-  }, [ctx?.recentRegs]);
-  const eventById = useMemo(() => {
-    const m = {}; for (const r of (ctx?.recentRegs || [])) m[String(r.id)] = r; return m;
-  }, [ctx?.recentRegs]);
+  // Metric catalog: spend/impressions/clicks + every discovered action type
+  const metricDefs = useMemo(() => {
+    const defs = [
+      { key: 'spend',  label: 'Amount Spent', short: 'Spent', money: true },
+      { key: 'imp',    label: 'Impressions',  short: 'Impr.' },
+      { key: 'clicks', label: 'Clicks',       short: 'Clicks' },
+    ];
+    for (const m of (data?.discoveredMetrics || [])) {
+      const label = data?.ccNames?.[m] || FRIENDLY[m] || m.replace(/^offsite_conversion\./, '');
+      defs.push({ key: `a:${m}`, label, short: label.length > 16 ? label.slice(0, 15) + '…' : label });
+    }
+    return defs;
+  }, [data]);
+  const defByKey = useMemo(() => Object.fromEntries(metricDefs.map(d => [d.key, d])), [metricDefs]);
+  const activeMetrics = view.metrics.filter(k => defByKey[k]).slice(0, view.cols);
+
+  // Date window
+  const [from, to] = useMemo(() => {
+    if (view.range === 'custom' && view.from && view.to) return [view.from, view.to];
+    return (RANGES.find(r => r.key === view.range) || RANGES[4]).calc();
+  }, [view.range, view.from, view.to]);
+
+  // Aggregate the raw ad-day rows for the current drill level + date window
+  const { rows, totals } = useMemo(() => {
+    if (!data) return { rows: [], totals: null };
+    const level = drill.adsetId ? 'ad' : drill.campaignId ? 'adset' : 'campaign';
+    const keyOf = (i) => level === 'campaign' ? i.c : level === 'adset' ? i.as : i.ad;
+    const byKey = {}; const tot = { spend: 0, imp: 0, clicks: 0, actions: {} };
+    for (const i of (data.insights || [])) {
+      if (i.d < from || i.d > to) continue;
+      if (drill.campaignId && i.c !== drill.campaignId) continue;
+      if (drill.adsetId && i.as !== drill.adsetId) continue;
+      const k = keyOf(i);
+      const t = byKey[k] || (byKey[k] = { spend: 0, imp: 0, clicks: 0, actions: {} });
+      t.spend += i.spend; t.imp += i.imp; t.clicks += i.clicks;
+      tot.spend += i.spend; tot.imp += i.imp; tot.clicks += i.clicks;
+      for (const [a, v] of Object.entries(i.actions || {})) {
+        t.actions[a] = (t.actions[a] || 0) + v;
+        tot.actions[a] = (tot.actions[a] || 0) + v;
+      }
+    }
+    // entity metadata for names/thumbnails; include zero-spend entities of the level
+    const meta = level === 'campaign' ? (data.campaigns || [])
+      : level === 'adset' ? (data.adsets || []).filter(s => s.campaignId === drill.campaignId)
+      : (data.ads || []).filter(a => a.adsetId === drill.adsetId);
+    const out = meta.map(m => ({ meta: m, t: byKey[m.id] || { spend: 0, imp: 0, clicks: 0, actions: {} } }))
+      .sort((a, b) => b.t.spend - a.t.spend);
+    return { rows: out, totals: tot };
+  }, [data, drill, from, to]);
+
+  const valueOf = (t, key) => key === 'spend' ? t.spend : key === 'imp' ? t.imp : key === 'clicks' ? t.clicks : (t.actions[key.slice(2)] || 0);
+  const renderVal = (t, key) => {
+    const def = defByKey[key];
+    const v = valueOf(t, key);
+    return (
+      <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>{def?.money ? fmtUsd(v) : fmtNum(v)}</div>
+        {/* cost-per-result under action counts whenever there was spend */}
+        {key.startsWith('a:') && v > 0 && t.spend > 0 &&
+          <div style={{ fontSize: 9, color: 'var(--text-4)' }}>${(t.spend / v).toFixed(2)}/ea</div>}
+      </div>
+    );
+  };
+
+  function toggleMetric(key) {
+    const cur = view.metrics.filter(k => defByKey[k]);
+    let next;
+    if (cur.includes(key)) next = cur.filter(k => k !== key);
+    else next = [...cur, key].slice(-view.cols);      // slots are limited — oldest falls out
+    if (!next.length) return;
+    saveView({ metrics: next });
+  }
 
   if (!payload) return <div style={{ padding: 24, color: 'var(--text-4)' }}>Loading ads data…</div>;
 
-  const { data, mappings, configured, adAccountId } = payload;
-  const campaigns = (data?.campaigns || []).slice().sort((a, b) => b.totalSpend - a.totalSpend);
-  const availableMetrics = data?.discoveredMetrics || [];
+  const level = drill.adsetId ? 'ad' : drill.campaignId ? 'adset' : 'campaign';
+  const campaign = drill.campaignId ? (data?.campaigns || []).find(c => c.id === drill.campaignId) : null;
+  const adset = drill.adsetId ? (data?.adsets || []).find(s => s.id === drill.adsetId) : null;
+  const gridCols = `minmax(0,1fr) repeat(${activeMetrics.length}, minmax(64px, 88px))`;
 
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+    <div style={{ maxWidth: 860, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <div>
-          <h2 style={{ margin: 0 }}>📣 Meta Ads</h2>
+          <h2 style={{ margin: 0 }}>📣 Ads</h2>
           <div style={{ fontSize: 12, color: 'var(--text-4)' }}>
-            {data ? <>Synced {agoLabel(data.syncedAt)} · {campaigns.length} live campaigns
-              {data.zombieActiveCount > 0 && <> · {data.zombieActiveCount} inactive hidden</>}</>
-              : 'No data synced yet'}
+            {data ? <>Synced {agoLabel(data.syncedAt)} · spending campaigns only
+              {data.zombieActiveCount > 0 && <> ({data.zombieActiveCount} idle hidden)</>}</> : 'No data synced yet'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {canSync && configured &&
-            <button className="btn" onClick={sync} disabled={syncing}>{syncing ? '⏳ Syncing…' : '🔄 Sync now'}</button>}
-          {isAdmin &&
-            <button className="btn" onClick={() => setShowSettings(s => !s)}>⚙️ Settings</button>}
+          {canSync && payload.configured &&
+            <button className="btn" onClick={sync} disabled={syncing}>{syncing ? '⏳' : '🔄'}</button>}
+          {isAdmin && <button className="btn" onClick={() => setShowSettings(s => !s)}>⚙️</button>}
         </div>
       </div>
 
-      {(!configured || showSettings) && isAdmin &&
-        <SettingsCard settings={settings} firstRun={!configured}
+      {(!payload.configured || showSettings) && isAdmin &&
+        <SettingsCard settings={settings} firstRun={!payload.configured}
           onSaved={() => { setShowSettings(false); load(); }} />}
-      {!configured && !isAdmin &&
+      {!payload.configured && !isAdmin &&
         <div className="card">Ads reporting isn't configured yet — ask an admin to add the Meta access token.</div>}
-
-      {configured && !data &&
+      {payload.configured && !data &&
         <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-          <p style={{ color: 'var(--text-3)' }}>Connected — run the first sync to pull campaigns, creatives and daily insights.</p>
+          <p style={{ color: 'var(--text-3)' }}>Connected — run the first sync to pull campaigns and insights.</p>
           {canSync && <button className="btn btn-primary" onClick={sync} disabled={syncing}>{syncing ? '⏳ Syncing…' : '🔄 Sync now'}</button>}
         </div>}
 
-      {data && availableMetrics.length > 0 && (
-        <Collapsible title="📐 Report metrics" defaultOpen={false} style={{ marginTop: 0, marginBottom: 16 }}
-          subtitle="Pick which custom parameters show as cumulative lines on every campaign chart — saved to your profile">
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {availableMetrics.map(m => {
-              const on = metrics.includes(m);
-              return (
-                <button key={m} onClick={() => toggleMetric(m)} style={{
-                  padding: '4px 12px', borderRadius: 999, fontSize: 12, cursor: 'pointer', fontWeight: 600,
-                  border: on ? '1px solid rgba(25,158,112,0.5)' : '1px solid var(--border)',
-                  background: on ? 'rgba(25,158,112,0.12)' : 'var(--bg-hover)',
-                  color: on ? 'var(--viz-2)' : 'var(--text-3)',
-                }}>
-                  {on ? '✓ ' : ''}{metricLabel(m, data.ccNames)}
-                </button>
-              );
-            })}
+      {data && <>
+        {/* date range chips */}
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 4 }}>
+          {RANGES.map(r => (
+            <Chip key={r.key} on={view.range === r.key} onClick={() => saveView({ range: r.key })}>{r.label}</Chip>
+          ))}
+          <Chip on={view.range === 'custom'} onClick={() => saveView({ range: 'custom', from: view.from || from, to: view.to || to })}>Custom</Chip>
+        </div>
+        {view.range === 'custom' && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
+            <input type="date" value={view.from || from} onChange={e => saveView({ from: e.target.value })} />
+            →
+            <input type="date" value={view.to || to} onChange={e => saveView({ to: e.target.value })} />
           </div>
-        </Collapsible>
-      )}
+        )}
 
-      {data && campaigns.map(c => (
-        <CampaignCard key={c.id} c={c} adsets={data.adsets || []} ads={data.ads || []} insights={data.insights || []}
-          mapping={mappings?.[c.id]} ccNames={data.ccNames || {}} metrics={metrics}
-          eventOptions={eventOptions} eventById={eventById}
-          canEdit={canSync} adAccountId={adAccountId || data.adAccountId} onMap={onMap} />
-      ))}
+        {/* metric chips — tap to fill one of the N metric slots */}
+        <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, alignItems: 'center' }}>
+          <select value={view.cols} onChange={e => saveView({ cols: Number(e.target.value) })}
+            title="How many metric columns to show"
+            style={{ fontSize: 11, flexShrink: 0, borderRadius: 999, padding: '3px 6px' }}>
+            {[1, 2, 3, 4].map(n => <option key={n} value={n}>{n} col{n > 1 ? 's' : ''}</option>)}
+          </select>
+          {metricDefs.map(d => (
+            <Chip key={d.key} on={activeMetrics.includes(d.key)} onClick={() => toggleMetric(d.key)}>{d.label}</Chip>
+          ))}
+        </div>
+
+        {/* breadcrumb */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '8px 0', minHeight: 28 }}>
+          {level !== 'campaign' && (
+            <button className="btn" style={{ padding: '2px 10px', fontSize: 13 }}
+              onClick={() => setDrill(drill.adsetId ? { campaignId: drill.campaignId, adsetId: null } : { campaignId: null, adsetId: null })}>
+              ‹ Back
+            </button>
+          )}
+          <div style={{ fontSize: 12, color: 'var(--text-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ cursor: 'pointer', color: level === 'campaign' ? 'var(--text-1)' : 'var(--accent-light)', fontWeight: level === 'campaign' ? 700 : 400 }}
+              onClick={() => setDrill({ campaignId: null, adsetId: null })}>Campaigns</span>
+            {campaign && <> / <span style={{ cursor: 'pointer', color: level === 'adset' ? 'var(--text-1)' : 'var(--accent-light)', fontWeight: level === 'adset' ? 700 : 400 }}
+              onClick={() => setDrill({ campaignId: drill.campaignId, adsetId: null })}>{campaign.name}</span></>}
+            {adset && <> / <span style={{ fontWeight: 700 }}>{adset.name}</span></>}
+          </div>
+        </div>
+
+        {/* table */}
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          {/* header */}
+          <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--line)', position: 'sticky', top: 0, background: 'var(--surface-1)', zIndex: 1 }}>
+            <div style={{ fontSize: 10, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+              {level === 'campaign' ? 'Campaign' : level === 'adset' ? 'Ad set' : 'Ad'}
+            </div>
+            {activeMetrics.map(k => (
+              <div key={k} style={{ fontSize: 10, color: 'var(--text-4)', textAlign: 'right', textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                {defByKey[k]?.short}
+              </div>
+            ))}
+          </div>
+          {/* totals */}
+          {totals && (
+            <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: 8, padding: '9px 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg-hover)' }}>
+              <div style={{ fontSize: 12, fontWeight: 800 }}>Total</div>
+              {activeMetrics.map(k => <div key={k}>{renderVal(totals, k)}</div>)}
+            </div>
+          )}
+          {/* entity rows */}
+          {rows.map(({ meta, t }) => (
+            <div key={meta.id}
+              onClick={() => {
+                if (level === 'campaign') setDrill({ campaignId: meta.id, adsetId: null });
+                else if (level === 'adset') setDrill({ campaignId: drill.campaignId, adsetId: meta.id });
+              }}
+              style={{
+                display: 'grid', gridTemplateColumns: gridCols, gap: 8, padding: '10px 12px',
+                borderBottom: '1px solid var(--line)', alignItems: 'center',
+                cursor: level !== 'ad' ? 'pointer' : 'default',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {level === 'ad' && (
+                  <span style={{ position: 'relative', flexShrink: 0, width: 40, height: 40, borderRadius: 6, overflow: 'hidden', background: 'var(--bg-hover)', border: '1px solid var(--line)' }}>
+                    {meta.thumbnailUrl
+                      ? <img src={meta.thumbnailUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <span style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>🖼️</span>}
+                    {meta.videoId && <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, textShadow: '0 1px 4px rgba(0,0,0,0.7)' }}>▶</span>}
+                  </span>
+                )}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                    {level !== 'ad' && <span style={{ marginRight: 5, fontSize: 9, verticalAlign: 2, color: 'var(--viz-2)' }}>●</span>}
+                    {meta.name}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {level === 'campaign' && (meta.dailyBudget != null ? `${fmtUsd(meta.dailyBudget)}/day` : meta.objective?.toLowerCase().replace(/_/g, ' '))}
+                    {level === 'adset' && (meta.goalEvent || meta.optimizationGoal || '')}
+                    {level === 'ad' && (
+                      <a href={adsManagerUrl(acct, meta.id)} target="_blank" rel="noreferrer"
+                        onClick={e => e.stopPropagation()} style={{ color: 'var(--accent-light)' }}>
+                        ↗ open in Ads Manager
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {activeMetrics.map(k => <div key={k}>{renderVal(t, k)}</div>)}
+            </div>
+          ))}
+          {rows.length === 0 && <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'var(--text-4)' }}>Nothing delivered in this date range.</div>}
+        </div>
+      </>}
     </div>
+  );
+}
+
+function Chip({ on, onClick, children }) {
+  return (
+    <button onClick={onClick} style={{
+      flexShrink: 0, padding: '4px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+      border: on ? '1px solid rgba(25,158,112,0.5)' : '1px solid var(--border)',
+      background: on ? 'rgba(25,158,112,0.12)' : 'var(--bg-hover)',
+      color: on ? 'var(--viz-2)' : 'var(--text-3)',
+      whiteSpace: 'nowrap',
+    }}>{children}</button>
   );
 }
