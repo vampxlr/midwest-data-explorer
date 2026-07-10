@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
+import PasswordField from '../components/PasswordField.jsx';
 
 const ROLE_INFO = {
   superadmin: { label: 'Super Admin', desc: 'Platform owner — everything Admin can do, plus the Super Admin panel (landing page, pricing, organizations, billing)', color: '#a855f7' },
@@ -54,9 +55,8 @@ function CreateUserForm({ onCreated }) {
         </div>
         <div>
           <label className="field-label" htmlFor="new-password">Password</label>
-          <input id="new-password" type="password" className="field-input" style={{ width:180 }}
-                 value={password} onChange={e=>setPassword(e.target.value)}
-                 minLength={8} required />
+          <PasswordField id="new-password" value={password} onChange={setPassword}
+                 inputStyle={{ width:180 }} required />
         </div>
         <div>
           <label className="field-label" htmlFor="new-email">Google email (optional)</label>
@@ -184,9 +184,8 @@ function UserRow({ u, isSelf, onChanged }) {
       <td>
         {editingPw ? (
           <form onSubmit={savePassword} style={{ display:'flex', gap:6 }}>
-            <input type="password" className="field-input" style={{ width:140 }}
-                   placeholder="New password" value={password}
-                   onChange={e=>setPassword(e.target.value)} minLength={8} required autoFocus />
+            <PasswordField value={password} onChange={setPassword}
+                   placeholder="New password" inputStyle={{ width:140 }} required autoFocus />
             <button type="submit" className="btn-action-green" disabled={busy}>Save</button>
             <button type="button" className="btn-secondary" style={{ width:'auto', margin:0 }}
                     onClick={()=>{ setEditingPw(false); setPassword(''); }}>Cancel</button>

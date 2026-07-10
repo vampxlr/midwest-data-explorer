@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
+import PasswordField from '../components/PasswordField.jsx';
 
 // Deletion is disabled platform-wide for safety (PLATFORM_DELETES_ENABLED is
 // off server-side too). The full guard flow — typed name + email 2FA — is
@@ -473,8 +474,8 @@ function PlatformUsersPanel() {
           </div>
           <div>
             <label className="field-label">Password * (8+ chars)</label>
-            <input className="field-input" type="password" style={{ width:160 }} required minLength={8}
-              value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+            <PasswordField value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))}
+              inputStyle={{ width:160 }} required />
           </div>
           <div>
             <label className="field-label">Google email (optional)</label>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
+import PasswordField from '../components/PasswordField.jsx';
 
 /**
  * Company-level dashboard — standalone shell for customer admins (users
@@ -96,7 +97,7 @@ export default function CompanyDashboard() {
           {adding && (
             <form onSubmit={addUser} style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'flex-end', marginBottom:14 }}>
               <input className="field-input" placeholder="Username" required value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
-              <input className="field-input" type="password" placeholder="Password (8+ chars)" required minLength={8} value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
+              <PasswordField placeholder="Password (8+ chars)" required value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))} />
               <input className="field-input" type="email" placeholder="Google email (optional)" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
               <select className="field-input" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
                 <option value="editor">Editor</option>
