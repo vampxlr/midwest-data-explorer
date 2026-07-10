@@ -50,3 +50,9 @@ skills-lock.json
 
 .vercel
 .env*
+
+# graphify: keep the shared map, not machine-local state
+graphify-out/cache/
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cost.json
