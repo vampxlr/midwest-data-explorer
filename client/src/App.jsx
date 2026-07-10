@@ -15,6 +15,9 @@ import DataManagement  from './pages/DataManagement.jsx';
 import Login        from './pages/Login.jsx';
 import Users        from './pages/Users.jsx';
 import Landing      from './pages/Landing.jsx';
+import Signup       from './pages/Signup.jsx';
+import FeedbackWidget from './components/FeedbackWidget.jsx';
+import { initTracking } from './tracking.js';
 import SuperAdmin   from './pages/SuperAdmin.jsx';
 import CompanyDashboard from './pages/CompanyDashboard.jsx';
 import { api }      from './api.jsx';
@@ -47,6 +50,14 @@ export default function App() {
   // to the login form. OAuth round-trips (?gerror / #gtoken) skip the landing.
   const [showLogin, setShowLogin] = useState(() =>
     window.location.search.includes('gerror=') || window.location.hash.includes('gtoken='));
+  const [showSignup, setShowSignup] = useState(false);
+
+  // Boot the marketing data layer (GA4 + Meta pixel) once ids are configured
+  useEffect(() => {
+    api.getSiteSettings()
+      .then(r => initTracking({ ga4Id: r.data.ga4Id, metaPixelId: r.data.metaPixelId }))
+      .catch(() => {});
+  }, []);
   const [connected,     setConnected]     = useState(false);
   const [recentRegs,    setRecentRegs]    = useState([]);
   const [selectedReg,   setSelectedReg]   = useState(null);
@@ -132,9 +143,12 @@ export default function App() {
   }
 
   if (!user) {
+    if (showSignup || window.location.pathname === '/signup') {
+      return <Signup onBack={() => { setShowSignup(false); window.history.replaceState({}, '', '/'); }} />;
+    }
     return showLogin
       ? <Login />
-      : <Landing onSignIn={() => setShowLogin(true)} />;
+      : <Landing onSignIn={() => setShowLogin(true)} onSignup={() => setShowSignup(true)} />;
   }
 
   // ── Company dashboard — customer users linked to a company account ───────
@@ -146,6 +160,7 @@ export default function App() {
           style: { background:'var(--bg-card)', color:'var(--text-1)', border:'1px solid var(--border)' }
         }} />
         <CompanyDashboard />
+        <FeedbackWidget />
       </>
     );
   }
@@ -189,12 +204,14 @@ export default function App() {
             <SuperAdmin />
           </main>
         </div>
+        <FeedbackWidget />
       </>
     );
   }
 
   return (
     <BrowserRouter>
+      <FeedbackWidget />
       <Toaster position="top-right" toastOptions={{
         style: { background:'var(--bg-card)', color:'var(--text-1)', border:'1px solid var(--border)' }
       }} />

@@ -3,6 +3,8 @@ import { api } from '../api.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
 import PasswordField from '../components/PasswordField.jsx';
+import BillingCard from '../components/BillingCard.jsx';
+import PromoPanel from '../components/PromoPanel.jsx';
 
 /**
  * Company-level dashboard — standalone shell for customer admins (users
@@ -60,6 +62,7 @@ export default function CompanyDashboard() {
       </header>
 
       <main style={{ maxWidth:1000, margin:'0 auto', padding:'28px clamp(14px, 3vw, 32px) 60px' }}>
+        <BillingCard />
         {/* Organizations */}
         <div className="card">
           <h2>Your Organizations</h2>
@@ -123,6 +126,9 @@ export default function CompanyDashboard() {
             </table>
           )}
         </div>
+
+        {/* auto1labs service offers, matched to org size */}
+        <PromoPanel />
       </main>
     </div>
   );

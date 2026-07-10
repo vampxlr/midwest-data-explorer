@@ -171,6 +171,23 @@ export const api = {
   companyUsers: ()              => axios.get(`${BASE}/company/users`),
   companyCreateUser: (body)     => axios.post(`${BASE}/company/users`, body),
 
+  // ── Growth: signup, billing, offers, feedback ──────────────────────────────
+  signupAvailability: () => axios.get(`${BASE}/signup/availability`),
+  signup:          (body) => axios.post(`${BASE}/signup`, body),
+  billingMe:       ()     => axios.get(`${BASE}/billing/me`),
+  billingCheckout: ()     => axios.post(`${BASE}/billing/checkout`),
+  billingPortal:   ()     => axios.post(`${BASE}/billing/portal`),
+  getOffers:       ()     => axios.get(`${BASE}/offers`),
+  adminOffers:     ()     => axios.get(`${BASE}/admin/offers`),
+  saveOffers:      (offers) => axios.put(`${BASE}/admin/offers`, { offers }),
+  sendFeedback:    (body) => axios.post(`${BASE}/feedback`, body),
+  reportError:     (body) => axios.post(`${BASE}/feedback/error`, body).catch(() => {}),
+  getFeedback:     ()     => axios.get(`${BASE}/feedback`),
+  setFeedbackStatus: (id, status) => axios.put(`${BASE}/feedback/${encodeURIComponent(id)}`, { status }),
+  getCustomers:    ()     => axios.get(`${BASE}/admin/customers`),
+  getGrowth:       ()     => axios.get(`${BASE}/admin/growth`),
+  saveGrowth:      (body) => axios.put(`${BASE}/admin/growth`, body),
+
   // ── Meta Ads reporting ─────────────────────────────────────────────────────
   adsSettings:     ()      => axios.get(`${BASE}/ads/settings`),
   adsSaveSettings: (body)  => axios.put(`${BASE}/ads/settings`, body),

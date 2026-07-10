@@ -30,7 +30,11 @@ const cache = new NodeCache({ stdTTL: 300 });
 
 app.set('trust proxy', 1); // Vercel / reverse-proxy environments set X-Forwarded-For
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+// Stripe webhooks are signature-verified over the RAW body — keep it unparsed
+const jsonParser = express.json({ limit: '10mb' });
+const rawParser = express.raw({ type: '*/*', limit: '1mb' });
+app.use((req, res, next) =>
+  req.path === '/api/billing/webhook' ? rawParser(req, res, next) : jsonParser(req, res, next));
 app.use(rateLimit({
   windowMs: 60000,
   max: 200,
@@ -49,6 +53,8 @@ const PUBLIC_API_PATHS = new Set([
   '/api/auth/google', '/api/auth/google/callback',
   '/api/site-settings',   // landing page content (GET only — PUT re-runs auth below)
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
+  '/api/signup',            // public self-serve registration
+  '/api/signup/availability', // landing page checks whether trial slots remain
 ]);
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/') || PUBLIC_API_PATHS.has(req.path)) return next();
@@ -3228,7 +3234,13 @@ async function loadSiteSettings() {
 }
 
 app.get('/api/site-settings', async (req, res) => {
-  res.json(await loadSiteSettings());
+  const s = await loadSiteSettings();
+  // Non-secret tracking ids ride along so the client can boot GA4 + Meta pixel
+  try {
+    const g = await growthSettings();
+    s.ga4Id = g.ga4Id; s.metaPixelId = g.metaPixelId;
+  } catch {}
+  res.json(s);
 });
 
 // Path is public for GET, so PUT must authenticate explicitly
@@ -3582,14 +3594,330 @@ app.delete('/api/admin/orgs/:orgKey', auth.requireOwner, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Stripe-ready billing stub — activates when STRIPE_* env vars exist ────────
-app.post('/api/billing/webhook', express.raw({ type: 'application/json' }), (req, res) => {
-  if (!process.env.STRIPE_WEBHOOK_SECRET) {
-    return res.status(503).json({ error: 'Billing is not configured yet' });
+// ═══════════════════════════════════════════════════════════════════════════════
+// GROWTH ENGINE — self-serve signup, 7-day trials with caps, Stripe billing,
+// GA4/Meta CAPI tracking, auto1labs service offers, feedback inbox.
+// Everything is dormant-safe: with no STRIPE_* keys the flows render "coming
+// soon"; paste the keys and the same code goes live unchanged.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Growth settings (owner-editable): trial caps + tracking ids. CAPI token is
+// encrypted at rest like the Meta ads token.
+async function growthSettings() {
+  const s = (await kvGet('growth:settings')) || {};
+  return {
+    trialDays: s.trialDays ?? 7,
+    trialActiveLimit: s.trialActiveLimit ?? 5,
+    trialMonthlyLimit: s.trialMonthlyLimit ?? 20,
+    ga4Id: s.ga4Id || process.env.GA4_MEASUREMENT_ID || '',
+    metaPixelId: s.metaPixelId || process.env.META_PIXEL_ID || '',
+    capiToken: s.capiTokenEnc ? decryptSecret(s.capiTokenEnc) : (process.env.META_CAPI_TOKEN || ''),
+    hasCapiToken: !!(s.capiTokenEnc || process.env.META_CAPI_TOKEN),
+    stripePriceId: s.stripePriceId || process.env.STRIPE_PRICE_ID || '',
+  };
+}
+
+// Billing state lives in KV (not the accounts table) so no schema migration:
+// { [accountKey]: { status, orgSize, trialStartedAt, trialEndsAt,
+//                   stripeCustomerId, stripeSubscriptionId, updatedAt } }
+async function billingAll() { return (await kvGet('billing:accounts')) || {}; }
+async function billingSave(accountKey, patch) {
+  const all = await billingAll();
+  all[accountKey] = { ...(all[accountKey] || {}), ...patch, updatedAt: new Date().toISOString() };
+  await kvSet('billing:accounts', all);
+  return all[accountKey];
+}
+function liveStatus(b) {
+  if (!b) return 'none';
+  if (b.status === 'trialing' && b.trialEndsAt && b.trialEndsAt < new Date().toISOString()) return 'expired';
+  return b.status;
+}
+
+async function trialAvailability() {
+  const [s, all] = await Promise.all([growthSettings(), billingAll()]);
+  const now = new Date().toISOString();
+  const month = now.slice(0, 7);
+  let active = 0, thisMonth = 0;
+  for (const b of Object.values(all)) {
+    if (b.status === 'trialing' && b.trialEndsAt > now) active++;
+    if ((b.trialStartedAt || '').slice(0, 7) === month) thisMonth++;
   }
-  // When Stripe goes live: verify signature with stripe.webhooks.constructEvent
-  // and update organizations.subscriptionStatus accordingly.
-  res.json({ received: true });
+  const available = active < s.trialActiveLimit && thisMonth < s.trialMonthlyLimit;
+  return { available, active, thisMonth, activeLimit: s.trialActiveLimit, monthlyLimit: s.trialMonthlyLimit, trialDays: s.trialDays };
+}
+
+// ── Meta Conversions API (server-side) — fire-and-forget, dormant without token
+async function capiSend(eventName, { email, ip, ua, sourceUrl, value } = {}) {
+  try {
+    const s = await growthSettings();
+    if (!s.metaPixelId || !s.capiToken) return;
+    const user_data = { client_user_agent: ua || undefined, client_ip_address: ip || undefined };
+    if (email) user_data.em = [crypto.createHash('sha256').update(email.trim().toLowerCase()).digest('hex')];
+    const body = {
+      data: [{
+        event_name: eventName, event_time: Math.floor(Date.now() / 1000),
+        action_source: 'website', event_source_url: sourceUrl || undefined,
+        user_data, ...(value ? { custom_data: { currency: 'USD', value } } : {}),
+      }],
+    };
+    await axios.post(`https://graph.facebook.com/v21.0/${s.metaPixelId}/events`,
+      body, { params: { access_token: s.capiToken }, timeout: 8000 });
+    console.log(`[capi] sent ${eventName}`);
+  } catch (err) { console.warn('[capi] failed:', err.response?.data?.error?.message || err.message); }
+}
+
+// ── Public: does the landing page still show the free-trial option?
+app.get('/api/signup/availability', async (req, res) => {
+  try {
+    const t = await trialAvailability();
+    res.json({ trialAvailable: t.available, trialDays: t.trialDays });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Public: self-serve registration → company + admin user + trial
+app.post('/api/signup', async (req, res) => {
+  const { companyName, orgSize, username, email, password } = req.body || {};
+  if (!companyName || !username || !password) return res.status(400).json({ error: 'Company name, username and password are required' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  try {
+    if (await userStore.findByUsername(String(username).trim())) {
+      return res.status(409).json({ error: 'That username is taken — pick another' });
+    }
+    let accountKey = String(companyName).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'org';
+    const existing = await listAccountsRaw();
+    if (existing.some(a => a.accountKey === accountKey)) accountKey = `${accountKey}-${Date.now().toString(36).slice(-4)}`;
+
+    const trial = await trialAvailability();
+    const now = new Date();
+    await saveAccountDoc({ accountKey, name: String(companyName).trim(), createdAt: now.toISOString() });
+    const passwordHash = await auth.hashPassword(String(password));
+    const user = await userStore.create({
+      username: String(username).trim(), passwordHash, role: 'admin',
+      email: email ? String(email).trim() : undefined, accountKey,
+    });
+    const billing = await billingSave(accountKey, trial.available ? {
+      status: 'trialing', orgSize: orgSize || 'unknown',
+      trialStartedAt: now.toISOString(),
+      trialEndsAt: new Date(now.getTime() + trial.trialDays * 86400000).toISOString(),
+    } : { status: 'pending', orgSize: orgSize || 'unknown' });
+
+    capiSend(trial.available ? 'StartTrial' : 'CompleteRegistration', {
+      email, ip: req.ip, ua: req.headers['user-agent'], sourceUrl: req.headers.referer,
+    });
+    const token = auth.signToken(user);
+    res.json({ ok: true, token, user: { id: user.id, username: user.username, role: user.role, accountKey }, billing: { ...billing, status: liveStatus(billing) } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Stripe (lazy — only loaded when a key exists) ─────────────────────────────
+let _stripe = null;
+function getStripe() {
+  if (!process.env.STRIPE_SECRET_KEY) return null;
+  if (!_stripe) _stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+  return _stripe;
+}
+// If no price id is configured, create the product+price once from site
+// settings and remember it — "paste the secret key and boom".
+async function ensureStripePrice(stripe) {
+  const s = await growthSettings();
+  if (s.stripePriceId) return s.stripePriceId;
+  const site = await loadSiteSettings();
+  const amount = Math.round(Number(site.betaPriceMonthly || 30) * 100);
+  const product = await stripe.products.create({ name: site.appName || 'Data Explorer for SportsEngine' });
+  const price = await stripe.prices.create({ product: product.id, unit_amount: amount, currency: 'usd', recurring: { interval: 'month' } });
+  const cur = (await kvGet('growth:settings')) || {};
+  await kvSet('growth:settings', { ...cur, stripePriceId: price.id });
+  return price.id;
+}
+
+// My billing status (any signed-in user)
+app.get('/api/billing/me', async (req, res) => {
+  try {
+    const me = await userStore.findById(req.user.id);
+    if (!me?.accountKey || me.accountKey === 'midwest-3on3' || ['owner', 'superadmin'].includes(me.role)) {
+      return res.json({ status: 'internal', stripeEnabled: !!process.env.STRIPE_SECRET_KEY });
+    }
+    const b = (await billingAll())[me.accountKey];
+    const status = liveStatus(b);
+    const daysLeft = b?.trialEndsAt ? Math.max(0, Math.ceil((new Date(b.trialEndsAt) - Date.now()) / 86400000)) : 0;
+    res.json({ status, trialEndsAt: b?.trialEndsAt || null, trialDaysLeft: status === 'trialing' ? daysLeft : 0, stripeEnabled: !!process.env.STRIPE_SECRET_KEY });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Start a subscription — Stripe-hosted Checkout collects the card (PCI-safe)
+app.post('/api/billing/checkout', async (req, res) => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) return res.status(503).json({ error: 'Billing opens soon — you stay on the free beta until then' });
+    const me = await userStore.findById(req.user.id);
+    if (!me?.accountKey) return res.status(400).json({ error: 'No company linked to this user' });
+    const priceId = await ensureStripePrice(stripe);
+    const origin = req.headers.origin || `https://${req.headers.host}`;
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      customer_email: me.email || undefined,
+      client_reference_id: me.accountKey,
+      metadata: { accountKey: me.accountKey },
+      subscription_data: { metadata: { accountKey: me.accountKey } },
+      success_url: `${origin}/?billing=success`,
+      cancel_url: `${origin}/?billing=cancelled`,
+      allow_promotion_codes: true,
+    });
+    res.json({ url: session.url });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Manage card / cancel — Stripe-hosted billing portal
+app.post('/api/billing/portal', async (req, res) => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) return res.status(503).json({ error: 'Billing is not configured yet' });
+    const me = await userStore.findById(req.user.id);
+    const b = (await billingAll())[me?.accountKey];
+    if (!b?.stripeCustomerId) return res.status(400).json({ error: 'No subscription on file yet' });
+    const origin = req.headers.origin || `https://${req.headers.host}`;
+    const session = await stripe.billingPortal.sessions.create({ customer: b.stripeCustomerId, return_url: origin });
+    res.json({ url: session.url });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Stripe → us. Signature verified over the raw body.
+app.post('/api/billing/webhook', async (req, res) => {
+  const stripe = getStripe();
+  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).json({ error: 'Billing is not configured yet' });
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) { return res.status(400).json({ error: `Webhook signature verification failed: ${err.message}` }); }
+  try {
+    const obj = event.data.object;
+    const accountKey = obj.metadata?.accountKey || obj.client_reference_id;
+    if (event.type === 'checkout.session.completed' && accountKey) {
+      await billingSave(accountKey, { status: 'active', stripeCustomerId: obj.customer, stripeSubscriptionId: obj.subscription });
+      capiSend('Subscribe', { email: obj.customer_details?.email, value: (obj.amount_total || 0) / 100 });
+    } else if (event.type === 'customer.subscription.updated' && accountKey) {
+      const map = { active: 'active', trialing: 'active', past_due: 'past_due', unpaid: 'past_due', canceled: 'canceled' };
+      await billingSave(accountKey, { status: map[obj.status] || obj.status });
+    } else if (event.type === 'customer.subscription.deleted' && accountKey) {
+      await billingSave(accountKey, { status: 'canceled' });
+    } else if (event.type === 'invoice.payment_failed') {
+      const key = obj.subscription_details?.metadata?.accountKey;
+      if (key) await billingSave(key, { status: 'past_due' });
+    }
+    console.log(`[stripe] ${event.type}${accountKey ? ' → ' + accountKey : ''}`);
+    res.json({ received: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── auto1labs service offers — owner-curated, matched to org size ─────────────
+const DEFAULT_OFFERS = [
+  { id: 'media-small', service: 'media', title: 'Done-for-you Meta Ads', priceLabel: 'from $299/mo',
+    desc: 'We run your league campaigns end to end — creatives, budgets, weekly reporting tied to your registration pace.',
+    url: 'https://auto1labs.com?utm_source=dataexplorer&utm_medium=inapp&utm_campaign=media_buying',
+    sizeMin: 0, sizeMax: 5000, active: true },
+  { id: 'media-large', service: 'media', title: 'Growth media buying', priceLabel: 'from $799/mo',
+    desc: 'Multi-league campaign management with audience exports, retargeting and season-over-season pacing goals.',
+    url: 'https://auto1labs.com?utm_source=dataexplorer&utm_medium=inapp&utm_campaign=media_buying_growth',
+    sizeMin: 5001, sizeMax: 999999, active: true },
+  { id: 'tracking', service: 'tracking', title: 'GTM + Meta CAPI setup', priceLabel: 'one-time $499',
+    desc: 'Server-side tracking done right: Google Tag Manager, Conversions API, per-league custom events — see exactly which ad sells registrations.',
+    url: 'https://auto1labs.com?utm_source=dataexplorer&utm_medium=inapp&utm_campaign=tracking_setup',
+    sizeMin: 0, sizeMax: 999999, active: true },
+];
+const SIZE_BUCKET = { small: 1000, medium: 5000, large: 20000, unknown: 1000 };
+
+app.get('/api/offers', async (req, res) => {
+  try {
+    const offers = (await kvGet('growth:offers')) || DEFAULT_OFFERS;
+    const me = await userStore.findById(req.user.id);
+    const b = me?.accountKey ? (await billingAll())[me.accountKey] : null;
+    const size = SIZE_BUCKET[b?.orgSize] ?? Number(b?.orgSize) ?? 1000;
+    res.json({ offers: offers.filter(o => o.active && size >= (o.sizeMin || 0) && size <= (o.sizeMax || 999999)) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/admin/offers', auth.requireRole('superadmin'), async (req, res) => {
+  res.json({ offers: (await kvGet('growth:offers')) || DEFAULT_OFFERS });
+});
+app.put('/api/admin/offers', auth.requireRole('superadmin'), async (req, res) => {
+  const offers = req.body?.offers;
+  if (!Array.isArray(offers)) return res.status(400).json({ error: 'offers array required' });
+  await kvSet('growth:offers', offers);
+  res.json({ ok: true });
+});
+
+// ── Feedback: bug reports, feature requests, auto-captured client errors ──────
+async function appendCapped(key, item, cap) {
+  const list = (await kvGet(key)) || [];
+  list.unshift(item);
+  await kvSet(key, list.slice(0, cap));
+}
+app.post('/api/feedback', async (req, res) => {
+  const { type, message, page } = req.body || {};
+  if (!message || !['bug', 'feature'].includes(type)) return res.status(400).json({ error: 'type (bug|feature) and message required' });
+  const me = await userStore.findById(req.user.id);
+  await appendCapped('feedback:items', {
+    id: crypto.randomUUID(), type, message: String(message).slice(0, 2000), page: page || null,
+    username: me?.username, accountKey: me?.accountKey || null, status: 'new',
+    createdAt: new Date().toISOString(),
+  }, 500);
+  res.json({ ok: true });
+});
+app.post('/api/feedback/error', async (req, res) => {
+  const { message, stack, page } = req.body || {};
+  await appendCapped('feedback:errors', {
+    id: crypto.randomUUID(), message: String(message || '').slice(0, 500),
+    stack: String(stack || '').slice(0, 1500), page: page || null,
+    username: req.user?.username, createdAt: new Date().toISOString(),
+  }, 200);
+  res.json({ ok: true });
+});
+app.get('/api/feedback', auth.requireRole('superadmin'), async (req, res) => {
+  const [items, errors] = await Promise.all([kvGet('feedback:items'), kvGet('feedback:errors')]);
+  res.json({ items: items || [], errors: errors || [] });
+});
+app.put('/api/feedback/:id', auth.requireRole('superadmin'), async (req, res) => {
+  const list = (await kvGet('feedback:items')) || [];
+  const it = list.find(i => i.id === req.params.id);
+  if (!it) return res.status(404).json({ error: 'not found' });
+  it.status = req.body?.status || it.status;
+  await kvSet('feedback:items', list);
+  res.json({ ok: true });
+});
+
+// ── Owner: customers overview + growth settings ────────────────────────────────
+app.get('/api/admin/customers', auth.requireRole('superadmin'), async (req, res) => {
+  try {
+    const [accounts, billing, users, trial] = await Promise.all([
+      listAccountsRaw(), billingAll(), userStore.list(), trialAvailability(),
+    ]);
+    const customers = accounts.map(({ _id, _creationTime, ...a }) => {
+      const b = billing[a.accountKey] || null;
+      return {
+        ...a,
+        billing: b ? { ...b, status: liveStatus(b) } : { status: a.accountKey === 'midwest-3on3' ? 'internal' : 'none' },
+        userCount: users.filter(u => u.accountKey === a.accountKey).length,
+        users: users.filter(u => u.accountKey === a.accountKey).map(u => ({ username: u.username, email: u.email, role: u.role, lastLoginAt: u.lastLoginAt })),
+      };
+    });
+    res.json({ customers, trial, stripeEnabled: !!process.env.STRIPE_SECRET_KEY, webhookConfigured: !!process.env.STRIPE_WEBHOOK_SECRET });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.get('/api/admin/growth', auth.requireRole('superadmin'), async (req, res) => {
+  const s = await growthSettings();
+  res.json({ trialDays: s.trialDays, trialActiveLimit: s.trialActiveLimit, trialMonthlyLimit: s.trialMonthlyLimit,
+    ga4Id: s.ga4Id, metaPixelId: s.metaPixelId, hasCapiToken: s.hasCapiToken, stripePriceId: s.stripePriceId,
+    stripeEnabled: !!process.env.STRIPE_SECRET_KEY, webhookConfigured: !!process.env.STRIPE_WEBHOOK_SECRET });
+});
+app.put('/api/admin/growth', auth.requireRole('superadmin'), async (req, res) => {
+  const b = req.body || {};
+  const cur = (await kvGet('growth:settings')) || {};
+  const next = { ...cur };
+  for (const k of ['trialDays', 'trialActiveLimit', 'trialMonthlyLimit']) if (b[k] !== undefined) next[k] = Math.max(0, Number(b[k]) || 0);
+  for (const k of ['ga4Id', 'metaPixelId', 'stripePriceId']) if (b[k] !== undefined) next[k] = String(b[k]).trim();
+  if (b.capiToken && !/^•+$/.test(b.capiToken)) next.capiTokenEnc = encryptSecret(String(b.capiToken).trim());
+  await kvSet('growth:settings', next);
+  res.json({ ok: true });
 });
 
 // ── Deadline scraper — midwest3on3.com early-bird/final registration dates ────

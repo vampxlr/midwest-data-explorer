@@ -73,12 +73,15 @@ function MockDashboard() {
   );
 }
 
-export default function Landing({ onSignIn }) {
+export default function Landing({ onSignIn, onSignup }) {
   const [s, setS] = useState(null);
+  const [trial, setTrial] = useState(null);   // {trialAvailable, trialDays}
   const mockRef = useRef(null);
+  const signup = onSignup || onSignIn;
 
   useEffect(() => {
     api.getSiteSettings().then(r => setS(r.data)).catch(() => setS({}));
+    api.signupAvailability().then(r => setTrial(r.data)).catch(() => setTrial(null));
   }, []);
   useReveal(!!s);
 
@@ -256,7 +259,9 @@ export default function Landing({ onSignIn }) {
         <h1 className="lp-h1 lp-up" style={{ '--d': '0.08s' }}>{s.appName}</h1>
         <p className="lp-tagline lp-up" style={{ '--d': '0.16s' }}>{s.tagline}</p>
         <div className="lp-cta-row lp-up" style={{ '--d': '0.24s' }}>
-          <button className="lp-cta" onClick={onSignIn}>Get started free →</button>
+          <button className="lp-cta" onClick={signup}>
+            {trial?.trialAvailable ? `Start ${trial.trialDays}-day free trial →` : 'Get started →'}
+          </button>
           <button className="lp-cta ghost" onClick={() =>
             document.getElementById('lp-features')?.scrollIntoView({ behavior: 'smooth' })}>
             See what it does
@@ -313,7 +318,14 @@ export default function Landing({ onSignIn }) {
                 </li>
               ))}
             </ul>
-            <button className="lp-cta" style={{ width: '100%' }} onClick={onSignIn}>Start now</button>
+            <button className="lp-cta" style={{ width: '100%' }} onClick={signup}>
+              {trial?.trialAvailable ? `Start free trial` : 'Create account'}
+            </button>
+            {trial && !trial.trialAvailable && (
+              <p style={{ fontSize: 11.5, color: 'var(--text-4)', margin: '10px 0 0' }}>
+                Free trial slots are full this month — sign up to grab the next opening.
+              </p>
+            )}
           </div>
         </div>
       </div>

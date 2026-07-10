@@ -556,41 +556,263 @@ function PlatformUsersPanel() {
   );
 }
 
-// ── 4. Billing (Stripe-ready, dormant) ────────────────────────────────────────
-function BillingPanel() {
+// ── Customer signups, trial slots & account status ─────────────────────────────
+const BILLING_UI = {
+  trialing: { label: 'Trial',    color: '#22c55e' }, active:   { label: 'Active',   color: '#22c55e' },
+  past_due: { label: 'Past due', color: '#f59e0b' }, canceled: { label: 'Canceled', color: '#ef4444' },
+  expired:  { label: 'Expired',  color: '#ef4444' }, pending:  { label: 'Pending',  color: '#94a3b8' },
+  none:     { label: 'Beta',     color: '#6366f1' }, internal: { label: 'Internal', color: '#94a3b8' },
+};
+function StatusChip({ status }) {
+  const ui = BILLING_UI[status] || BILLING_UI.none;
+  return <span style={{ fontSize:11, fontWeight:800, padding:'2px 10px', borderRadius:999, background:`${ui.color}1f`, color:ui.color }}>{ui.label}</span>;
+}
+
+function CustomersPanel() {
+  const [data, setData] = useState(null);
+  useEffect(() => { api.getCustomers().then(r => setData(r.data)).catch(() => setData({ customers: [] })); }, []);
+  if (!data) return <div className="card"><div className="no-data">Loading customers…</div></div>;
+  const { customers, trial, stripeEnabled, webhookConfigured } = data;
+  const ext = customers.filter(c => c.accountKey !== 'midwest-3on3');
+  const count = (s) => ext.filter(c => c.billing.status === s).length;
   return (
-    <div className="card">
-      <h2>Billing</h2>
-      <div style={{
-        display:'flex', alignItems:'center', gap:12, padding:'14px 16px', borderRadius:10,
-        background:'rgba(249,115,22,0.08)', border:'1px solid rgba(249,115,22,0.3)',
-      }}>
-        <span style={{ fontSize:22 }}>💳</span>
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, color:'var(--accent-2)' }}>Stripe not connected — beta mode (free)</div>
-          <div style={{ fontSize:12, color:'var(--text-3)', marginTop:2 }}>
-            The platform is Stripe-ready: add <code>STRIPE_SECRET_KEY</code>, <code>STRIPE_WEBHOOK_SECRET</code>, and a
-            price ID to the environment and billing activates. Webhook endpoint is already live at <code>/api/billing/webhook</code>.
+    <>
+      {/* KPI strip */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:10, marginBottom:16 }}>
+        {[
+          ['Customers', ext.length, 'var(--accent-light)'],
+          ['On trial', count('trialing'), '#22c55e'],
+          ['Paying', count('active'), '#22c55e'],
+          ['Needs attention', count('past_due') + count('expired') + count('pending'), '#f59e0b'],
+          ['Trial slots left', trial ? Math.max(0, trial.activeLimit - trial.active) : '—', 'var(--text-1)'],
+        ].map(([l, v, c]) => (
+          <div key={l} className="card" style={{ margin:0, padding:'12px 16px' }}>
+            <div style={{ fontSize:24, fontWeight:800, color:c, fontVariantNumeric:'tabular-nums' }}>{v}</div>
+            <div style={{ fontSize:10.5, textTransform:'uppercase', letterSpacing:0.5, color:'var(--text-4)' }}>{l}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card" style={{ marginTop:0 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8 }}>
+          <h2 style={{ margin:0 }}>Customers & signups</h2>
+          <div style={{ fontSize:12, color: stripeEnabled ? 'var(--viz-up)' : 'var(--text-4)' }}>
+            {stripeEnabled ? (webhookConfigured ? '✅ Stripe live (checkout + webhooks)' : '⚠️ Stripe key set — webhook secret missing') : '💳 Stripe not connected — flows ready, waiting for keys'}
           </div>
         </div>
+        {ext.length === 0 ? (
+          <div className="no-data" style={{ padding:'22px' }}>No customer signups yet — the /signup flow is live and waiting.</div>
+        ) : (
+          <div style={{ overflowX:'auto', marginTop:10 }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
+              <thead><tr style={{ textAlign:'left', color:'var(--text-4)', fontSize:11, textTransform:'uppercase' }}>
+                <th style={{ padding:'6px 10px' }}>Company</th><th style={{ padding:'6px 10px' }}>Status</th>
+                <th style={{ padding:'6px 10px' }}>Size</th><th style={{ padding:'6px 10px' }}>Trial ends</th>
+                <th style={{ padding:'6px 10px' }}>Users</th><th style={{ padding:'6px 10px' }}>Signed up</th>
+              </tr></thead>
+              <tbody>
+                {ext.map(c => (
+                  <tr key={c.accountKey} style={{ borderTop:'1px solid var(--border-sub)' }}>
+                    <td style={{ padding:'8px 10px', fontWeight:600 }}>{c.name}
+                      <div style={{ fontSize:11, color:'var(--text-4)' }}>{c.users?.[0]?.email || c.users?.[0]?.username || ''}</div></td>
+                    <td style={{ padding:'8px 10px' }}><StatusChip status={c.billing.status} /></td>
+                    <td style={{ padding:'8px 10px', textTransform:'capitalize' }}>{c.billing.orgSize || '—'}</td>
+                    <td style={{ padding:'8px 10px', fontVariantNumeric:'tabular-nums' }}>{c.billing.trialEndsAt ? c.billing.trialEndsAt.slice(0, 10) : '—'}</td>
+                    <td style={{ padding:'8px 10px' }}>{c.userCount}</td>
+                    <td style={{ padding:'8px 10px' }}>{(c.createdAt || '').slice(0, 10)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {trial && (
+          <div style={{ marginTop:10, fontSize:12, color:'var(--text-4)' }}>
+            Trials: {trial.active}/{trial.activeLimit} active · {trial.thisMonth}/{trial.monthlyLimit} started this month —
+            when either limit is hit the free-trial option disappears from the site automatically.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── Growth settings: trial caps + GA4 / Meta pixel / CAPI ─────────────────────
+function GrowthPanel() {
+  const [g, setG] = useState(null);
+  const [capiToken, setCapiToken] = useState('');
+  useEffect(() => { api.getGrowth().then(r => setG(r.data)).catch(() => {}); }, []);
+  if (!g) return <div className="card"><div className="no-data">Loading…</div></div>;
+  const upd = (patch) => setG(x => ({ ...x, ...patch }));
+  async function save() {
+    try {
+      await api.saveGrowth({ ...g, ...(capiToken.trim() ? { capiToken: capiToken.trim() } : {}) });
+      setCapiToken('');
+      toast.success('Growth settings saved');
+    } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
+  }
+  const num = (v) => (v === '' ? 0 : Number(v));
+  return (
+    <div className="card">
+      <h2>Trials & tracking</h2>
+      <div style={{ display:'flex', gap:14, flexWrap:'wrap', marginBottom:6 }}>
+        <Field label="Trial length (days)"><input className="field-input" type="number" min="1" style={{ width:110 }} value={g.trialDays} onChange={e => upd({ trialDays: num(e.target.value) })} /></Field>
+        <Field label="Max concurrent trials"><input className="field-input" type="number" min="0" style={{ width:110 }} value={g.trialActiveLimit} onChange={e => upd({ trialActiveLimit: num(e.target.value) })} /></Field>
+        <Field label="Max new trials / month"><input className="field-input" type="number" min="0" style={{ width:110 }} value={g.trialMonthlyLimit} onChange={e => upd({ trialMonthlyLimit: num(e.target.value) })} /></Field>
+      </div>
+      <div style={{ display:'flex', gap:14, flexWrap:'wrap' }}>
+        <Field label="GA4 Measurement ID"><input className="field-input" placeholder="G-XXXXXXXXXX" style={{ width:170 }} value={g.ga4Id} onChange={e => upd({ ga4Id: e.target.value })} /></Field>
+        <Field label="Meta Pixel ID"><input className="field-input" placeholder="1234567890" style={{ width:170 }} value={g.metaPixelId} onChange={e => upd({ metaPixelId: e.target.value })} /></Field>
+        <Field label={`Meta CAPI token ${g.hasCapiToken ? '(saved)' : ''}`}>
+          <input className="field-input" type="password" style={{ width:220 }} value={capiToken}
+            placeholder={g.hasCapiToken ? '••••••••  (unchanged)' : 'server-side events token'}
+            onChange={e => setCapiToken(e.target.value)} />
+        </Field>
+        <Field label="Stripe price ID (optional)"><input className="field-input" placeholder="auto-created if empty" style={{ width:200 }} value={g.stripePriceId} onChange={e => upd({ stripePriceId: e.target.value })} /></Field>
+      </div>
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:14 }}>
+        <button className="btn-primary" onClick={save}>Save growth settings</button>
+        <span style={{ fontSize:12, color:'var(--text-4)' }}>
+          GA4 + pixel load on the site as soon as ids are saved; CAPI fires server-side on signup & subscribe.
+        </span>
       </div>
     </div>
   );
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// ── auto1labs offers editor ────────────────────────────────────────────────────
+function OffersPanel() {
+  const [offers, setOffers] = useState(null);
+  useEffect(() => { api.adminOffers().then(r => setOffers(r.data.offers)).catch(() => setOffers([])); }, []);
+  if (!offers) return <div className="card"><div className="no-data">Loading…</div></div>;
+  const upd = (i, patch) => setOffers(o => o.map((x, idx) => idx === i ? { ...x, ...patch } : x));
+  async function save() {
+    try { await api.saveOffers(offers); toast.success('Offers saved'); }
+    catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
+  }
+  return (
+    <div className="card">
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8 }}>
+        <h2 style={{ margin:0 }}>auto1labs in-app offers</h2>
+        <button className="btn-secondary" style={{ width:'auto', margin:0 }} onClick={() => setOffers(o => [...o, {
+          id:`offer-${Date.now().toString(36)}`, service:'media', title:'', desc:'', priceLabel:'',
+          url:'https://auto1labs.com?utm_source=dataexplorer&utm_medium=inapp', sizeMin:0, sizeMax:999999, active:true,
+        }])}>+ Add offer</button>
+      </div>
+      <p style={{ fontSize:12, color:'var(--text-4)', margin:'4px 0 12px' }}>
+        Shown inside customer dashboards, matched by organization size (small ≈ 1k, medium ≈ 5k, large ≈ 20k registrations/yr).
+      </p>
+      {offers.map((o, i) => (
+        <div key={o.id} style={{ border:'1px solid var(--border-sub)', borderRadius:10, padding:'12px 14px', marginBottom:10, opacity:o.active ? 1 : 0.55 }}>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'flex-end' }}>
+            <Field label="Title"><input className="field-input" style={{ width:200 }} value={o.title} onChange={e => upd(i, { title: e.target.value })} /></Field>
+            <Field label="Service">
+              <select className="field-input" value={o.service} onChange={e => upd(i, { service: e.target.value })}>
+                <option value="media">Media buying</option><option value="tracking">Tracking setup</option>
+              </select>
+            </Field>
+            <Field label="Price label"><input className="field-input" style={{ width:120 }} placeholder="from $299/mo" value={o.priceLabel || ''} onChange={e => upd(i, { priceLabel: e.target.value })} /></Field>
+            <Field label="Size min"><input className="field-input" type="number" style={{ width:90 }} value={o.sizeMin ?? 0} onChange={e => upd(i, { sizeMin: Number(e.target.value) || 0 })} /></Field>
+            <Field label="Size max"><input className="field-input" type="number" style={{ width:90 }} value={o.sizeMax ?? 999999} onChange={e => upd(i, { sizeMax: Number(e.target.value) || 999999 })} /></Field>
+            <label style={{ fontSize:12, display:'flex', alignItems:'center', gap:6, paddingBottom:8 }}>
+              <input type="checkbox" checked={!!o.active} onChange={e => upd(i, { active: e.target.checked })} /> active
+            </label>
+            <button className="btn-secondary" style={{ width:'auto', margin:0 }} onClick={() => setOffers(x => x.filter((_, idx) => idx !== i))}>Remove</button>
+          </div>
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginTop:8 }}>
+            <Field label="Description"><input className="field-input" style={{ width:380 }} value={o.desc} onChange={e => upd(i, { desc: e.target.value })} /></Field>
+            <Field label="Link (auto1labs.com + UTM)"><input className="field-input" style={{ width:320 }} value={o.url} onChange={e => upd(i, { url: e.target.value })} /></Field>
+          </div>
+        </div>
+      ))}
+      <button className="btn-primary" onClick={save}>Save offers</button>
+    </div>
+  );
+}
+
+// ── Feedback inbox: bugs, feature ideas, auto-captured errors ──────────────────
+function FeedbackPanel() {
+  const [data, setData] = useState(null);
+  const [tab, setTab] = useState('bug');
+  const load = () => api.getFeedback().then(r => setData(r.data)).catch(() => setData({ items: [], errors: [] }));
+  useEffect(() => { load(); }, []);
+  if (!data) return <div className="card"><div className="no-data">Loading…</div></div>;
+  const bugs = data.items.filter(i => i.type === 'bug');
+  const features = data.items.filter(i => i.type === 'feature');
+  const rows = tab === 'bug' ? bugs : tab === 'feature' ? features : data.errors;
+  async function setStatus(id, status) {
+    await api.setFeedbackStatus(id, status).catch(() => {});
+    load();
+  }
+  return (
+    <div className="card">
+      <h2>Feedback inbox</h2>
+      <div style={{ display:'flex', gap:8, margin:'8px 0 14px' }}>
+        {[['bug', `🐞 Bugs (${bugs.filter(b => b.status === 'new').length} new)`],
+          ['feature', `💡 Feature ideas (${features.filter(f => f.status === 'new').length} new)`],
+          ['error', `⚠️ Auto-captured errors (${data.errors.length})`]].map(([v, l]) => (
+          <button key={v} onClick={() => setTab(v)} className={tab === v ? 'btn-primary' : 'btn-secondary'}
+            style={{ width:'auto', margin:0, padding:'6px 14px', fontSize:12 }}>{l}</button>
+        ))}
+      </div>
+      {rows.length === 0 ? <div className="no-data" style={{ padding:18 }}>Nothing here yet.</div> : (
+        <div style={{ display:'grid', gap:8, maxHeight:420, overflowY:'auto' }}>
+          {rows.map(r => (
+            <div key={r.id} style={{ border:'1px solid var(--border-sub)', borderRadius:10, padding:'10px 14px', fontSize:13 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+                <span style={{ color:'var(--text-4)', fontSize:11 }}>
+                  {(r.createdAt || '').replace('T', ' ').slice(0, 16)} · {r.username || 'anonymous'}{r.accountKey ? ` · ${r.accountKey}` : ''}{r.page ? ` · ${r.page}` : ''}
+                </span>
+                {tab !== 'error' && (
+                  <span style={{ display:'flex', gap:6 }}>
+                    <StatusChip status={r.status === 'new' ? 'pending' : r.status === 'done' ? 'active' : 'none'} />
+                    {r.status !== 'done' && <button className="btn-secondary" style={{ width:'auto', margin:0, padding:'2px 10px', fontSize:11 }} onClick={() => setStatus(r.id, 'done')}>Mark done</button>}
+                  </span>
+                )}
+              </div>
+              <div style={{ marginTop:4, whiteSpace:'pre-wrap' }}>{r.message}</div>
+              {r.stack && <pre style={{ fontSize:10.5, color:'var(--text-4)', overflowX:'auto', margin:'6px 0 0' }}>{r.stack}</pre>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Page — professional tabbed control center ──────────────────────────────────
+const TABS = [
+  { id: 'customers', label: '📈 Customers', el: () => <CustomersPanel /> },
+  { id: 'growth',    label: '🚀 Growth & tracking', el: () => <GrowthPanel /> },
+  { id: 'offers',    label: '🎯 Offers', el: () => <OffersPanel /> },
+  { id: 'feedback',  label: '💬 Feedback', el: () => <FeedbackPanel /> },
+  { id: 'companies', label: '🏢 Companies', el: () => <CompaniesPanel /> },
+  { id: 'users',     label: '👥 Users', el: () => <PlatformUsersPanel /> },
+  { id: 'site',      label: '🎨 Landing & pricing', el: () => <SiteSettingsEditor /> },
+];
+
 export default function SuperAdmin() {
   const { isOwner } = useAuth();
+  const [tab, setTab] = useState(() => sessionStorage.getItem('mw3-sa-tab') || 'customers');
+  const active = TABS.find(t => t.id === tab) || TABS[0];
   return (
     <div>
-      <div className="page-header">
-        <h1>{isOwner ? 'Owner' : 'Super Admin'} Panel</h1>
-        <p>Platform controls — companies, users & permissions, landing page, billing{!isOwner && ' · deletions require the Owner'}</p>
+      <div className="page-header" style={{ marginBottom:14 }}>
+        <h1>{isOwner ? 'Owner' : 'Super Admin'} Control Center</h1>
+        <p>Signups, trials, billing, tracking, offers and feedback — everything the business runs on{!isOwner && ' · deletions require the Owner'}</p>
       </div>
-      <CompaniesPanel />
-      <PlatformUsersPanel />
-      <SiteSettingsEditor />
-      <BillingPanel />
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:18, borderBottom:'1px solid var(--border-sub)', paddingBottom:12 }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => { setTab(t.id); sessionStorage.setItem('mw3-sa-tab', t.id); }}
+            style={{
+              padding:'7px 16px', borderRadius:999, fontSize:13, fontWeight:700, cursor:'pointer',
+              border: tab === t.id ? '1px solid var(--accent-light)' : '1px solid var(--border)',
+              background: tab === t.id ? 'rgba(99,102,241,0.14)' : 'var(--bg-hover)',
+              color: tab === t.id ? 'var(--accent-light)' : 'var(--text-3)',
+            }}>{t.label}</button>
+        ))}
+      </div>
+      {active.el()}
     </div>
   );
 }

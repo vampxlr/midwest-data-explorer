@@ -6,6 +6,7 @@ import SmartUpdateLog from '../components/SmartUpdateLog.jsx';
 import Collapsible from '../components/Collapsible.jsx';
 import LeagueYoyCompare from '../components/LeagueYoyCompare.jsx';
 import DailyActivityPanel from '../components/DailyActivityPanel.jsx';
+import PromoPanel from '../components/PromoPanel.jsx';
 
 export default function Dashboard({ ctx }) {
   const { orgId, recentRegs, refreshToken, onAggComplete } = ctx;
@@ -37,6 +38,9 @@ export default function Dashboard({ ctx }) {
       >
         <SmartUpdateLog log={smartUpdate.log} />
       </Collapsible>
+
+      {/* auto1labs media buying / tracking service offers */}
+      <PromoPanel />
     </div>
   );
 }
