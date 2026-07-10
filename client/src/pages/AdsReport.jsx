@@ -11,17 +11,16 @@ import { useAuth } from '../AuthContext.jsx';
  * spending money (last 21 days) are synced.
  */
 
-const FRIENDLY = {
-  link_click: 'Link Clicks',
-  landing_page_view: 'Landing Views',
-  video_view: 'Video Views',
-  'offsite_conversion.fb_pixel_custom': 'Custom Events',
-  'offsite_conversion.fb_pixel_lead': 'Leads',
-  'offsite_conversion.fb_pixel_complete_registration': 'Complete Reg.',
-  'offsite_conversion.fb_pixel_initiate_checkout': 'Init. Checkout',
-};
+// Action types that clutter the chip row (per user: clicks, link clicks,
+// landing views, video views, leads and the unlabeled lumped "custom events"
+// tell nothing). Named custom conversions (offsite_conversion.custom.<id>)
+// all stay available.
+const HIDDEN_ACTIONS = new Set([
+  'link_click', 'landing_page_view', 'video_view',
+  'offsite_conversion.fb_pixel_custom', 'offsite_conversion.fb_pixel_lead',
+]);
 const STALE_MS = 6 * 3600 * 1000;                 // auto re-sync after 6h
-const DEFAULT_VIEW = { metrics: ['spend', 'a:offsite_conversion.fb_pixel_custom', 'clicks'], cols: 3, range: '30d' };
+const DEFAULT_VIEW = { metrics: ['spend', 'results', 'cpr'], cols: 3, range: '30d' };
 
 const fmtUsd = (n) => '$' + Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: n >= 100 ? 0 : 2 });
 const fmtNum = (n) => Number(n || 0).toLocaleString();
@@ -145,21 +144,42 @@ export default function AdsReport() {
   const data = payload?.data;
   const acct = payload?.adAccountId || data?.adAccountId;
 
-  // Metric catalog: spend/impressions/clicks + every discovered action type
+  // Metric catalog: Ads Manager basics + every NAMED custom conversion.
+  // "Results" = each adset's own conversion goal, summed up the hierarchy.
   const metricDefs = useMemo(() => {
     const defs = [
-      { key: 'spend',  label: 'Amount Spent', short: 'Spent', money: true },
-      { key: 'imp',    label: 'Impressions',  short: 'Impr.' },
-      { key: 'clicks', label: 'Clicks',       short: 'Clicks' },
+      { key: 'spend',   label: 'Amount Spent',    short: 'Spent', money: true },
+      { key: 'results', label: 'Results',         short: 'Results' },
+      { key: 'cpr',     label: 'Cost / Result',   short: 'Cost/Res', money: true },
+      { key: 'reach',   label: 'Reach',           short: 'Reach' },
+      { key: 'imp',     label: 'Impressions',     short: 'Impr.' },
+      { key: 'ctr',     label: 'CTR',             short: 'CTR' },
     ];
     for (const m of (data?.discoveredMetrics || [])) {
-      const label = data?.ccNames?.[m] || FRIENDLY[m] || m.replace(/^offsite_conversion\./, '');
+      if (HIDDEN_ACTIONS.has(m)) continue;
+      const label = data?.ccNames?.[m] || m.replace(/^offsite_conversion\./, '');
       defs.push({ key: `a:${m}`, label, short: label.length > 16 ? label.slice(0, 15) + '…' : label });
     }
     return defs;
   }, [data]);
   const defByKey = useMemo(() => Object.fromEntries(metricDefs.map(d => [d.key, d])), [metricDefs]);
-  const activeMetrics = view.metrics.filter(k => defByKey[k]).slice(0, view.cols);
+  const activeMetricsRaw = view.metrics.filter(k => defByKey[k]).slice(0, view.cols);
+  const activeMetrics = activeMetricsRaw.length ? activeMetricsRaw : DEFAULT_VIEW.metrics;
+
+  // Each adset's "result" action: its Custom Conversion if one exists (by id,
+  // or by name matching the goal event), else the lumped custom-events count
+  const resultKeyByAdset = useMemo(() => {
+    const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const ccByName = {};
+    for (const [k, name] of Object.entries(data?.ccNames || {})) ccByName[norm(name)] = k;
+    const m = {};
+    for (const s of (data?.adsets || [])) {
+      m[s.id] = s.goalCustomConversionId
+        ? `offsite_conversion.custom.${s.goalCustomConversionId}`
+        : (s.goalEvent && ccByName[norm(s.goalEvent)]) || 'offsite_conversion.fb_pixel_custom';
+    }
+    return m;
+  }, [data]);
 
   // Date window
   const [from, to] = useMemo(() => {
@@ -172,37 +192,52 @@ export default function AdsReport() {
     if (!data) return { rows: [], totals: null };
     const level = drill.adsetId ? 'ad' : drill.campaignId ? 'adset' : 'campaign';
     const keyOf = (i) => level === 'campaign' ? i.c : level === 'adset' ? i.as : i.ad;
-    const byKey = {}; const tot = { spend: 0, imp: 0, clicks: 0, actions: {} };
+    const blank = () => ({ spend: 0, imp: 0, reach: 0, clicks: 0, results: 0, actions: {} });
+    const byKey = {}; const tot = blank();
     for (const i of (data.insights || [])) {
       if (i.d < from || i.d > to) continue;
       if (drill.campaignId && i.c !== drill.campaignId) continue;
       if (drill.adsetId && i.as !== drill.adsetId) continue;
       const k = keyOf(i);
-      const t = byKey[k] || (byKey[k] = { spend: 0, imp: 0, clicks: 0, actions: {} });
-      t.spend += i.spend; t.imp += i.imp; t.clicks += i.clicks;
-      tot.spend += i.spend; tot.imp += i.imp; tot.clicks += i.clicks;
+      const t = byKey[k] || (byKey[k] = blank());
+      const results = i.actions?.[resultKeyByAdset[i.as]] || 0;
+      t.spend += i.spend; t.imp += i.imp; t.reach += i.reach || 0; t.clicks += i.clicks; t.results += results;
+      tot.spend += i.spend; tot.imp += i.imp; tot.reach += i.reach || 0; tot.clicks += i.clicks; tot.results += results;
       for (const [a, v] of Object.entries(i.actions || {})) {
         t.actions[a] = (t.actions[a] || 0) + v;
         tot.actions[a] = (tot.actions[a] || 0) + v;
       }
     }
-    // entity metadata for names/thumbnails; include zero-spend entities of the level
+    // Only entities that actually spent in the window (user: no zero rows)
     const meta = level === 'campaign' ? (data.campaigns || [])
       : level === 'adset' ? (data.adsets || []).filter(s => s.campaignId === drill.campaignId)
       : (data.ads || []).filter(a => a.adsetId === drill.adsetId);
-    const out = meta.map(m => ({ meta: m, t: byKey[m.id] || { spend: 0, imp: 0, clicks: 0, actions: {} } }))
+    const out = meta.map(m => ({ meta: m, t: byKey[m.id] || blank() }))
+      .filter(r => r.t.spend > 0)
       .sort((a, b) => b.t.spend - a.t.spend);
     return { rows: out, totals: tot };
-  }, [data, drill, from, to]);
+  }, [data, drill, from, to, resultKeyByAdset]);
 
-  const valueOf = (t, key) => key === 'spend' ? t.spend : key === 'imp' ? t.imp : key === 'clicks' ? t.clicks : (t.actions[key.slice(2)] || 0);
+  const valueOf = (t, key) =>
+    key === 'spend' ? t.spend
+    : key === 'results' ? t.results
+    : key === 'cpr' ? (t.results > 0 ? t.spend / t.results : null)
+    : key === 'reach' ? t.reach
+    : key === 'imp' ? t.imp
+    : key === 'ctr' ? (t.imp > 0 ? (t.clicks / t.imp) * 100 : null)
+    : (t.actions[key.slice(2)] || 0);
   const renderVal = (t, key) => {
     const def = defByKey[key];
     const v = valueOf(t, key);
     return (
       <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>{def?.money ? fmtUsd(v) : fmtNum(v)}</div>
-        {/* cost-per-result under action counts whenever there was spend */}
+        <div style={{ fontSize: 13, fontWeight: 700 }}>
+          {v == null ? '—'
+            : key === 'cpr' ? '$' + v.toFixed(2)
+            : key === 'ctr' ? v.toFixed(2) + '%'
+            : def?.money ? fmtUsd(v) : fmtNum(v)}
+        </div>
+        {/* cost-per-result under custom conversion counts */}
         {key.startsWith('a:') && v > 0 && t.spend > 0 &&
           <div style={{ fontSize: 9, color: 'var(--text-4)' }}>${(t.spend / v).toFixed(2)}/ea</div>}
       </div>
@@ -262,10 +297,22 @@ export default function AdsReport() {
           <Chip on={view.range === 'custom'} onClick={() => saveView({ range: 'custom', from: view.from || from, to: view.to || to })}>Custom</Chip>
         </div>
         {view.range === 'custom' && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6, fontSize: 12 }}>
-            <input type="date" value={view.from || from} onChange={e => saveView({ from: e.target.value })} />
-            →
-            <input type="date" value={view.to || to} onChange={e => saveView({ to: e.target.value })} />
+          <div style={{
+            display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8,
+            padding: '10px 12px', borderRadius: 12, background: 'var(--bg-hover)', border: '1px solid var(--line)',
+          }}>
+            <label style={{ fontSize: 10, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: 0.4 }}>From
+              <input type="date" value={view.from || from} max={view.to || isoShift(0)}
+                onChange={e => saveView({ from: e.target.value })}
+                style={{ display: 'block', marginTop: 3, fontSize: 14, padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-1)', color: 'var(--text-1)' }} />
+            </label>
+            <span style={{ color: 'var(--text-4)', paddingTop: 14 }}>→</span>
+            <label style={{ fontSize: 10, color: 'var(--text-4)', textTransform: 'uppercase', letterSpacing: 0.4 }}>To
+              <input type="date" value={view.to || to} min={view.from || undefined} max={isoShift(0)}
+                onChange={e => saveView({ to: e.target.value })}
+                style={{ display: 'block', marginTop: 3, fontSize: 14, padding: '6px 8px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface-1)', color: 'var(--text-1)' }} />
+            </label>
+            <span style={{ fontSize: 11, color: 'var(--text-4)', paddingTop: 12 }}>future dates are disabled</span>
           </div>
         )}
 

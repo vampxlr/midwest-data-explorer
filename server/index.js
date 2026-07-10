@@ -3874,7 +3874,7 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
     //    derived client-side (the drill-down UI re-aggregates per range).
     const rawInsights = activeIds.length ? await metaGetAll(`act_${acct}/insights`, {
       level: 'ad', time_increment: '1',
-      fields: 'campaign_id,adset_id,ad_id,spend,impressions,clicks,actions',
+      fields: 'campaign_id,adset_id,ad_id,spend,impressions,reach,clicks,actions',
       time_range: JSON.stringify({ since: sinceYear, until: today }),
       filtering: JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: activeIds }]),
       limit: 500,
@@ -3896,6 +3896,7 @@ app.post('/api/ads/sync', auth.requireRole('admin', 'editor'), async (req, res) 
     const insights = rawInsights.map(r => ({
       c: r.campaign_id, as: r.adset_id, ad: r.ad_id, d: r.date_start,
       spend: Number(r.spend) || 0, imp: Number(r.impressions) || 0,
+      reach: Number(r.reach) || 0,
       clicks: Number(r.clicks) || 0, actions: pickActions(r.actions),
     }));
 
