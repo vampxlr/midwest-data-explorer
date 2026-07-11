@@ -682,6 +682,45 @@ function GrowthPanel() {
           GA4 + pixel load on the site as soon as ids are saved; CAPI fires server-side on signup & subscribe.
         </span>
       </div>
+      <SeWebhookCard />
+    </div>
+  );
+}
+
+// SportsEngine → Meta CAPI bridge: the webhook URL to paste into SE HQ +
+// live delivery/forwarding status.
+function SeWebhookCard() {
+  const [d, setD] = useState(null);
+  useEffect(() => { api.getSeWebhooks().then(r => setD(r.data)).catch(() => {}); }, []);
+  if (!d) return null;
+  return (
+    <div style={{ marginTop:20, padding:'14px 16px', borderRadius:12, border:'1px solid var(--chip-border)', background:'var(--surface-2)' }}>
+      <div style={{ fontSize:13, fontWeight:800, marginBottom:4 }}>🔁 SportsEngine → Meta signal (registration webhooks)</div>
+      <p style={{ fontSize:12, color:'var(--text-3)', margin:'0 0 10px', lineHeight:1.5 }}>
+        SE checkout can't run a pixel — instead SE HQ posts a webhook here on every registration, and we forward
+        it to Meta CAPI as hashed CompleteRegistration + Purchase (value from the deadline prices).
+        In SE HQ → API application → Settings: paste this URL under <b>Webhooks URL</b>, then enable the
+        <b> Registration</b> and <b>Registration Result</b> toggles.
+      </p>
+      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+        <code style={{ fontSize:11, background:'var(--bg-hover)', padding:'6px 10px', borderRadius:8, wordBreak:'break-all', flex:1, minWidth:260 }}>{d.url}</code>
+        <button className="btn-secondary" style={{ width:'auto', margin:0 }}
+          onClick={() => { navigator.clipboard.writeText(d.url).then(() => toast.success('Webhook URL copied')); }}>📋 Copy</button>
+      </div>
+      <div style={{ fontSize:12, color:'var(--text-3)', marginTop:10 }}>
+        Deliveries: <b>{d.stats.total}</b> · forwarded to Meta: <b>{d.stats.capiSent}</b>
+        {d.stats.lastAt && <> · last: {d.stats.lastAt.replace('T',' ').slice(0,16)}</>}
+        {d.stats.total === 0 && <> — none yet (SE sends the first one on the next registration)</>}
+      </div>
+      {d.recent?.length > 0 && (
+        <div style={{ marginTop:8, display:'grid', gap:4 }}>
+          {d.recent.slice(0,5).map((r,i) => (
+            <div key={i} style={{ fontSize:11, color:'var(--text-4)', fontFamily:'ui-monospace, monospace' }}>
+              {r.at.replace('T',' ').slice(0,19)} · {r.type} · {r.hasEmail ? '✉ email' : 'no email'}{r.value ? ` · $${r.value}` : ''} · {r.capiSent ? '→ Meta ✓' : 'not forwarded'}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -55,6 +55,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
+  '/api/webhooks/sportsengine', // SE signs nothing; we gate with a ?key= secret
 ]);
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/') || PUBLIC_API_PATHS.has(req.path)) return next();
@@ -3681,6 +3682,7 @@ async function growthSettings() {
     hasCapiToken: !!(s.capiTokenEnc || process.env.META_CAPI_TOKEN),
     stripePriceId: s.stripePriceId || process.env.STRIPE_PRICE_ID || '',
     onboardingVideoUrl: s.onboardingVideoUrl || '',
+    seWebhookKey: s.seWebhookKey || '',
   };
 }
 
@@ -3714,23 +3716,29 @@ async function trialAvailability() {
 }
 
 // ── Meta Conversions API (server-side) — fire-and-forget, dormant without token
-async function capiSend(eventName, { email, ip, ua, sourceUrl, value } = {}) {
+const sha256 = (v) => cryptoLib.createHash('sha256').update(String(v).trim().toLowerCase()).digest('hex');
+async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, sourceUrl, value, eventId } = {}) {
   try {
     const s = await growthSettings();
-    if (!s.metaPixelId || !s.capiToken) return;
+    if (!s.metaPixelId || !s.capiToken) return false;
     const user_data = { client_user_agent: ua || undefined, client_ip_address: ip || undefined };
-    if (email) user_data.em = [crypto.createHash('sha256').update(email.trim().toLowerCase()).digest('hex')];
+    if (email)     user_data.em = [sha256(email)];
+    if (phone)     user_data.ph = [sha256(String(phone).replace(/[^\d]/g, ''))];
+    if (firstName) user_data.fn = [sha256(firstName)];
+    if (lastName)  user_data.ln = [sha256(lastName)];
     const body = {
       data: [{
         event_name: eventName, event_time: Math.floor(Date.now() / 1000),
-        action_source: 'website', event_source_url: sourceUrl || undefined,
+        action_source: 'website', event_source_url: sourceUrl || 'https://www.midwest3on3.com',
+        ...(eventId ? { event_id: String(eventId) } : {}),   // dedup key
         user_data, ...(value ? { custom_data: { currency: 'USD', value } } : {}),
       }],
     };
     await axios.post(`https://graph.facebook.com/v21.0/${s.metaPixelId}/events`,
       body, { params: { access_token: s.capiToken }, timeout: 8000 });
     console.log(`[capi] sent ${eventName}`);
-  } catch (err) { console.warn('[capi] failed:', err.response?.data?.error?.message || err.message); }
+    return true;
+  } catch (err) { console.warn('[capi] failed:', err.response?.data?.error?.message || err.message); return false; }
 }
 
 // ── Public: does the landing page still show the free-trial option?
@@ -3875,6 +3883,99 @@ app.post('/api/billing/webhook', async (req, res) => {
     console.log(`[stripe] ${event.type}${accountKey ? ' → ' + accountKey : ''}`);
     res.json({ received: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── SportsEngine → Meta CAPI bridge ────────────────────────────────────────────
+// SE checkout pages can't run a pixel/GTM, but SE HQ can POST webhooks on
+// "Registration" / "Registration Result". We receive those server-to-server,
+// deep-scan the payload for contact fields, hash them the way Meta wants
+// (SHA-256 em/ph/fn/ln) and forward CompleteRegistration + Purchase via CAPI.
+// Every delivery's raw body is kept (capped) so extraction can be refined
+// once real payloads are seen.
+
+function deepScan(obj) {
+  // Walk any payload shape and pull out likely contact + event fields
+  const found = { emails: new Set(), phones: new Set(), first: null, last: null, eventIds: new Set(), ids: new Set(), prices: [] };
+  const walk = (v, key = '') => {
+    if (v == null) return;
+    if (typeof v === 'object') { for (const [k, x] of Object.entries(v)) walk(x, k.toLowerCase()); return; }
+    const s = String(v);
+    if (/@/.test(s) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) found.emails.add(s.toLowerCase());
+    else if (/phone|mobile|cell/.test(key) && s.replace(/\D/g, '').length >= 10) found.phones.add(s);
+    else if (/first.?name/.test(key) && !found.first) found.first = s;
+    else if (/last.?name/.test(key) && !found.last) found.last = s;
+    else if (/event/.test(key) && /^\d{6,8}$/.test(s)) found.eventIds.add(s);
+    else if (/(^|_)id$|uuid|guid/.test(key)) found.ids.add(s.slice(0, 60));
+    else if (/price|amount|total|fee/.test(key) && /^\d+(\.\d+)?$/.test(s)) found.prices.push(Number(s));
+  };
+  walk(obj);
+  return found;
+}
+
+// SE settings may probe the URL first — answer GET/HEAD with 200 (+challenge echo)
+app.get('/api/webhooks/sportsengine', (req, res) => res.status(200).send(String(req.query.challenge || 'ok')));
+
+app.post('/api/webhooks/sportsengine', async (req, res) => {
+  try {
+    const g = await growthSettings();
+    if (!g.seWebhookKey || req.query.key !== g.seWebhookKey) return res.status(401).json({ error: 'bad key' });
+    res.json({ ok: true });                       // ack fast; process after
+
+    const body = req.body || {};
+    const scan = deepScan(body);
+    const email = [...scan.emails][0] || null;
+    const phone = [...scan.phones][0] || null;
+
+    // Estimate order value from our scraped deadline prices when possible
+    let value = scan.prices.find(p => p >= 40 && p <= 500) || null;
+    let evId = [...scan.eventIds][0] || null;
+    if (!value && evId) {
+      const dl = ((await kvGet('deadlines:all')) || {})[evId];
+      if (dl) {
+        const today = new Date().toISOString().slice(0, 10);
+        value = (dl.earlyBird && today <= dl.earlyBird) ? (dl.earlyBirdPrice || dl.finalPrice) : (dl.finalPrice || dl.earlyBirdPrice);
+      }
+    }
+    const dedupId = [...scan.ids][0] || cryptoLib.createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 24);
+
+    let sent = false;
+    if (email || phone) {
+      const args = { email, phone, firstName: scan.first, lastName: scan.last, value, eventId: dedupId };
+      sent = await capiSend('CompleteRegistration', args);
+      if (value) await capiSend('Purchase', { ...args, eventId: dedupId + '-p' });
+    }
+
+    await appendCapped('sewh:recent', {
+      at: new Date().toISOString(),
+      type: req.headers['x-sportsengine-event'] || req.headers['x-event-type'] || body.type || body.event_type || 'unknown',
+      hasEmail: !!email, hasPhone: !!phone, value, eventId: evId, capiSent: sent,
+      sample: JSON.stringify(body).slice(0, 4000),
+    }, 25);
+    const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
+    stats.total++; if (sent) stats.capiSent++;
+    stats.lastAt = new Date().toISOString();
+    await kvSet('sewh:stats', stats);
+  } catch (err) {
+    console.warn('[sewh] failed:', err.message);
+    if (!res.headersSent) res.json({ ok: true });
+  }
+});
+
+// Owner: webhook status + the URL (with secret) to paste into SE HQ settings
+app.get('/api/admin/sewebhooks', auth.requireRole('superadmin'), async (req, res) => {
+  const cur = (await kvGet('growth:settings')) || {};
+  if (!cur.seWebhookKey) {
+    cur.seWebhookKey = cryptoLib.randomBytes(18).toString('base64url');
+    await kvSet('growth:settings', cur);
+  }
+  const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'https://<your-production-domain>';
+  const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet('sewh:recent')]);
+  res.json({
+    url: `${host}/api/webhooks/sportsengine?key=${cur.seWebhookKey}`,
+    stats: stats || { total: 0, capiSent: 0 },
+    recent: (recent || []).map(({ sample, ...r }) => r).slice(0, 10),
+    lastSample: recent?.[0]?.sample || null,
+  });
 });
 
 // ── auto1labs service offers — owner-curated, matched to org size ─────────────
