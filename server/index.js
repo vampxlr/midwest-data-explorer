@@ -113,8 +113,13 @@ app.get('/api/auth/google', (req, res) => {
     return res.status(503).json({ error: 'Google sign-in is not configured' });
   }
   const { redirectUri } = googleUrls(req);
-  // Signed short-lived state to reject forged callbacks
-  const state = auth.signToken({ id: 'oauth-state', username: 'state', role: 'state' });
+  // Signed short-lived state to reject forged callbacks. It also carries the
+  // SPA origin the user actually came from (dev servers hop ports: Vite picks
+  // 5174+ when 5173 is busy) so the callback returns to a live page instead
+  // of a hardcoded port. Only localhost origins are honored — see callback.
+  let from = '';
+  try { from = new URL(req.headers.referer).origin; } catch {}
+  const state = auth.signToken({ id: 'oauth-state', username: from || 'state', role: 'state' });
   const params = new URLSearchParams({
     client_id:     GOOGLE_CLIENT_ID,
     redirect_uri:  redirectUri,
@@ -128,12 +133,21 @@ app.get('/api/auth/google', (req, res) => {
 
 app.get('/api/auth/google/callback', async (req, res) => {
   const { code, state, error } = req.query;
-  const { redirectUri, clientOrigin } = googleUrls(req);
+  const { redirectUri, clientOrigin: defaultOrigin } = googleUrls(req);
+
+  // Prefer the origin recorded when the flow started — but never off-host:
+  // localhost-only in dev, ignored entirely on Vercel (no open redirects).
+  let clientOrigin = defaultOrigin;
+  let statePayload = null;
+  try { statePayload = auth.verifyToken(String(state || '')); } catch {}
+  if (process.env.VERCEL !== '1' && /^http:\/\/localhost:\d+$/.test(statePayload?.username || '')) {
+    clientOrigin = statePayload.username;
+  }
   const fail = (msg) => res.redirect(`${clientOrigin}/login?gerror=${encodeURIComponent(msg)}`);
 
   if (error) return fail(String(error));
   if (!code)  return fail('Missing authorization code');
-  try { auth.verifyToken(String(state || '')); } catch { return fail('Invalid sign-in state — try again'); }
+  if (!statePayload) return fail('Invalid sign-in state — try again');
 
   try {
     // Exchange the code for tokens
