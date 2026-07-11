@@ -4155,6 +4155,45 @@ app.get('/api/deadlines-coverage', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Export every deadline as a portable JSON file (e.g. move local → production)
+app.get('/api/deadlines/export', auth.requireRole('admin'), async (req, res) => {
+  const all = (await kvGet('deadlines:all')) || {};
+  res.setHeader('Content-Disposition', `attachment; filename="deadlines-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify({ kind: 'mw3-deadlines', exportedAt: new Date().toISOString(), count: Object.keys(all).length, deadlines: all }, null, 2));
+});
+
+// Import a previously exported file. mode=merge (default) keeps existing
+// entries not present in the file; mode=replace swaps the whole set.
+app.post('/api/deadlines/import', auth.requireRole('admin'), async (req, res) => {
+  const body = req.body || {};
+  const incoming = body.deadlines || (body.kind === 'mw3-deadlines' ? body.deadlines : null);
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+    return res.status(400).json({ error: 'Not a deadlines export file (missing "deadlines" object)' });
+  }
+  const DATE = /^\d{4}-\d{2}-\d{2}$/;
+  const clean = {};
+  let skipped = 0;
+  for (const [id, v] of Object.entries(incoming)) {
+    if (!/^\d+$/.test(id) || typeof v !== 'object' || !v) { skipped++; continue; }
+    const eb = v.earlyBird && DATE.test(v.earlyBird) ? v.earlyBird : null;
+    const fr = v.finalDeadline && DATE.test(v.finalDeadline) ? v.finalDeadline : null;
+    if (!eb && !fr) { skipped++; continue; }
+    clean[id] = {
+      eventName: v.eventName || undefined,
+      earlyBird: eb, finalDeadline: fr,
+      earlyBirdPrice: Number.isFinite(v.earlyBirdPrice) ? v.earlyBirdPrice : null,
+      finalPrice: Number.isFinite(v.finalPrice) ? v.finalPrice : null,
+      manual: !!v.manual, source: v.source || undefined,
+      importedAt: new Date().toISOString(),
+    };
+  }
+  const existing = body.mode === 'replace' ? {} : ((await kvGet('deadlines:all')) || {});
+  const merged = { ...existing, ...clean };
+  await kvSet('deadlines:all', merged);
+  res.json({ ok: true, imported: Object.keys(clean).length, skipped, total: Object.keys(merged).length, mode: body.mode === 'replace' ? 'replace' : 'merge' });
+});
+
 app.put('/api/deadlines/:eventId', auth.requireRole('admin'), async (req, res) => {
   const { earlyBird, finalDeadline, earlyBirdPrice, finalPrice, eventName } = req.body || {};
   const all = (await kvGet('deadlines:all')) || {};

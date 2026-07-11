@@ -155,6 +155,8 @@ export const api = {
   getDeadlines:    ()            => axios.get(`${BASE}/deadlines`),
   deadlineCoverage:(year)        => axios.get(`${BASE}/deadlines-coverage`, { params: { year } }),
   setDeadline:     (eventId, b)  => axios.put(`${BASE}/deadlines/${encodeURIComponent(eventId)}`, b),
+  deadlinesExportUrl: ()         => withToken(`${BASE}/deadlines/export`),
+  importDeadlines: (body)        => axios.post(`${BASE}/deadlines/import`, body),
 
   // ── Super admin: site settings + organizations ─────────────────────────────
   getSiteSettings: ()      => axios.get(`${BASE}/site-settings`),

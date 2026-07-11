@@ -268,9 +268,32 @@ function DeadlinesCard() {
     <div className="card" style={{ marginTop:20 }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8, marginBottom:8 }}>
         <h2 style={{ margin:0 }}>Registration Deadlines</h2>
-        <button className="btn-primary" onClick={scrape} disabled={scraping}>
-          {scraping ? 'Scraping midwest3on3.com…' : '🌐 Scrape from midwest3on3.com'}
-        </button>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+          <button className="btn-secondary" style={{ width:'auto', margin:0 }} title="Download every deadline as a JSON file (portable to production)"
+            onClick={() => { window.location.href = api.deadlinesExportUrl(); }}>
+            ⬇ Export file
+          </button>
+          <label className="btn-secondary" style={{ width:'auto', margin:0, cursor:'pointer' }} title="Import a previously exported deadlines file (merges with existing)">
+            ⬆ Import file
+            <input type="file" accept=".json,application/json" style={{ display:'none' }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (!file) return;
+                try {
+                  const parsed = JSON.parse(await file.text());
+                  const r = await api.importDeadlines({ deadlines: parsed.deadlines || parsed, mode: 'merge' });
+                  toast.success(`Imported ${r.data.imported} deadlines (${r.data.skipped} skipped) — ${r.data.total} total`);
+                  load();
+                } catch (err) {
+                  toast.error(err.response?.data?.error || 'Not a valid deadlines file');
+                }
+              }} />
+          </label>
+          <button className="btn-primary" onClick={scrape} disabled={scraping}>
+            {scraping ? 'Scraping midwest3on3.com…' : '🌐 Scrape from midwest3on3.com'}
+          </button>
+        </div>
       </div>
       <p style={{ fontSize:12, color:'var(--text-3)', margin:'0 0 12px', lineHeight:1.5 }}>
         Early-bird and final registration deadlines pulled from the league/tournament/camp pages,
