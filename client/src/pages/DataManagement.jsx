@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.jsx';
+import { invalidateDeadlineCache } from '../deadlines.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
 
@@ -226,11 +227,13 @@ function DeadlinesCard() {
   const [scraping, setScraping] = useState(false);
   const [editing, setEditing] = useState(null); // eventId
 
-  async function load() {
+  async function load({ invalidate = false } = {}) {
     try {
       const [d, c] = await Promise.all([api.getDeadlines(), api.deadlineCoverage()]);
       setDeadlines(d.data.deadlines || {});
       setCoverage(c.data);
+      // after an import/scrape/edit, push the fresh list to every chart too
+      if (invalidate) invalidateDeadlineCache();
     } catch {}
   }
   useEffect(() => { load(); }, []);
@@ -238,7 +241,7 @@ function DeadlinesCard() {
   // "Add manually" for an uncovered event: create an empty manual row and open it
   async function addMissing(ev) {
     await api.setDeadline(ev.id, { eventName: ev.name });
-    await load();
+    await load({ invalidate: true });
     setEditing(ev.id);
   }
 
@@ -248,7 +251,7 @@ function DeadlinesCard() {
       const r = await api.scrapeDeadlines();
       toast.success(`Scraped ${r.data.pagesScanned} pages — ${r.data.matched} events matched`);
       if (r.data.unmatched?.length) toast(`${r.data.unmatched.length} page(s) could not be matched`, { icon: '⚠️' });
-      load();
+      load({ invalidate: true });
     } catch (err) { toast.error(err.response?.data?.error || err.message); }
     finally { setScraping(false); }
   }
@@ -258,7 +261,7 @@ function DeadlinesCard() {
       await api.setDeadline(id, d);
       toast.success('Saved (manual override — scraping will not overwrite it)');
       setEditing(null);
-      load();
+      load({ invalidate: true });
     } catch (err) { toast.error(err.message); }
   }
 
@@ -284,7 +287,7 @@ function DeadlinesCard() {
                   const parsed = JSON.parse(await file.text());
                   const r = await api.importDeadlines({ deadlines: parsed.deadlines || parsed, mode: 'merge' });
                   toast.success(`Imported ${r.data.imported} deadlines (${r.data.skipped} skipped) — ${r.data.total} total`);
-                  load();
+                  load({ invalidate: true });
                 } catch (err) {
                   toast.error(err.response?.data?.error || 'Not a valid deadlines file');
                 }

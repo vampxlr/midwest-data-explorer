@@ -14,12 +14,28 @@ export function isDeadlinesOn() {
   try { return localStorage.getItem(KEY) !== '0'; } catch { return true; }
 }
 
+/** Call after importing/scraping/editing deadlines so every mounted chart
+ *  refetches — otherwise an open tab keeps the pre-import list forever. */
+export function invalidateDeadlineCache() {
+  cache = null; inflight = null;
+  window.dispatchEvent(new Event('mw3-deadlines-refresh'));
+}
+
 export function useDeadlineMap() {
   const [map, setMap] = useState(cache || {});
   useEffect(() => {
-    if (cache) { setMap(cache); return; }
-    inflight = inflight || api.getDeadlines().then(r => (cache = r.data.deadlines || {}));
-    inflight.then(m => setMap(m)).catch(() => {});
+    const fetchMap = () => {
+      if (cache) { setMap(cache); return; }
+      // a failed fetch must not poison the cache — reset inflight so the
+      // next mount (or refresh event) retries instead of staying empty
+      inflight = inflight || api.getDeadlines()
+        .then(r => (cache = r.data.deadlines || {}))
+        .catch(err => { inflight = null; throw err; });
+      inflight.then(m => setMap(m)).catch(() => {});
+    };
+    fetchMap();
+    window.addEventListener('mw3-deadlines-refresh', fetchMap);
+    return () => window.removeEventListener('mw3-deadlines-refresh', fetchMap);
   }, []);
   return map;
 }
