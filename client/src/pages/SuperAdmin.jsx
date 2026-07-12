@@ -715,9 +715,16 @@ function SeWebhookCard() {
       {d.recent?.length > 0 && (
         <div style={{ marginTop:8, display:'grid', gap:4 }}>
           {d.recent.slice(0,5).map((r,i) => (
-            <div key={i} style={{ fontSize:11, color:'var(--text-4)', fontFamily:'ui-monospace, monospace' }}>
-              {r.at.replace('T',' ').slice(0,19)} · {r.type} · {r.hasEmail ? '✉ email' : 'no email'}{r.value ? ` · $${r.value}` : ''} · {r.capiSent ? '→ Meta ✓' : 'not forwarded'}
-            </div>
+            <details key={i} style={{ fontSize:11, color:'var(--text-4)', fontFamily:'ui-monospace, monospace' }}>
+              <summary style={{ cursor:'pointer' }}>
+                {r.at.replace('T',' ').slice(0,19)} · {r.type} · {r.hasEmail ? '✉ email' : 'no email'}{r.value ? ` · $${r.value}` : ''} · {r.capiSent ? '→ Meta ✓' : 'not forwarded'} · <span style={{ color:'var(--accent-light)' }}>raw ▾</span>
+              </summary>
+              <pre style={{
+                margin:'6px 0 4px', padding:'8px 10px', borderRadius:8, background:'var(--bg-hover)',
+                border:'1px solid var(--border-sub)', maxHeight:220, overflow:'auto',
+                whiteSpace:'pre-wrap', wordBreak:'break-all', fontSize:10.5, color:'var(--text-2)',
+              }}>{(() => { try { return JSON.stringify(JSON.parse(r.sample), null, 2); } catch { return r.sample || '(empty)'; } })()}</pre>
+            </details>
           ))}
         </div>
       )}

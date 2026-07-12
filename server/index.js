@@ -3973,8 +3973,7 @@ app.get('/api/admin/sewebhooks', auth.requireRole('superadmin'), async (req, res
   res.json({
     url: `${host}/api/webhooks/sportsengine?key=${cur.seWebhookKey}`,
     stats: stats || { total: 0, capiSent: 0 },
-    recent: (recent || []).map(({ sample, ...r }) => r).slice(0, 10),
-    lastSample: recent?.[0]?.sample || null,
+    recent: (recent || []).slice(0, 10),   // includes raw `sample` bodies for inspection
   });
 });
 
