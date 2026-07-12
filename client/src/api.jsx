@@ -190,6 +190,9 @@ export const api = {
   getCustomers:    ()     => axios.get(`${BASE}/admin/customers`),
   getGrowth:       ()     => axios.get(`${BASE}/admin/growth`),
   getSeWebhooks:   ()     => axios.get(`${BASE}/admin/sewebhooks`),
+  getWebhookDeliveries: () => axios.get(`${BASE}/webhooks/deliveries`),
+  getCompanyTracking:  ()     => axios.get(`${BASE}/company/tracking`),
+  saveCompanyTracking: (body) => axios.put(`${BASE}/company/tracking`, body),
   saveGrowth:      (body) => axios.put(`${BASE}/admin/growth`, body),
 
   // ── Meta Ads reporting ─────────────────────────────────────────────────────

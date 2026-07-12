@@ -55,10 +55,11 @@ const PUBLIC_API_PATHS = new Set([
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
-  '/api/webhooks/sportsengine', // SE signs nothing; we gate with a ?key= secret
 ]);
 app.use((req, res, next) => {
-  if (!req.path.startsWith('/api/') || PUBLIC_API_PATHS.has(req.path)) return next();
+  // /api/webhooks/* is public by prefix — SE signs nothing (we gate with a key
+  // in query/path/header) and every delivery is recorded for inspection.
+  if (!req.path.startsWith('/api/') || PUBLIC_API_PATHS.has(req.path) || req.path.startsWith('/api/webhooks/')) return next();
   return auth.requireAuth(req, res, next);
 });
 
@@ -3756,10 +3757,13 @@ async function trialAvailability() {
 
 // ── Meta Conversions API (server-side) — fire-and-forget, dormant without token
 const sha256 = (v) => cryptoLib.createHash('sha256').update(String(v).trim().toLowerCase()).digest('hex');
-async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, sourceUrl, value, eventId } = {}) {
+async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, sourceUrl, value, eventId, pixelId, token } = {}) {
   try {
+    // per-org override (customer's own pixel) falls back to platform settings
     const s = await growthSettings();
-    if (!s.metaPixelId || !s.capiToken) return false;
+    const pixel = pixelId || s.metaPixelId;
+    const capiToken = token || s.capiToken;
+    if (!pixel || !capiToken) return false;
     const user_data = { client_user_agent: ua || undefined, client_ip_address: ip || undefined };
     if (email)     user_data.em = [sha256(email)];
     if (phone)     user_data.ph = [sha256(String(phone).replace(/[^\d]/g, ''))];
@@ -3773,8 +3777,8 @@ async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, 
         user_data, ...(value ? { custom_data: { currency: 'USD', value } } : {}),
       }],
     };
-    await axios.post(`https://graph.facebook.com/v21.0/${s.metaPixelId}/events`,
-      body, { params: { access_token: s.capiToken }, timeout: 8000 });
+    await axios.post(`https://graph.facebook.com/v21.0/${pixel}/events`,
+      body, { params: { access_token: capiToken }, timeout: 8000 });
     console.log(`[capi] sent ${eventName}`);
     return true;
   } catch (err) { console.warn('[capi] failed:', err.response?.data?.error?.message || err.message); return false; }
@@ -3951,13 +3955,30 @@ function deepScan(obj) {
   return found;
 }
 
-// SE settings may probe the URL first — answer GET/HEAD with 200 (+challenge echo)
-app.get('/api/webhooks/sportsengine', (req, res) => res.status(200).send(String(req.query.challenge || 'ok')));
+// Per-organization tracking config (pixel/GA4/CAPI/webhook key) — each
+// customer's conversion signal goes to THEIR pixel, not a global one.
+// KV 'tracking:orgs' = { [accountKey]: {ga4Id, metaPixelId, capiTokenEnc, seWebhookKey, updatedAt} }
+async function orgTrackingAll() { return (await kvGet('tracking:orgs')) || {}; }
+async function resolveWebhookKey(key) {
+  if (!key) return null;
+  const g = await growthSettings();
+  if (g.seWebhookKey && key === g.seWebhookKey) return { accountKey: 'midwest-3on3', cfg: null }; // platform default
+  for (const [accountKey, cfg] of Object.entries(await orgTrackingAll())) {
+    if (cfg.seWebhookKey && cfg.seWebhookKey === key) return { accountKey, cfg };
+  }
+  return null;
+}
 
-app.post('/api/webhooks/sportsengine', async (req, res) => {
+// SE settings may probe the URL first — answer GET/HEAD with 200 (+challenge echo)
+app.get(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], (req, res) =>
+  res.status(200).send(String(req.query.challenge || 'ok')));
+
+// Key accepted in query (?key=), path (/sportsengine/<key>) or header — SE's
+// settings UI may mangle query strings, so the path form is the safe default.
+app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], async (req, res) => {
   try {
-    const g = await growthSettings();
-    if (!g.seWebhookKey || req.query.key !== g.seWebhookKey) return res.status(401).json({ error: 'bad key' });
+    const key = req.params.key || req.query.key || req.headers['x-webhook-key'] || '';
+    const match = await resolveWebhookKey(String(key));
     res.json({ ok: true });                       // ack fast; process after
 
     const body = req.body || {};
@@ -3977,27 +3998,77 @@ app.post('/api/webhooks/sportsengine', async (req, res) => {
     }
     const dedupId = [...scan.ids][0] || cryptoLib.createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 24);
 
+    // Forward to the ORG's pixel when the key belongs to one (their encrypted
+    // CAPI token); the platform default key uses the global growth settings.
     let sent = false;
-    if (email || phone) {
-      const args = { email, phone, firstName: scan.first, lastName: scan.last, value, eventId: dedupId };
+    if (match && (email || phone)) {
+      const override = match.cfg?.metaPixelId && match.cfg?.capiTokenEnc
+        ? { pixelId: match.cfg.metaPixelId, token: decryptSecret(match.cfg.capiTokenEnc) }
+        : null;
+      const args = { email, phone, firstName: scan.first, lastName: scan.last, value, eventId: dedupId, ...(override || {}) };
       sent = await capiSend('CompleteRegistration', args);
       if (value) await capiSend('Purchase', { ...args, eventId: dedupId + '-p' });
     }
 
+    // Record EVERY delivery — including bad/missing keys — so "SE fired but
+    // nothing showed up" is always diagnosable from the app.
     await appendCapped('sewh:recent', {
       at: new Date().toISOString(),
+      accountKey: match?.accountKey || null,
+      keyOk: !!match,
       type: req.headers['x-sportsengine-event'] || req.headers['x-event-type'] || body.type || body.event_type || 'unknown',
       hasEmail: !!email, hasPhone: !!phone, value, eventId: evId, capiSent: sent,
-      sample: JSON.stringify(body).slice(0, 4000),
-    }, 25);
+      sample: JSON.stringify(body).slice(0, 4000) || '(empty body)',
+    }, 50);
     const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
     stats.total++; if (sent) stats.capiSent++;
+    if (!match) stats.rejected = (stats.rejected || 0) + 1;
     stats.lastAt = new Date().toISOString();
     await kvSet('sewh:stats', stats);
   } catch (err) {
     console.warn('[sewh] failed:', err.message);
     if (!res.headersSent) res.json({ ok: true });
   }
+});
+
+// Webhook inspector — every recorded delivery with raw payloads.
+// Platform roles see everything; a company admin sees their own org's.
+app.get('/api/webhooks/deliveries', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+  const me = await userStore.findById(req.user.id);
+  const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
+  const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet('sewh:recent')]);
+  const rows = (recent || []).filter(r => platform || r.accountKey === me.accountKey);
+  res.json({ stats: stats || { total: 0, capiSent: 0 }, deliveries: rows, scope: platform ? 'all' : me.accountKey });
+});
+
+// Per-org tracking settings (company admin) — pixel/GA4/CAPI + webhook URL
+app.get('/api/company/tracking', auth.requireRole('admin'), async (req, res) => {
+  const me = await requireCompanyUser(req, res); if (!me) return;
+  const all = await orgTrackingAll();
+  let cfg = all[me.accountKey];
+  if (!cfg?.seWebhookKey) {
+    cfg = { ...(cfg || {}), seWebhookKey: cryptoLib.randomBytes(18).toString('base64url') };
+    all[me.accountKey] = { ...cfg, updatedAt: new Date().toISOString() };
+    await kvSet('tracking:orgs', all);
+  }
+  const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'https://<your-production-domain>';
+  res.json({
+    ga4Id: cfg.ga4Id || '', metaPixelId: cfg.metaPixelId || '',
+    hasCapiToken: !!cfg.capiTokenEnc,
+    webhookUrl: `${host}/api/webhooks/sportsengine/${cfg.seWebhookKey}`,
+  });
+});
+app.put('/api/company/tracking', auth.requireRole('admin'), async (req, res) => {
+  const me = await requireCompanyUser(req, res); if (!me) return;
+  const b = req.body || {};
+  const all = await orgTrackingAll();
+  const cfg = all[me.accountKey] || {};
+  for (const k of ['ga4Id', 'metaPixelId']) if (b[k] !== undefined) cfg[k] = String(b[k]).trim();
+  if (b.capiToken && !/^•+$/.test(b.capiToken)) cfg.capiTokenEnc = encryptSecret(String(b.capiToken).trim());
+  if (!cfg.seWebhookKey) cfg.seWebhookKey = cryptoLib.randomBytes(18).toString('base64url');
+  all[me.accountKey] = { ...cfg, updatedAt: new Date().toISOString() };
+  await kvSet('tracking:orgs', all);
+  res.json({ ok: true });
 });
 
 // Owner: webhook status + the URL (with secret) to paste into SE HQ settings
@@ -4010,7 +4081,7 @@ app.get('/api/admin/sewebhooks', auth.requireRole('superadmin'), async (req, res
   const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'https://<your-production-domain>';
   const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet('sewh:recent')]);
   res.json({
-    url: `${host}/api/webhooks/sportsengine?key=${cur.seWebhookKey}`,
+    url: `${host}/api/webhooks/sportsengine/${cur.seWebhookKey}`,
     stats: stats || { total: 0, capiSent: 0 },
     recent: (recent || []).slice(0, 10),   // includes raw `sample` bodies for inspection
   });
