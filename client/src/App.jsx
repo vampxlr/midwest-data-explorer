@@ -12,6 +12,8 @@ import Audiences   from './pages/Audiences.jsx';
 import AdsReport   from './pages/AdsReport.jsx';
 import BootTerminal    from './components/BootTerminal.jsx';
 import DataManagement  from './pages/DataManagement.jsx';
+import Deadlines       from './pages/Deadlines.jsx';
+import TrackingSignal  from './pages/TrackingSignal.jsx';
 import Login        from './pages/Login.jsx';
 import Users        from './pages/Users.jsx';
 import Landing      from './pages/Landing.jsx';
@@ -274,6 +276,12 @@ export default function App() {
                   <NavLink to="/schema"        onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📋</span> Schema</NavLink>
                   <NavLink to="/data"          onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🗄️</span> Data Mgmt</NavLink>
                   {(user.role === 'admin' || isSuperAdmin) && (
+                    <>
+                      <NavLink to="/deadlines"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>⏰</span> Deadlines</NavLink>
+                      <NavLink to="/tracking"    onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📡</span> Tracking & Signal</NavLink>
+                    </>
+                  )}
+                  {(user.role === 'admin' || isSuperAdmin) && (
                     <NavLink to="/users"       onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>👤</span> Users</NavLink>
                   )}
                   <NavLink to="/guide"         onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📖</span> Guide</NavLink>
@@ -355,6 +363,8 @@ export default function App() {
               <Route path="/query"         element={<QueryExplorer />} />
               <Route path="/schema"        element={<SchemaExplorer />} />
               <Route path="/data"          element={<DataManagement ctx={ctx} />} />
+              <Route path="/deadlines"     element={<Deadlines />} />
+              <Route path="/tracking"      element={<TrackingSignal />} />
               {(user.role === 'admin' || isSuperAdmin) && <Route path="/users" element={<Users />} />}
               <Route path="/guide"         element={<Guide />} />
             </Routes>

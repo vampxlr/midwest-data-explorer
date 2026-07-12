@@ -3783,8 +3783,13 @@ async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, 
     await axios.post(`https://graph.facebook.com/v21.0/${pixel}/events`,
       body, { params: { access_token: capiToken }, timeout: 8000 });
     console.log(`[capi] sent ${eventName}`);
+    capiSend.lastError = null;
     return true;
-  } catch (err) { console.warn('[capi] failed:', err.response?.data?.error?.message || err.message); return false; }
+  } catch (err) {
+    capiSend.lastError = err.response?.data?.error?.message || err.message;
+    console.warn('[capi] failed:', capiSend.lastError);
+    return false;
+  }
 }
 
 // ── Public: does the landing page still show the free-trial option?
@@ -4024,28 +4029,42 @@ function primaryContactFrom(answers) {
 // NEW registration = completed + created within 48h + never forwarded before.
 // SE fires "update" webhooks for edits to years-old registrations — not sales.
 const NEW_REG_WINDOW_MS = 48 * 3600 * 1000;
+const maskEmail = (e) => e ? String(e).replace(/^(.).*(@.*)$/, '$1***$2') : null;
 async function processRegistrationResult(match, resourceId) {
   const sentMap = (await kvGet('sewh:sent')) || {};
-  if (sentMap[resourceId]) return { decision: 'duplicate — already forwarded' };
+  if (sentMap[resourceId]) {
+    return { decision: 'duplicate — this registration was already forwarded to Meta', reason: `first sent ${String(sentMap[resourceId]).slice(0, 16).replace('T', ' ')}` };
+  }
 
   const token = await seTokenFor(match.accountKey);
   const res = await axios.post(SE_GRAPHQL_URL, { query: RESULT_BY_ID_QUERY, variables: { id: Number(resourceId) } },
     { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 15000 });
   const rr = res.data?.data?.registrationResult;
-  if (!rr) return { decision: 'not found in SportsEngine' };
+  if (!rr) return { decision: 'result id not found in SportsEngine', reason: 'the API returned nothing for this id — possibly deleted' };
+
   const eventId = String(rr.registrationId || '');
-  if (!rr.completed) return { decision: 'incomplete — not a sale (yet)', eventId };
+  // Event name: our store first (authoritative), scraped deadlines as fallback
+  let eventName = null;
+  try { const db = await store.load(); eventName = db.events?.[eventId]?.name || null; } catch {}
+  const dl = ((await kvGet('deadlines:all')) || {})[eventId];
+  eventName = eventName || dl?.eventName || null;
+  const resultCreated = String(rr.created || '');
+  const base = { eventId, eventName, resultCreated };
+
+  if (!rr.completed) return { ...base, decision: 'incomplete registration — no sale (yet)', reason: 'SportsEngine marks it not completed; a completed webhook will follow if they finish checkout' };
   const ageMs = Date.now() - new Date(rr.created).getTime();
-  if (ageMs > NEW_REG_WINDOW_MS) return { decision: `edit of old registration (created ${String(rr.created).slice(0, 10)})`, eventId };
+  if (ageMs > NEW_REG_WINDOW_MS) {
+    const days = Math.round(ageMs / 86400000);
+    return { ...base, decision: `edit of an EXISTING registration — not a new sale`, reason: `registered ${resultCreated.slice(0, 10)} (${days} days ago); SportsEngine fires update webhooks when old registrations are edited` };
+  }
 
   const contact = primaryContactFrom(rr.answers);
-  if (!contact.email && !contact.phone) return { decision: 'new, but no primary contact in answers', eventId };
+  if (!contact.email && !contact.phone) return { ...base, decision: 'NEW registration, but no primary contact found in the answers', reason: 'no top-level Email/Phone answer — check the form field names in the raw payload' };
 
   // Order value: EB price if registered on/before the EB date, else final
   let value = null;
-  const dl = ((await kvGet('deadlines:all')) || {})[eventId];
   if (dl) {
-    const regDay = String(rr.created).slice(0, 10);
+    const regDay = resultCreated.slice(0, 10);
     value = (dl.earlyBird && regDay <= dl.earlyBird) ? (dl.earlyBirdPrice || dl.finalPrice) : (dl.finalPrice || dl.earlyBirdPrice);
   }
 
@@ -4063,8 +4082,12 @@ async function processRegistrationResult(match, resourceId) {
     await kvSet('sewh:sent', sentMap);
   }
   return {
-    decision: ok ? '🟢 NEW registration → sent to Meta' : 'new, but CAPI not configured/failed',
-    eventId, eventName: dl?.eventName, value, capiSent: ok,
+    ...base,
+    decision: ok ? '🟢 NEW registration → CompleteRegistration + Purchase sent to Meta' : 'NEW registration, but Meta CAPI send failed',
+    reason: ok
+      ? `matched primary contact ${maskEmail(contact.email) || contact.phone}${override ? ' → org pixel ' + override.pixelId : ' → default pixel'}`
+      : (capiSend.lastError || 'no pixel id / CAPI token configured for this organization — set them on this page'),
+    value, capiSent: ok, contactMasked: maskEmail(contact.email),
     hasEmail: !!contact.email, hasPhone: !!contact.phone,
   };
 }
@@ -4111,8 +4134,9 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
       keyOk: !!match,
       type: `${resourceType || body.type || 'unknown'}${body.resourceOperation ? '.' + body.resourceOperation : ''}`,
       resourceId: resourceId || null,
-      decision: outcome.decision,
+      decision: outcome.decision, reason: outcome.reason || null,
       eventId: outcome.eventId || null, eventName: outcome.eventName || null,
+      resultCreated: outcome.resultCreated || null, contactMasked: outcome.contactMasked || null,
       hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
       value: outcome.value || null, capiSent: !!outcome.capiSent,
       sample: JSON.stringify(body).slice(0, 4000) || '(empty body)',

@@ -56,13 +56,33 @@ export default function WebhookInspector({ compactTitle }) {
                 {r.value ? ` · $${r.value}` : ''}
                 {' · '}{r.capiSent
                   ? <span style={{ color: 'var(--viz-up)', fontWeight: 700 }}>→ Meta ✓</span>
-                  : <span style={{ color: 'var(--text-4)' }}>{r.decision || (r.hasEmail ? 'not forwarded' : 'no contact')}</span>}
-                <span style={{ color: 'var(--accent-light)' }}> · raw ▾</span>
+                  : <span style={{ color: 'var(--text-4)' }}>{(r.decision || 'not forwarded').slice(0, 46)}</span>}
+                <span style={{ color: 'var(--accent-light)' }}> · details ▾</span>
               </summary>
-              {r.decision && <div style={{ margin: '4px 0 0', fontSize: 11, color: r.capiSent ? 'var(--viz-up)' : 'var(--text-3)' }}>{r.decision}</div>}
+              {/* what this delivery actually was, and what we did with it */}
+              <div style={{
+                display: 'grid', gridTemplateColumns: 'minmax(110px, max-content) 1fr', gap: '3px 12px',
+                margin: '8px 0 6px', padding: '8px 10px', borderRadius: 6, fontFamily: 'inherit',
+                background: 'var(--surface-1)', border: '1px solid var(--border-sub)', fontSize: 11,
+              }}>
+                <span style={{ color: 'var(--text-4)' }}>Verdict</span>
+                <span style={{ color: r.capiSent ? 'var(--viz-up)' : 'var(--text-1)', fontWeight: 700 }}>{r.decision || '—'}</span>
+                {r.reason && <><span style={{ color: 'var(--text-4)' }}>Why</span><span>{r.reason}</span></>}
+                {r.resourceId && <><span style={{ color: 'var(--text-4)' }}>Result ID</span><span>{r.resourceId}</span></>}
+                {(r.eventName || r.eventId) && <><span style={{ color: 'var(--text-4)' }}>Event</span><span>{r.eventName || ''}{r.eventId ? ` (${r.eventId})` : ''}</span></>}
+                {r.resultCreated && <><span style={{ color: 'var(--text-4)' }}>Registered</span><span>{String(r.resultCreated).replace('T', ' ').slice(0, 16)}</span></>}
+                <span style={{ color: 'var(--text-4)' }}>Contact</span>
+                <span>{r.contactMasked || (r.hasEmail ? 'email found' : r.hasPhone ? 'phone only' : 'none extracted')}</span>
+                {r.value != null && <><span style={{ color: 'var(--text-4)' }}>Value</span><span>${r.value}</span></>}
+                <span style={{ color: 'var(--text-4)' }}>Meta CAPI</span>
+                <span style={{ color: r.capiSent ? 'var(--viz-up)' : '#f59e0b', fontWeight: 600 }}>
+                  {r.capiSent ? 'CompleteRegistration + Purchase sent ✓' : 'not sent'}
+                </span>
+              </div>
+              <div style={{ fontSize: 10.5, color: 'var(--text-4)', margin: '0 0 3px' }}>Raw webhook payload:</div>
               <pre style={{
-                margin: '6px 0 2px', padding: '8px 10px', borderRadius: 6, background: 'var(--surface-1)',
-                border: '1px solid var(--border-sub)', maxHeight: 240, overflow: 'auto',
+                margin: '0 0 2px', padding: '8px 10px', borderRadius: 6, background: 'var(--surface-1)',
+                border: '1px solid var(--border-sub)', maxHeight: 200, overflow: 'auto',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: 10.5, color: 'var(--text-2)',
               }}>{(() => { try { return JSON.stringify(JSON.parse(r.sample), null, 2); } catch { return r.sample || '(empty)'; } })()}</pre>
             </details>
