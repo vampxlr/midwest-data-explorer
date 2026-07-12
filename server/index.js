@@ -3969,6 +3969,101 @@ async function resolveWebhookKey(key) {
   return null;
 }
 
+// ── Enrichment: SE webhooks carry only a pointer ({organizationId,
+// resourceOperation, resourceId, resourceType}) — fetch the full registration
+// result from SportsEngine GraphQL by id, decide if it's genuinely NEW, and
+// forward only the PRIMARY CONTACT (the purchaser — the person who saw the ad).
+const RESULT_BY_ID_QUERY = `query($id: Int) {
+  registrationResult(id: $id) {
+    id completed status created registrationId
+    answers {
+      name
+      ... on StringRegistrationResultAnswer { strValue: value }
+      ... on ArrayRegistrationResultAnswer  { arrValue: value }
+    }
+  }
+}`;
+
+// Which SE credentials enrich this delivery: the platform key uses the env
+// credentials; an org's key uses that org's own verified credentials.
+async function seTokenFor(accountKey) {
+  if (!accountKey || accountKey === 'midwest-3on3') return getAccessToken();
+  const orgs = store.IS_CONVEX ? await store.convexQuery('admin:listOrgs', {}) : localJsonLoad(ORGS_FILE, []);
+  const org = orgs.find(o => o.accountKey === accountKey && o.verified && o.seClientId && o.seClientSecretEnc);
+  if (!org) throw new Error(`no verified SE credentials for ${accountKey}`);
+  const params = new URLSearchParams();
+  params.append('grant_type', 'client_credentials');
+  params.append('client_id', org.seClientId);
+  params.append('client_secret', decryptSecret(org.seClientSecretEnc));
+  const tok = await axios.post(SE_TOKEN_URL, params, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  return tok.data.access_token;
+}
+
+// The purchaser: SE forms put the buyer in top-level answers ("Primary Contact
+// First Name", "Last Name", "Phone", "Email") while teammates live under
+// "Player N …" — only the primary contact is sent to Meta, so attribution
+// lands on the person who saw the ad and paid, not a teammate.
+function primaryContactFrom(answers) {
+  const get = (re) => {
+    const a = (answers || []).find(x => re.test(x.name) && !/player|alternate|parent 2|guardian 2/i.test(x.name));
+    return a?.strValue || (Array.isArray(a?.arrValue) ? a.arrValue[0] : null) || null;
+  };
+  return {
+    email:     get(/^e-?mail$/i) || get(/primary.*email|^email address$/i),
+    phone:     get(/^phone( number)?$/i) || get(/primary.*phone/i),
+    firstName: get(/primary contact first name/i) || get(/^first name$/i),
+    lastName:  get(/^last name$/i) || get(/primary contact last name/i),
+  };
+}
+
+// NEW registration = completed + created within 48h + never forwarded before.
+// SE fires "update" webhooks for edits to years-old registrations — not sales.
+const NEW_REG_WINDOW_MS = 48 * 3600 * 1000;
+async function processRegistrationResult(match, resourceId) {
+  const sentMap = (await kvGet('sewh:sent')) || {};
+  if (sentMap[resourceId]) return { decision: 'duplicate — already forwarded' };
+
+  const token = await seTokenFor(match.accountKey);
+  const res = await axios.post(SE_GRAPHQL_URL, { query: RESULT_BY_ID_QUERY, variables: { id: Number(resourceId) } },
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+  const rr = res.data?.data?.registrationResult;
+  if (!rr) return { decision: 'not found in SportsEngine' };
+  const eventId = String(rr.registrationId || '');
+  if (!rr.completed) return { decision: 'incomplete — not a sale (yet)', eventId };
+  const ageMs = Date.now() - new Date(rr.created).getTime();
+  if (ageMs > NEW_REG_WINDOW_MS) return { decision: `edit of old registration (created ${String(rr.created).slice(0, 10)})`, eventId };
+
+  const contact = primaryContactFrom(rr.answers);
+  if (!contact.email && !contact.phone) return { decision: 'new, but no primary contact in answers', eventId };
+
+  // Order value: EB price if registered on/before the EB date, else final
+  let value = null;
+  const dl = ((await kvGet('deadlines:all')) || {})[eventId];
+  if (dl) {
+    const regDay = String(rr.created).slice(0, 10);
+    value = (dl.earlyBird && regDay <= dl.earlyBird) ? (dl.earlyBirdPrice || dl.finalPrice) : (dl.finalPrice || dl.earlyBirdPrice);
+  }
+
+  const override = match.cfg?.metaPixelId && match.cfg?.capiTokenEnc
+    ? { pixelId: match.cfg.metaPixelId, token: decryptSecret(match.cfg.capiTokenEnc) }
+    : null;
+  const args = { ...contact, value, eventId: `se-${resourceId}`, ...(override || {}) };
+  const ok = await capiSend('CompleteRegistration', args);
+  if (ok && value) await capiSend('Purchase', { ...args, eventId: `se-${resourceId}-p` });
+
+  if (ok) {
+    sentMap[resourceId] = new Date().toISOString();
+    const keys = Object.keys(sentMap);
+    if (keys.length > 800) for (const k of keys.slice(0, keys.length - 800)) delete sentMap[k];
+    await kvSet('sewh:sent', sentMap);
+  }
+  return {
+    decision: ok ? '🟢 NEW registration → sent to Meta' : 'new, but CAPI not configured/failed',
+    eventId, eventName: dl?.eventName, value, capiSent: ok,
+    hasEmail: !!contact.email, hasPhone: !!contact.phone,
+  };
+}
+
 // SE settings may probe the URL first — answer GET/HEAD with 200 (+challenge echo)
 app.get(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], (req, res) =>
   res.status(200).send(String(req.query.challenge || 'ok')));
@@ -3979,52 +4074,50 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
   try {
     const key = req.params.key || req.query.key || req.headers['x-webhook-key'] || '';
     const match = await resolveWebhookKey(String(key));
-    res.json({ ok: true });                       // ack fast; process after
-
     const body = req.body || {};
-    const scan = deepScan(body);
-    const email = [...scan.emails][0] || null;
-    const phone = [...scan.phones][0] || null;
+    const resourceType = body.resourceType || body.resource_type || '';
+    const resourceId = body.resourceId || body.resource_id || null;
 
-    // Estimate order value from our scraped deadline prices when possible
-    let value = scan.prices.find(p => p >= 40 && p <= 500) || null;
-    let evId = [...scan.eventIds][0] || null;
-    if (!value && evId) {
-      const dl = ((await kvGet('deadlines:all')) || {})[evId];
-      if (dl) {
-        const today = new Date().toISOString().slice(0, 10);
-        value = (dl.earlyBird && today <= dl.earlyBird) ? (dl.earlyBirdPrice || dl.finalPrice) : (dl.finalPrice || dl.earlyBirdPrice);
+    let outcome = { decision: !match ? 'rejected — bad/missing key' : 'received' };
+    if (match && /registrationresult/i.test(resourceType) && resourceId) {
+      // Enrich synchronously (SE result lookup ~1-2s) so Vercel doesn't kill
+      // the work after the response; SE tolerates the latency.
+      try { outcome = await processRegistrationResult(match, String(resourceId)); }
+      catch (err) { outcome = { decision: `enrichment failed: ${err.message.slice(0, 120)}` }; }
+    } else if (match) {
+      // Non-registration payloads (or unknown shapes): best-effort direct scan
+      const scan = deepScan(body);
+      const email = [...scan.emails][0] || null;
+      if (email) {
+        const override = match.cfg?.metaPixelId && match.cfg?.capiTokenEnc
+          ? { pixelId: match.cfg.metaPixelId, token: decryptSecret(match.cfg.capiTokenEnc) } : null;
+        const dedupId = cryptoLib.createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 24);
+        const ok = await capiSend('CompleteRegistration', { email, eventId: dedupId, ...(override || {}) });
+        outcome = { decision: ok ? 'scanned payload → sent to Meta' : 'scanned, CAPI not configured', hasEmail: true, capiSent: ok };
+      } else {
+        outcome = { decision: `ignored (${resourceType || 'no resourceType'})` };
       }
     }
-    const dedupId = [...scan.ids][0] || cryptoLib.createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 24);
 
-    // Forward to the ORG's pixel when the key belongs to one (their encrypted
-    // CAPI token); the platform default key uses the global growth settings.
-    let sent = false;
-    if (match && (email || phone)) {
-      const override = match.cfg?.metaPixelId && match.cfg?.capiTokenEnc
-        ? { pixelId: match.cfg.metaPixelId, token: decryptSecret(match.cfg.capiTokenEnc) }
-        : null;
-      const args = { email, phone, firstName: scan.first, lastName: scan.last, value, eventId: dedupId, ...(override || {}) };
-      sent = await capiSend('CompleteRegistration', args);
-      if (value) await capiSend('Purchase', { ...args, eventId: dedupId + '-p' });
-    }
-
-    // Record EVERY delivery — including bad/missing keys — so "SE fired but
-    // nothing showed up" is always diagnosable from the app.
+    // Record EVERY delivery — including rejected ones — for the inspector
     await appendCapped('sewh:recent', {
       at: new Date().toISOString(),
       accountKey: match?.accountKey || null,
       keyOk: !!match,
-      type: req.headers['x-sportsengine-event'] || req.headers['x-event-type'] || body.type || body.event_type || 'unknown',
-      hasEmail: !!email, hasPhone: !!phone, value, eventId: evId, capiSent: sent,
+      type: `${resourceType || body.type || 'unknown'}${body.resourceOperation ? '.' + body.resourceOperation : ''}`,
+      resourceId: resourceId || null,
+      decision: outcome.decision,
+      eventId: outcome.eventId || null, eventName: outcome.eventName || null,
+      hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
+      value: outcome.value || null, capiSent: !!outcome.capiSent,
       sample: JSON.stringify(body).slice(0, 4000) || '(empty body)',
     }, 50);
     const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
-    stats.total++; if (sent) stats.capiSent++;
+    stats.total++; if (outcome.capiSent) stats.capiSent++;
     if (!match) stats.rejected = (stats.rejected || 0) + 1;
     stats.lastAt = new Date().toISOString();
     await kvSet('sewh:stats', stats);
+    res.json({ ok: true });
   } catch (err) {
     console.warn('[sewh] failed:', err.message);
     if (!res.headersSent) res.json({ ok: true });

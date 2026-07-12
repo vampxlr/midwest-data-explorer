@@ -52,11 +52,14 @@ export default function WebhookInspector({ compactTitle }) {
               <summary style={{ cursor: 'pointer', color: 'var(--text-2)' }}>
                 {r.at.replace('T', ' ').slice(0, 19)} · {r.type}
                 {r.keyOk === false && <span style={{ color: '#f59e0b', fontWeight: 700 }}> · ⚠ key rejected</span>}
-                {r.accountKey && <span style={{ color: 'var(--text-4)' }}> · {r.accountKey}</span>}
-                {' · '}{r.hasEmail ? '✉ email' : 'no email'}{r.value ? ` · $${r.value}` : ''}
-                {' · '}{r.capiSent ? <span style={{ color: 'var(--viz-up)' }}>→ Meta ✓</span> : 'not forwarded'}
+                {r.eventName && <span style={{ color: 'var(--text-4)' }}> · {String(r.eventName).slice(0, 34)}</span>}
+                {r.value ? ` · $${r.value}` : ''}
+                {' · '}{r.capiSent
+                  ? <span style={{ color: 'var(--viz-up)', fontWeight: 700 }}>→ Meta ✓</span>
+                  : <span style={{ color: 'var(--text-4)' }}>{r.decision || (r.hasEmail ? 'not forwarded' : 'no contact')}</span>}
                 <span style={{ color: 'var(--accent-light)' }}> · raw ▾</span>
               </summary>
+              {r.decision && <div style={{ margin: '4px 0 0', fontSize: 11, color: r.capiSent ? 'var(--viz-up)' : 'var(--text-3)' }}>{r.decision}</div>}
               <pre style={{
                 margin: '6px 0 2px', padding: '8px 10px', borderRadius: 6, background: 'var(--surface-1)',
                 border: '1px solid var(--border-sub)', maxHeight: 240, overflow: 'auto',
