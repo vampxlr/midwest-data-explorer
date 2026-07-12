@@ -3221,17 +3221,56 @@ function localJsonSave(file, obj) {
 
 const DEFAULT_SITE_SETTINGS = {
   appName: 'Data Explorer for SportsEngine',
-  tagline: 'Registration analytics, year-over-year insights, and Facebook audience exports for youth sports organizations.',
+  tagline: "Registration analytics, year-over-year insights, Facebook audiences — and the real Meta conversion tracking SportsEngine won't let you have.",
   betaBanner: 'We are in beta right now — lock in the discounted rate.',
   priceMonthly: 100,
   betaPriceMonthly: 30,
   features: [
-    { title: 'Live Registration Dashboard',  desc: 'Day-by-day activity, week trends, and league breakdowns at a glance — on desktop and phone.' },
-    { title: 'Year-over-Year Comparisons',   desc: 'Pit any league against last season with cumulative pace charts and same-day deltas.' },
-    { title: 'Smart Update Sync',            desc: 'One click pulls only what changed from SportsEngine — no manual exports.' },
-    { title: 'Facebook Custom Audiences',    desc: 'Build filtered, dedup-ed audience CSVs (emails + E.164 phones) ready for Meta import.' },
-    { title: 'Lapsed Player Detection',      desc: 'Find every past participant who has not re-registered — with contact details.' },
-    { title: 'Demo / Stream Mode',           desc: 'Mask sensitive data instantly for screen shares and client demos.' },
+      {
+          "icon": "📡",
+          "title": "Real Meta Conversion Signal",
+          "desc": "SportsEngine checkout can't run a pixel or GTM — we forward every registration to Meta's Conversions API server-side, hashed exactly how Meta wants. Your ads finally learn who actually registers."
+      },
+      {
+          "icon": "📊",
+          "title": "Live Registration Dashboard",
+          "desc": "Day-by-day activity, week trends, and league breakdowns at a glance — on desktop and phone."
+      },
+      {
+          "icon": "📈",
+          "title": "Year-over-Year Comparisons",
+          "desc": "Pit any league against last season with cumulative pace charts, deadline markers, and same-day deltas."
+      },
+      {
+          "icon": "📱",
+          "title": "Ads Manager Built for Phones",
+          "desc": "Campaigns → ad sets → ads with spend, results and cost-per-result — the drill-down Meta's mobile app makes painful."
+      },
+      {
+          "icon": "🎯",
+          "title": "Facebook Custom Audiences",
+          "desc": "Build filtered, dedup-ed audience CSVs (emails + E.164 phones) ready for Meta import."
+      },
+      {
+          "icon": "⚡",
+          "title": "Smart Update Sync",
+          "desc": "One click pulls only what changed from SportsEngine — no manual exports."
+      },
+      {
+          "icon": "⏰",
+          "title": "Deadline Intelligence",
+          "desc": "Early-bird and final registration deadlines from your website, marked on every pace chart — see the deadline rush coming."
+      },
+      {
+          "icon": "🔁",
+          "title": "Lapsed Player Detection",
+          "desc": "Find every past participant who has not re-registered — with contact details."
+      },
+      {
+          "icon": "🎥",
+          "title": "Demo / Stream Mode",
+          "desc": "Mask sensitive data instantly for screen shares and client demos."
+      }
   ],
 };
 
