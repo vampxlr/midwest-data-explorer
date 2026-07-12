@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.jsx';
 import { invalidateDeadlineCache } from '../deadlines.jsx';
-import WebhookInspector from '../components/WebhookInspector.jsx';
+import TrackingCard from '../components/TrackingCard.jsx';
 import { useAuth } from '../AuthContext.jsx';
 import { toast } from 'react-hot-toast';
 
@@ -630,12 +630,8 @@ export default function DataManagement({ ctx }) {
       {/* Registration deadlines — scraped from midwest3on3.com, editable */}
       {isAdmin && <DeadlinesCard />}
 
-      {isAdmin && (
-        <div className="card" style={{ marginTop:20 }}>
-          <h2>SportsEngine Webhook Inspector</h2>
-          <WebhookInspector />
-        </div>
-      )}
+      {/* Org-level tracking: this organization's GA4 / pixel / CAPI / SE webhook */}
+      {isAdmin && <TrackingCard />}
 
       {/* Admin: Recompute dashboard stats (fixes double-counting after purge+refetch on Vercel) */}
       {isAdmin && isVercel && (

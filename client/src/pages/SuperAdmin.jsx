@@ -637,37 +637,29 @@ function CustomersPanel() {
   );
 }
 
-// ── Growth settings: trial caps + GA4 / Meta pixel / CAPI ─────────────────────
+// ── Growth settings — PLATFORM level only (trials, billing price, onboarding).
+// Tracking (GA4/pixel/CAPI/webhooks) is organization-specific and lives with
+// each company: their dashboard's "Tracking & Meta signal" card, or Data
+// Management for the built-in company's admins.
 function GrowthPanel() {
   const [g, setG] = useState(null);
-  const [capiToken, setCapiToken] = useState('');
   useEffect(() => { api.getGrowth().then(r => setG(r.data)).catch(() => {}); }, []);
   if (!g) return <div className="card"><div className="no-data">Loading…</div></div>;
   const upd = (patch) => setG(x => ({ ...x, ...patch }));
   async function save() {
     try {
-      await api.saveGrowth({ ...g, ...(capiToken.trim() ? { capiToken: capiToken.trim() } : {}) });
-      setCapiToken('');
+      await api.saveGrowth(g);
       toast.success('Growth settings saved');
     } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
   }
   const num = (v) => (v === '' ? 0 : Number(v));
   return (
     <div className="card">
-      <h2>Trials & tracking</h2>
+      <h2>Trials & onboarding</h2>
       <div style={{ display:'flex', gap:14, flexWrap:'wrap', marginBottom:6 }}>
         <Field label="Trial length (days)"><input className="field-input" type="number" min="1" style={{ width:110 }} value={g.trialDays} onChange={e => upd({ trialDays: num(e.target.value) })} /></Field>
         <Field label="Max concurrent trials"><input className="field-input" type="number" min="0" style={{ width:110 }} value={g.trialActiveLimit} onChange={e => upd({ trialActiveLimit: num(e.target.value) })} /></Field>
         <Field label="Max new trials / month"><input className="field-input" type="number" min="0" style={{ width:110 }} value={g.trialMonthlyLimit} onChange={e => upd({ trialMonthlyLimit: num(e.target.value) })} /></Field>
-      </div>
-      <div style={{ display:'flex', gap:14, flexWrap:'wrap' }}>
-        <Field label="GA4 Measurement ID"><input className="field-input" placeholder="G-XXXXXXXXXX" style={{ width:170 }} value={g.ga4Id} onChange={e => upd({ ga4Id: e.target.value })} /></Field>
-        <Field label="Meta Pixel ID"><input className="field-input" placeholder="1234567890" style={{ width:170 }} value={g.metaPixelId} onChange={e => upd({ metaPixelId: e.target.value })} /></Field>
-        <Field label={`Meta CAPI token ${g.hasCapiToken ? '(saved)' : ''}`}>
-          <input className="field-input" type="password" style={{ width:220 }} value={capiToken}
-            placeholder={g.hasCapiToken ? '••••••••  (unchanged)' : 'server-side events token'}
-            onChange={e => setCapiToken(e.target.value)} />
-        </Field>
         <Field label="Stripe price ID (optional)"><input className="field-input" placeholder="auto-created if empty" style={{ width:200 }} value={g.stripePriceId} onChange={e => upd({ stripePriceId: e.target.value })} /></Field>
       </div>
       <div style={{ marginTop:10 }}>
@@ -679,55 +671,10 @@ function GrowthPanel() {
       <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:14 }}>
         <button className="btn-primary" onClick={save}>Save growth settings</button>
         <span style={{ fontSize:12, color:'var(--text-4)' }}>
-          GA4 + pixel load on the site as soon as ids are saved; CAPI fires server-side on signup & subscribe.
+          Tracking (GA4 / pixel / CAPI / SportsEngine webhooks) is per-organization —
+          company dashboards for customers, Data Mgmt for Midwest's admins.
         </span>
       </div>
-      <SeWebhookCard />
-    </div>
-  );
-}
-
-// SportsEngine → Meta CAPI bridge: the webhook URL to paste into SE HQ +
-// live delivery/forwarding status.
-function SeWebhookCard() {
-  const [d, setD] = useState(null);
-  useEffect(() => { api.getSeWebhooks().then(r => setD(r.data)).catch(() => {}); }, []);
-  if (!d) return null;
-  return (
-    <div style={{ marginTop:20, padding:'14px 16px', borderRadius:12, border:'1px solid var(--chip-border)', background:'var(--surface-2)' }}>
-      <div style={{ fontSize:13, fontWeight:800, marginBottom:4 }}>🔁 SportsEngine → Meta signal (registration webhooks)</div>
-      <p style={{ fontSize:12, color:'var(--text-3)', margin:'0 0 10px', lineHeight:1.5 }}>
-        SE checkout can't run a pixel — instead SE HQ posts a webhook here on every registration, and we forward
-        it to Meta CAPI as hashed CompleteRegistration + Purchase (value from the deadline prices).
-        In SE HQ → API application → Settings: paste this URL under <b>Webhooks URL</b>, then enable the
-        <b> Registration</b> and <b>Registration Result</b> toggles.
-      </p>
-      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-        <code style={{ fontSize:11, background:'var(--bg-hover)', padding:'6px 10px', borderRadius:8, wordBreak:'break-all', flex:1, minWidth:260 }}>{d.url}</code>
-        <button className="btn-secondary" style={{ width:'auto', margin:0 }}
-          onClick={() => { navigator.clipboard.writeText(d.url).then(() => toast.success('Webhook URL copied')); }}>📋 Copy</button>
-      </div>
-      <div style={{ fontSize:12, color:'var(--text-3)', marginTop:10 }}>
-        Deliveries: <b>{d.stats.total}</b> · forwarded to Meta: <b>{d.stats.capiSent}</b>
-        {d.stats.lastAt && <> · last: {d.stats.lastAt.replace('T',' ').slice(0,16)}</>}
-        {d.stats.total === 0 && <> — none yet (SE sends the first one on the next registration)</>}
-      </div>
-      {d.recent?.length > 0 && (
-        <div style={{ marginTop:8, display:'grid', gap:4 }}>
-          {d.recent.slice(0,5).map((r,i) => (
-            <details key={i} style={{ fontSize:11, color:'var(--text-4)', fontFamily:'ui-monospace, monospace' }}>
-              <summary style={{ cursor:'pointer' }}>
-                {r.at.replace('T',' ').slice(0,19)} · {r.type} · {r.hasEmail ? '✉ email' : 'no email'}{r.value ? ` · $${r.value}` : ''} · {r.capiSent ? '→ Meta ✓' : 'not forwarded'} · <span style={{ color:'var(--accent-light)' }}>raw ▾</span>
-              </summary>
-              <pre style={{
-                margin:'6px 0 4px', padding:'8px 10px', borderRadius:8, background:'var(--bg-hover)',
-                border:'1px solid var(--border-sub)', maxHeight:220, overflow:'auto',
-                whiteSpace:'pre-wrap', wordBreak:'break-all', fontSize:10.5, color:'var(--text-2)',
-              }}>{(() => { try { return JSON.stringify(JSON.parse(r.sample), null, 2); } catch { return r.sample || '(empty)'; } })()}</pre>
-            </details>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

@@ -3290,10 +3290,13 @@ async function loadSiteSettings() {
 
 app.get('/api/site-settings', async (req, res) => {
   const s = await loadSiteSettings();
-  // Non-secret tracking ids ride along so the client can boot GA4 + Meta pixel
+  // Non-secret tracking ids ride along so the client can boot GA4 + Meta pixel.
+  // The platform site tracks with the built-in company's (Midwest's) org ids.
   try {
+    const mw = ((await kvGet('tracking:orgs')) || {})['midwest-3on3'];
     const g = await growthSettings();
-    s.ga4Id = g.ga4Id; s.metaPixelId = g.metaPixelId;
+    s.ga4Id = mw?.ga4Id || g.ga4Id;
+    s.metaPixelId = mw?.metaPixelId || g.metaPixelId;
   } catch {}
   res.json(s);
 });
@@ -3961,11 +3964,13 @@ function deepScan(obj) {
 async function orgTrackingAll() { return (await kvGet('tracking:orgs')) || {}; }
 async function resolveWebhookKey(key) {
   if (!key) return null;
-  const g = await growthSettings();
-  if (g.seWebhookKey && key === g.seWebhookKey) return { accountKey: 'midwest-3on3', cfg: null }; // platform default
-  for (const [accountKey, cfg] of Object.entries(await orgTrackingAll())) {
+  const all = await orgTrackingAll();
+  for (const [accountKey, cfg] of Object.entries(all)) {
     if (cfg.seWebhookKey && cfg.seWebhookKey === key) return { accountKey, cfg };
   }
+  // legacy: the key minted before tracking moved org-side — it's Midwest's
+  const g = await growthSettings();
+  if (g.seWebhookKey && key === g.seWebhookKey) return { accountKey: 'midwest-3on3', cfg: all['midwest-3on3'] || null };
   return null;
 }
 
@@ -4134,32 +4139,61 @@ app.get('/api/webhooks/deliveries', auth.requireAuth, auth.requireRole('admin'),
   res.json({ stats: stats || { total: 0, capiSent: 0 }, deliveries: rows, scope: platform ? 'all' : me.accountKey });
 });
 
-// Per-org tracking settings (company admin) — pixel/GA4/CAPI + webhook URL
+// Per-org tracking settings — pixel/GA4/CAPI + webhook URL. Tracking is an
+// ORGANIZATION concern: each company's admins manage their own (Midwest's
+// admins included — platform users without an accountKey resolve to the
+// built-in midwest-3on3 company; nothing tracking-related lives at platform
+// level anymore).
+async function trackingAccountKey(req, res) {
+  const me = await userStore.findById(req.user.id);
+  const key = me?.accountKey || (['admin', 'owner', 'superadmin'].includes(me?.role) ? 'midwest-3on3' : null);
+  if (!key) { res.status(403).json({ error: 'No company linked to this account' }); return null; }
+  return key;
+}
+// One-time migration: Midwest's tracking used to live in the global growth
+// settings — move it into its org slot the first time it's read.
+async function migrateMidwestTracking(all) {
+  if (all['midwest-3on3']?.migrated) return all;
+  const g = (await kvGet('growth:settings')) || {};
+  all['midwest-3on3'] = {
+    ga4Id: g.ga4Id || '', metaPixelId: g.metaPixelId || '',
+    ...(g.capiTokenEnc ? { capiTokenEnc: g.capiTokenEnc } : {}),
+    ...(g.seWebhookKey ? { seWebhookKey: g.seWebhookKey } : {}),   // SE HQ already has this URL — keep it
+    ...(all['midwest-3on3'] || {}),
+    migrated: true, updatedAt: new Date().toISOString(),
+  };
+  await kvSet('tracking:orgs', all);
+  return all;
+}
+
 app.get('/api/company/tracking', auth.requireRole('admin'), async (req, res) => {
-  const me = await requireCompanyUser(req, res); if (!me) return;
-  const all = await orgTrackingAll();
-  let cfg = all[me.accountKey];
+  const accountKey = await trackingAccountKey(req, res); if (!accountKey) return;
+  let all = await orgTrackingAll();
+  if (accountKey === 'midwest-3on3') all = await migrateMidwestTracking(all);
+  let cfg = all[accountKey];
   if (!cfg?.seWebhookKey) {
     cfg = { ...(cfg || {}), seWebhookKey: cryptoLib.randomBytes(18).toString('base64url') };
-    all[me.accountKey] = { ...cfg, updatedAt: new Date().toISOString() };
+    all[accountKey] = { ...cfg, updatedAt: new Date().toISOString() };
     await kvSet('tracking:orgs', all);
   }
   const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'https://<your-production-domain>';
   res.json({
+    accountKey,
     ga4Id: cfg.ga4Id || '', metaPixelId: cfg.metaPixelId || '',
     hasCapiToken: !!cfg.capiTokenEnc,
     webhookUrl: `${host}/api/webhooks/sportsengine/${cfg.seWebhookKey}`,
   });
 });
 app.put('/api/company/tracking', auth.requireRole('admin'), async (req, res) => {
-  const me = await requireCompanyUser(req, res); if (!me) return;
+  const accountKey = await trackingAccountKey(req, res); if (!accountKey) return;
   const b = req.body || {};
-  const all = await orgTrackingAll();
-  const cfg = all[me.accountKey] || {};
+  let all = await orgTrackingAll();
+  if (accountKey === 'midwest-3on3') all = await migrateMidwestTracking(all);
+  const cfg = all[accountKey] || {};
   for (const k of ['ga4Id', 'metaPixelId']) if (b[k] !== undefined) cfg[k] = String(b[k]).trim();
   if (b.capiToken && !/^•+$/.test(b.capiToken)) cfg.capiTokenEnc = encryptSecret(String(b.capiToken).trim());
   if (!cfg.seWebhookKey) cfg.seWebhookKey = cryptoLib.randomBytes(18).toString('base64url');
-  all[me.accountKey] = { ...cfg, updatedAt: new Date().toISOString() };
+  all[accountKey] = { ...cfg, updatedAt: new Date().toISOString() };
   await kvSet('tracking:orgs', all);
   res.json({ ok: true });
 });
