@@ -4803,7 +4803,10 @@ app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, r
       if (r.error || (!r.earlyBird && !r.finalDeadline)) continue;
       for (const ev of matchScrapedEvents(r, events)) {
         const id = String(ev.id);
-        if (existing[id]?.manual) continue;        // manual overrides always win
+        // Manual overrides always win — but only once they actually HOLD a
+        // date. An empty stub from "+ Add manually" (nobody filled it in yet)
+        // must not block the scraper from finding real data forever.
+        if (existing[id]?.manual && (existing[id].earlyBird || existing[id].finalDeadline)) continue;
         existing[id] = {
           eventName: ev.name,
           earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,

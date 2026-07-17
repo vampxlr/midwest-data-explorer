@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.jsx';
 import { invalidateDeadlineCache } from '../deadlines.jsx';
 import { toast } from 'react-hot-toast';
@@ -21,11 +21,23 @@ export default function DeadlinesCard() {
   }
   useEffect(() => { load(); }, []);
 
+  // The edit row can land far down a long table with no visual cue it opened
+  // at all — scroll it into view whenever `editing` changes.
+  useEffect(() => {
+    if (!editing) return;
+    const el = document.getElementById(`deadline-row-${editing}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [editing]);
+
   // "Add manually" for an uncovered event: create an empty manual row and open it
   async function addMissing(ev) {
-    await api.setDeadline(ev.id, { eventName: ev.name });
-    await load({ invalidate: true });
-    setEditing(ev.id);
+    try {
+      await api.setDeadline(ev.id, { eventName: ev.name });
+      await load({ invalidate: true });
+      setEditing(ev.id);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Could not add — try again');
+    }
   }
 
   async function scrape() {
@@ -111,7 +123,7 @@ export default function DeadlinesCard() {
               {entries.map(([id, d]) => editing === id ? (
                 <EditRow key={id} id={id} d={d} onSave={save} onCancel={() => setEditing(null)} />
               ) : (
-                <tr key={id}>
+                <tr key={id} id={`deadline-row-${id}`}>
                   <td style={{ color:'var(--text-1)', fontWeight:500 }}>{d.eventName}{d.manual && <span className="badge badge-purple" style={{ marginLeft:6, fontSize:9 }}>manual</span>}</td>
                   <td>{d.earlyBird || '—'}</td>
                   <td>{d.earlyBirdPrice ? `$${d.earlyBirdPrice}` : '—'}</td>
@@ -131,7 +143,7 @@ export default function DeadlinesCard() {
 function EditRow({ id, d, onSave, onCancel }) {
   const [f, setF] = useState({ ...d });
   return (
-    <tr>
+    <tr id={`deadline-row-${id}`} style={{ background: 'rgba(99,102,241,0.08)' }}>
       <td style={{ color:'var(--text-1)' }}>{d.eventName}</td>
       <td><input type="date" className="field-input" value={f.earlyBird || ''} onChange={e => setF(x => ({ ...x, earlyBird: e.target.value }))} /></td>
       <td><input type="number" className="field-input" style={{ width:80 }} value={f.earlyBirdPrice ?? ''} onChange={e => setF(x => ({ ...x, earlyBirdPrice: e.target.value ? Number(e.target.value) : null }))} /></td>
