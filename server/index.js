@@ -4045,8 +4045,18 @@ async function processRegistrationResult(match, resourceId, asOfMs = Date.now(),
   }
 
   const token = await seTokenFor(match.accountKey);
-  const res = await axios.post(SE_GRAPHQL_URL, { query: RESULT_BY_ID_QUERY, variables: { id: Number(resourceId) } },
-    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+  let res;
+  try {
+    res = await axios.post(SE_GRAPHQL_URL, { query: RESULT_BY_ID_QUERY, variables: { id: Number(resourceId) } },
+      { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+  } catch (err) {
+    // SE returns transient 5xx under bursts — one paced retry before failing
+    if (err.response?.status >= 500) {
+      await new Promise(r => setTimeout(r, 1500));
+      res = await axios.post(SE_GRAPHQL_URL, { query: RESULT_BY_ID_QUERY, variables: { id: Number(resourceId) } },
+        { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+    } else throw err;
+  }
   const rr = res.data?.data?.registrationResult;
   if (!rr) return { decision: 'result id not found in SportsEngine', reason: 'the API returned nothing for this id — possibly deleted' };
 
@@ -4300,6 +4310,7 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
     const cfg = (await orgTrackingAll())['midwest-3on3'] || null;
     for (const m of batch) {
       let outcome;
+      await new Promise(r => setTimeout(r, 400));   // SE 500s under burst — pace the lookups
       if (new Date(m.created).getTime() < metaLimit) {
         try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000, { send: false }); }
         catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100), resultCreated: m.created }; }
@@ -4365,7 +4376,11 @@ app.get('/api/webhooks/deliveries', auth.requireAuth, auth.requireRole('admin'),
   const me = await userStore.findById(req.user.id);
   const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
   const src = req.query.view === 'audit' ? 'sewh:audit' : 'sewh:recent';
-  const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet(src)]);
+  let [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet(src)]);
+  if (src === 'sewh:recent' && (recent || []).some(r => String(r.type || '').startsWith('audit.'))) {
+    recent = recent.filter(r => !String(r.type || '').startsWith('audit.'));  // audit rows moved to their own log
+    await kvSet('sewh:recent', recent);
+  }
   let rows = (recent || []).filter(r => platform || r.accountKey === me.accountKey);
   if (req.query.sent === '1') rows = rows.filter(r => r.capiSent);
   const offset = Math.max(0, Number(req.query.offset) || 0);
