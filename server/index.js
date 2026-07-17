@@ -3760,7 +3760,7 @@ async function trialAvailability() {
 
 // ── Meta Conversions API (server-side) — fire-and-forget, dormant without token
 const sha256 = (v) => cryptoLib.createHash('sha256').update(String(v).trim().toLowerCase()).digest('hex');
-async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, sourceUrl, value, eventId, pixelId, token } = {}) {
+async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, sourceUrl, value, eventId, pixelId, token, eventTimeSec } = {}) {
   try {
     // per-org override (customer's own pixel) falls back to platform settings
     const s = await growthSettings();
@@ -3774,7 +3774,10 @@ async function capiSend(eventName, { email, phone, firstName, lastName, ip, ua, 
     if (lastName)  user_data.ln = [sha256(lastName)];
     const body = {
       data: [{
-        event_name: eventName, event_time: Math.floor(Date.now() / 1000),
+        event_name: eventName,
+        // Meta accepts event_time up to 7 days back — retried/backfilled sends
+        // carry the REAL registration moment so attribution timing stays right
+        event_time: eventTimeSec || Math.floor(Date.now() / 1000),
         action_source: 'website', event_source_url: sourceUrl || 'https://www.midwest3on3.com',
         ...(eventId ? { event_id: String(eventId) } : {}),   // dedup key
         user_data, ...(value ? { custom_data: { currency: 'USD', value } } : {}),
@@ -3983,7 +3986,7 @@ async function resolveWebhookKey(key) {
 // resourceOperation, resourceId, resourceType}) — fetch the full registration
 // result from SportsEngine GraphQL by id, decide if it's genuinely NEW, and
 // forward only the PRIMARY CONTACT (the purchaser — the person who saw the ad).
-const RESULT_BY_ID_QUERY = `query($id: Int) {
+const RESULT_BY_ID_QUERY = `query($id: Int!) {
   registrationResult(id: $id) {
     id completed status created registrationId
     answers {
@@ -4030,7 +4033,10 @@ function primaryContactFrom(answers) {
 // SE fires "update" webhooks for edits to years-old registrations — not sales.
 const NEW_REG_WINDOW_MS = 48 * 3600 * 1000;
 const maskEmail = (e) => e ? String(e).replace(/^(.).*(@.*)$/, '$1***$2') : null;
-async function processRegistrationResult(match, resourceId) {
+// asOfMs: "new registration" freshness is judged against when the webhook was
+// DELIVERED, not when we process — so retrying a failed delivery days later
+// still classifies it correctly.
+async function processRegistrationResult(match, resourceId, asOfMs = Date.now()) {
   const sentMap = (await kvGet('sewh:sent')) || {};
   if (sentMap[resourceId]) {
     return { decision: 'duplicate — this registration was already forwarded to Meta', reason: `first sent ${String(sentMap[resourceId]).slice(0, 16).replace('T', ' ')}` };
@@ -4052,7 +4058,7 @@ async function processRegistrationResult(match, resourceId) {
   const base = { eventId, eventName, resultCreated };
 
   if (!rr.completed) return { ...base, decision: 'incomplete registration — no sale (yet)', reason: 'SportsEngine marks it not completed; a completed webhook will follow if they finish checkout' };
-  const ageMs = Date.now() - new Date(rr.created).getTime();
+  const ageMs = asOfMs - new Date(rr.created).getTime();
   if (ageMs > NEW_REG_WINDOW_MS) {
     const days = Math.round(ageMs / 86400000);
     return { ...base, decision: `edit of an EXISTING registration — not a new sale`, reason: `registered ${resultCreated.slice(0, 10)} (${days} days ago); SportsEngine fires update webhooks when old registrations are edited` };
@@ -4071,7 +4077,8 @@ async function processRegistrationResult(match, resourceId) {
   const override = match.cfg?.metaPixelId && match.cfg?.capiTokenEnc
     ? { pixelId: match.cfg.metaPixelId, token: decryptSecret(match.cfg.capiTokenEnc) }
     : null;
-  const args = { ...contact, value, eventId: `se-${resourceId}`, ...(override || {}) };
+  const eventTimeSec = Math.min(Math.floor(new Date(rr.created).getTime() / 1000), Math.floor(Date.now() / 1000));
+  const args = { ...contact, value, eventId: `se-${resourceId}`, eventTimeSec, ...(override || {}) };
   const ok = await capiSend('CompleteRegistration', args);
   if (ok && value) await capiSend('Purchase', { ...args, eventId: `se-${resourceId}-p` });
 
@@ -4151,6 +4158,48 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
     console.warn('[sewh] failed:', err.message);
     if (!res.headersSent) res.json({ ok: true });
   }
+});
+
+// Reprocess failed deliveries (e.g. after an SE schema change broke
+// enrichment): re-runs each failed registrationResult with the freshness
+// window judged at its original delivery time, updates the rows in place.
+app.post('/api/webhooks/reprocess', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+  try {
+    const me = await userStore.findById(req.user.id);
+    const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
+    const recent = (await kvGet('sewh:recent')) || [];
+    const targets = recent.filter(r =>
+      /enrichment failed|not found in SportsEngine/.test(r.decision || '') && r.resourceId &&
+      (platform || r.accountKey === me.accountKey));
+    const seen = new Set();
+    let sent = 0, done = 0;
+    for (const r of targets) {
+      if (seen.has(String(r.resourceId))) { r.decision = 'duplicate delivery of a retried result'; r.reason = 'same resourceId reprocessed above'; continue; }
+      seen.add(String(r.resourceId));
+      const match = { accountKey: r.accountKey || 'midwest-3on3', cfg: (await orgTrackingAll())[r.accountKey || 'midwest-3on3'] || null };
+      try {
+        const outcome = await processRegistrationResult(match, String(r.resourceId), new Date(r.at).getTime());
+        Object.assign(r, {
+          decision: outcome.decision, reason: outcome.reason || null,
+          eventId: outcome.eventId || null, eventName: outcome.eventName || null,
+          resultCreated: outcome.resultCreated || null, contactMasked: outcome.contactMasked || null,
+          hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
+          value: outcome.value || null, capiSent: !!outcome.capiSent,
+          retriedAt: new Date().toISOString(),
+        });
+        if (outcome.capiSent) sent++;
+        done++;
+      } catch (err) {
+        r.decision = `enrichment failed: ${err.message.slice(0, 120)}`;
+        r.retriedAt = new Date().toISOString();
+      }
+    }
+    await kvSet('sewh:recent', recent);
+    const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
+    stats.capiSent += sent;
+    await kvSet('sewh:stats', stats);
+    res.json({ ok: true, retried: done, uniqueResults: seen.size, sentToMeta: sent });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Webhook inspector — every recorded delivery with raw payloads.

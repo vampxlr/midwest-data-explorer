@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api.jsx';
+import { toast } from 'react-hot-toast';
 
 /**
  * Every request that hit the SportsEngine webhook endpoint — valid key or
@@ -27,8 +28,22 @@ export default function WebhookInspector({ compactTitle }) {
         <div style={{ fontSize: 12.5, color: 'var(--text-3)' }}>
           {compactTitle || 'Everything SportsEngine sent to the webhook endpoint — including rejected or key-less requests.'}
         </div>
-        <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }}
-          onClick={load} disabled={refreshing}>{refreshing ? '⏳' : '🔄 Refresh'}</button>
+        <span style={{ display: 'flex', gap: 6 }}>
+          {d?.deliveries?.some(r => /enrichment failed|not found in SportsEngine/.test(r.decision || '')) && (
+            <button className="btn-primary" style={{ padding: '4px 12px', fontSize: 12 }} disabled={refreshing}
+              title="Re-run enrichment for every failed delivery (freshness judged at original delivery time)"
+              onClick={async () => {
+                setRefreshing(true);
+                try {
+                  const r = await api.reprocessWebhooks();
+                  toast.success(`Retried ${r.data.retried} deliveries — ${r.data.sentToMeta} sent to Meta`, { duration: 6000 });
+                } catch (e) { toast.error(e.response?.data?.error || 'Retry failed'); }
+                load();
+              }}>♻ Retry failed</button>
+          )}
+          <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }}
+            onClick={load} disabled={refreshing}>{refreshing ? '⏳' : '🔄 Refresh'}</button>
+        </span>
       </div>
       <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
         Received: <b>{stats.total || 0}</b> · forwarded to Meta: <b>{stats.capiSent || 0}</b>

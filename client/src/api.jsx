@@ -191,6 +191,7 @@ export const api = {
   getGrowth:       ()     => axios.get(`${BASE}/admin/growth`),
   getSeWebhooks:   ()     => axios.get(`${BASE}/admin/sewebhooks`),
   getWebhookDeliveries: () => axios.get(`${BASE}/webhooks/deliveries`),
+  reprocessWebhooks:    () => axios.post(`${BASE}/webhooks/reprocess`),
   getCompanyTracking:  ()     => axios.get(`${BASE}/company/tracking`),
   saveCompanyTracking: (body) => axios.put(`${BASE}/company/tracking`, body),
   saveGrowth:      (body) => axios.put(`${BASE}/admin/growth`, body),
