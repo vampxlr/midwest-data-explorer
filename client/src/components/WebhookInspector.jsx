@@ -16,6 +16,8 @@ export default function WebhookInspector({ compactTitle }) {
   const [sentOnly, setSentOnly] = useState(false);
   const [auditDays, setAuditDays] = useState(7);
   const [view, setView] = useState('hooks'); // 'hooks' = webhook deliveries · 'audit' = cross-check findings
+  const [rec, setRec] = useState(null);      // Meta-vs-SportsEngine reconciliation
+  useEffect(() => { api.getReconcile().then(r => setRec(r.data)).catch(() => {}); }, [audit?.running]);
   const auditLog = (msg, level = 'info') =>
     setAudit(a => ({ ...a, log: [...(a?.log || []), { ts: new Date().toLocaleTimeString('en-US', { hour12: false }), msg, level }].slice(-200) }));
 
@@ -149,6 +151,37 @@ export default function WebhookInspector({ compactTitle }) {
               </div>
             ))}
             {audit.running && <div style={{ color: '#60a5fa' }}>▋</div>}
+          </div>
+        </div>
+      )}
+
+      {/* Meta vs SportsEngine reconciliation — equal numbers = healthy */}
+      {rec && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginBottom: 12 }}>
+          {[
+            ['Meta sent · total', rec.sent.total, 'var(--accent-light)'],
+            ['Meta sent · today', rec.sent.today, 'var(--text-1)'],
+            ['Meta sent · 7 days', rec.sent.week, 'var(--text-1)'],
+            ['SE regs · today', rec.se.today, 'var(--text-1)'],
+            ['SE regs · 7 days', rec.se.week, 'var(--text-1)'],
+          ].map(([l, v, c]) => (
+            <div key={l} style={{ border: '1px solid var(--border-sub)', borderRadius: 10, padding: '8px 12px', background: 'var(--bg-hover)' }}>
+              <div style={{ fontSize: 20, fontWeight: 800, color: c, fontVariantNumeric: 'tabular-nums' }}>{v}</div>
+              <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-4)' }}>{l}</div>
+            </div>
+          ))}
+          <div style={{
+            border: `1px solid ${rec.missing.week > 0 ? 'rgba(239,68,68,0.5)' : 'rgba(34,197,94,0.4)'}`,
+            borderRadius: 10, padding: '8px 12px',
+            background: rec.missing.week > 0 ? 'rgba(239,68,68,0.07)' : 'rgba(34,197,94,0.07)',
+          }}>
+            <div style={{ fontSize: 20, fontWeight: 800, fontVariantNumeric: 'tabular-nums',
+              color: rec.missing.week > 0 ? '#ef4444' : 'var(--viz-up)' }}>
+              {rec.missing.week > 0 ? rec.missing.week : '✓'}
+            </div>
+            <div style={{ fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--text-4)' }}>
+              {rec.missing.week > 0 ? `missing this week (${rec.missing.today} today) — run cross-check` : 'all registrations sent'}
+            </div>
           </div>
         </div>
       )}

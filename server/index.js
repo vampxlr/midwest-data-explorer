@@ -4040,7 +4040,8 @@ const maskEmail = (e) => e ? String(e).replace(/^(.).*(@.*)$/, '$1***$2') : null
 async function processRegistrationResult(match, resourceId, asOfMs = Date.now(), opts = {}) {
   const sentMap = (await kvGet('sewh:sent')) || {};
   if (sentMap[resourceId]) {
-    return { decision: 'duplicate — this registration was already forwarded to Meta', reason: `first sent ${String(sentMap[resourceId]).slice(0, 16).replace('T', ' ')}` };
+    const first = sentMap[resourceId]?.at || sentMap[resourceId];
+    return { decision: 'duplicate — this registration was already forwarded to Meta', reason: `first sent ${String(first).slice(0, 16).replace('T', ' ')}` };
   }
 
   const token = await seTokenFor(match.accountKey);
@@ -4090,7 +4091,7 @@ async function processRegistrationResult(match, resourceId, asOfMs = Date.now(),
   if (ok && value) await capiSend('Purchase', { ...args, eventId: `se-${resourceId}-p` });
 
   if (ok) {
-    sentMap[resourceId] = new Date().toISOString();
+    sentMap[resourceId] = { at: new Date().toISOString(), created: rr.created };
     const keys = Object.keys(sentMap);
     if (keys.length > 800) for (const k of keys.slice(0, keys.length - 800)) delete sentMap[k];
     await kvSet('sewh:sent', sentMap);
@@ -4321,6 +4322,40 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
     }
     if (sent) { const st = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 }; st.capiSent += sent; await kvSet('sewh:stats', st); }
     res.json({ ok: true, checked: candidates.length, alreadySent: candidates.length - missing.length, missing: missing.length, processed: batch.length, sentToMeta: sent, remaining: Math.max(0, missing.length - batch.length), items });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Reconciliation: Meta events sent (total/today/week) vs SportsEngine
+// registrations in the same windows — equal numbers = healthy; the gap is
+// what the cross-check should recover.
+app.get('/api/webhooks/reconcile', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+  try {
+    const sentMap = (await kvGet('sewh:sent')) || {};
+    const today = store.todayCDT();
+    const weekStart = store.toCDTDate(new Date(Date.now() - 6 * 86400000).toISOString());
+    let sentTotal = 0, sentToday = 0, sentWeek = 0;
+    for (const v of Object.values(sentMap)) {
+      sentTotal++;
+      // reconcile by REGISTRATION date (created); legacy entries only know send time
+      const day = store.toCDTDate(v?.created || v?.at || v);
+      if (day === today) sentToday++;
+      if (day >= weekStart) sentWeek++;
+    }
+    // SportsEngine side: daily registration counts from the store
+    let seToday = 0, seWeek = 0;
+    const daily = store.IS_CONVEX
+      ? await store.convexQuery('reports:reportDaily', { fromDate: weekStart })
+      : store.dailyStats(await store.load(), { fromDate: weekStart });
+    for (const r of (daily || [])) {
+      if (r.date === today) seToday += r.total;
+      if (r.date >= weekStart) seWeek += r.total;
+    }
+    res.json({
+      sent: { total: sentTotal, today: sentToday, week: sentWeek },
+      se: { today: seToday, week: seWeek },
+      missing: { today: Math.max(0, seToday - sentToday), week: Math.max(0, seWeek - sentWeek) },
+      windows: { today, weekStart },
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
