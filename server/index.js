@@ -4147,8 +4147,8 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
       resultCreated: outcome.resultCreated || null, contactMasked: outcome.contactMasked || null,
       hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
       value: outcome.value || null, capiSent: !!outcome.capiSent,
-      sample: JSON.stringify(body).slice(0, 4000) || '(empty body)',
-    }, 200);
+      sample: JSON.stringify(body).slice(0, 1200) || '(empty body)',
+    }, 400);
 
     // Silent-breakage guard: enrichment failures (e.g. an SE schema change)
     // email the owner — at most once per 6h — instead of waiting to be noticed.
@@ -4256,6 +4256,55 @@ app.get('/api/cron/daily', async (req, res) => {
   res.json({ ok: true, ...out });
 });
 
+// 7-day cross-check: walk OUR STORE's recent registrations (independent of
+// webhook history), find any not yet forwarded to Meta, enrich + send them,
+// and record each find as an 'audit.7d' row in the log.
+app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+  try {
+    const cutoff = Date.now() - 7 * 86400000;
+    const db = await store.load();
+    let candidates = [];
+    if (!store.IS_CONVEX) {
+      candidates = db.results.filter(r => r.created && new Date(r.created).getTime() >= cutoff)
+        .map(r => ({ id: String(r.id), created: r.created }));
+    } else {
+      // Convex: scan only actively-selling events (open status) to stay in budget
+      const openEvents = Object.values(db.events).filter(e => e.status === 1).slice(0, 25);
+      for (const ev of openEvents) {
+        try {
+          const rows = await store.convexQuery('reports:resultsByEvent', { eventId: String(ev.id) });
+          for (const r of (rows || [])) if (r.created && new Date(r.created).getTime() >= cutoff) candidates.push({ id: String(r.id), created: r.created });
+        } catch {}
+      }
+    }
+    const sentMap = (await kvGet('sewh:sent')) || {};
+    const missing = candidates.filter(c => !sentMap[c.id]);
+    const limit = Math.min(Number(req.query.limit) || 10, 15);
+    const batch = missing.slice(0, limit);
+    let sent = 0;
+    const cfg = (await orgTrackingAll())['midwest-3on3'] || null;
+    for (const m of batch) {
+      let outcome;
+      try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000); }
+      catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100) }; }
+      if (outcome.capiSent) sent++;
+      await appendCapped('sewh:recent', {
+        at: new Date().toISOString(), accountKey: 'midwest-3on3', keyOk: true,
+        type: 'audit.7d', resourceId: m.id,
+        decision: outcome.capiSent ? '🟢 AUDIT: missed sale found → sent to Meta' : 'audit: ' + (outcome.decision || '?'),
+        reason: outcome.reason || 'found by 7-day store cross-check (no webhook had forwarded it)',
+        eventId: outcome.eventId || null, eventName: outcome.eventName || null,
+        resultCreated: outcome.resultCreated || m.created, contactMasked: outcome.contactMasked || null,
+        hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
+        value: outcome.value || null, capiSent: !!outcome.capiSent,
+        sample: '(store audit — no webhook payload)',
+      }, 400);
+    }
+    if (sent) { const st = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 }; st.capiSent += sent; await kvSet('sewh:stats', st); }
+    res.json({ ok: true, checked: candidates.length, alreadySent: candidates.length - missing.length, missing: missing.length, processed: batch.length, sentToMeta: sent, remaining: Math.max(0, missing.length - batch.length) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Webhook inspector — every recorded delivery with raw payloads.
 // Platform roles see everything; a company admin sees their own org's.
 app.get('/api/webhooks/deliveries', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
@@ -4263,7 +4312,9 @@ app.get('/api/webhooks/deliveries', auth.requireAuth, auth.requireRole('admin'),
   const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
   const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet('sewh:recent')]);
   const rows = (recent || []).filter(r => platform || r.accountKey === me.accountKey);
-  res.json({ stats: stats || { total: 0, capiSent: 0 }, deliveries: rows, scope: platform ? 'all' : me.accountKey });
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  res.json({ stats: stats || { total: 0, capiSent: 0 }, deliveries: rows.slice(offset, offset + limit), totalStored: rows.length, offset, scope: platform ? 'all' : me.accountKey });
 });
 
 // Per-org tracking settings — pixel/GA4/CAPI + webhook URL. Tracking is an

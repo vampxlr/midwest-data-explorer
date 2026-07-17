@@ -192,6 +192,8 @@ export const api = {
   getSeWebhooks:   ()     => axios.get(`${BASE}/admin/sewebhooks`),
   getWebhookDeliveries: () => axios.get(`${BASE}/webhooks/deliveries`),
   reprocessWebhooks:    () => axios.post(`${BASE}/webhooks/reprocess`),
+  auditWebhooks:        () => axios.post(`${BASE}/webhooks/audit7d`),
+  getWebhookPage:  (offset) => axios.get(`${BASE}/webhooks/deliveries?offset=${offset}&limit=50`),
   getCompanyTracking:  ()     => axios.get(`${BASE}/company/tracking`),
   saveCompanyTracking: (body) => axios.put(`${BASE}/company/tracking`, body),
   saveGrowth:      (body) => axios.put(`${BASE}/admin/growth`, body),

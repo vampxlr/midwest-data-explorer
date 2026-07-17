@@ -13,9 +13,13 @@ export default function WebhookInspector({ compactTitle }) {
 
   async function load() {
     setRefreshing(true);
-    try { setD((await api.getWebhookDeliveries()).data); }
+    try { setD((await api.getWebhookPage(0)).data); }
     catch {}
     finally { setRefreshing(false); }
+  }
+  async function loadMore() {
+    const r = await api.getWebhookPage(d.deliveries.length).catch(() => null);
+    if (r) setD(x => ({ ...r.data, deliveries: [...x.deliveries, ...r.data.deliveries] }));
   }
   useEffect(() => { load(); }, []);
 
@@ -47,6 +51,21 @@ export default function WebhookInspector({ compactTitle }) {
                 load();
               }}>♻ Retry failed</button>
           )}
+          <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }} disabled={refreshing}
+            title="Cross-check the last 7 days of registrations in the store against what was forwarded to Meta; sends anything missed"
+            onClick={async () => {
+              setRefreshing(true);
+              try {
+                let sent = 0, found = 0, checked = 0, guard = 0;
+                while (guard++ < 10) {
+                  const r = await api.auditWebhooks();
+                  checked = r.data.checked; found += r.data.processed; sent += r.data.sentToMeta;
+                  if (!r.data.remaining) break;
+                }
+                toast.success(`Audited ${checked} registrations — ${found} not previously forwarded, ${sent} sent to Meta now`, { duration: 8000 });
+              } catch (e) { toast.error(e.response?.data?.error || 'Audit failed'); }
+              load();
+            }}>🔍 Cross-check 7 days</button>
           <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }}
             onClick={load} disabled={refreshing}>{refreshing ? '⏳' : '🔄 Refresh'}</button>
         </span>
@@ -109,6 +128,11 @@ export default function WebhookInspector({ compactTitle }) {
             </details>
           ))}
         </div>
+      )}
+      {d.totalStored > deliveries.length && (
+        <button className="btn-secondary" style={{ width: '100%', marginTop: 8 }} onClick={loadMore}>
+          Show more ({deliveries.length} of {d.totalStored} stored)
+        </button>
       )}
     </div>
   );
