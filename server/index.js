@@ -4362,6 +4362,45 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Store registrations NEVER sent to Meta — the browsable gap list.
+// Same candidate scan as the audit, no sends; the Cross-check button sends them.
+app.get('/api/webhooks/missing', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+  try {
+    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 60);
+    const cutoff = Date.now() - days * 86400000;
+    const db = await store.load();
+    let candidates = [];
+    if (!store.IS_CONVEX) {
+      candidates = db.results.filter(r => r.created && new Date(r.created).getTime() >= cutoff)
+        .map(r => ({ id: String(r.id), created: r.created, email: r.email || null, eventName: r.eventName || null }));
+    } else {
+      const openEvents = Object.values(db.events).filter(e => e.status === 1).slice(0, 120);
+      for (const ev of openEvents) {
+        try {
+          const rows = await store.convexQuery('reports:resultsByEvent', { eventId: String(ev.id) });
+          for (const r of (rows || [])) if (r.created && new Date(r.created).getTime() >= cutoff)
+            candidates.push({ id: String(r.id), created: r.created, email: r.email || null, eventName: r.eventName || ev.name || null });
+        } catch {}
+      }
+    }
+    const ledger = (await kvGet('sewh:sent')) || {};
+    const missing = candidates.filter(c => !ledger[c.id])
+      .sort((a, b) => String(b.created).localeCompare(String(a.created)));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
+    res.json({
+      stats, totalStored: missing.length, offset, inStore: candidates.length,
+      deliveries: missing.slice(offset, offset + 50).map(m => ({
+        at: m.created, type: 'never-sent', resourceId: m.id, capiSent: false, keyOk: true,
+        hasEmail: !!m.email, contactMasked: m.email ? String(m.email).replace(/^(.).*(@.*)$/, '$1***$2') : null,
+        decision: 'in store, never forwarded to Meta',
+        reason: m.email ? 'run 🔍 Cross-check to send (if within Meta 7-day window)' : 'no email in store row — purge-reload this event to refresh answers',
+        eventName: m.eventName, resultCreated: m.created, sample: '(store row — no webhook payload)',
+      })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // The forwarded list — the send ledger, enriched from the logs where possible
 app.get('/api/webhooks/forwarded', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
   const [ledger, recent, auditRows] = await Promise.all([kvGet('sewh:sent'), kvGet('sewh:recent'), kvGet('sewh:audit')]);
@@ -4405,11 +4444,31 @@ app.get('/api/webhooks/reconcile', auth.requireAuth, auth.requireRole('admin'), 
       if (r.date === today) seToday += r.total;
       if (r.date >= weekStart) seWeek += r.total;
     }
+    // Last 7 weeks: store registrations vs Meta sends per 7-day bucket
+    const w7Start = store.toCDTDate(new Date(Date.now() - 48 * 86400000).toISOString());
+    const daily7w = store.IS_CONVEX
+      ? await store.convexQuery('reports:reportDaily', { fromDate: w7Start })
+      : store.dailyStats(await store.load(), { fromDate: w7Start });
+    const weekOf = (day) => {
+      const idx = Math.floor((new Date(today) - new Date(day)) / (7 * 86400000));
+      return Math.min(Math.max(idx, 0), 6);
+    };
+    const weeks = Array.from({ length: 7 }, (_, i) => ({
+      start: store.toCDTDate(new Date(Date.now() - (i * 7 + 6) * 86400000).toISOString()),
+      end: store.toCDTDate(new Date(Date.now() - i * 7 * 86400000).toISOString()),
+      store: 0, sent: 0,
+    }));
+    for (const r of (daily7w || [])) { const i = weekOf(r.date); if (weeks[i]) weeks[i].store += r.total; }
+    for (const v of Object.values(sentMap)) {
+      const day = store.toCDTDate(v?.created || v?.at || v);
+      if (day >= w7Start) { const i = weekOf(day); if (weeks[i]) weeks[i].sent++; }
+    }
     res.json({
       sent: { total: sentTotal, today: sentToday, week: sentWeek },
       se: { today: seToday, week: seWeek },
       missing: { today: Math.max(0, seToday - sentToday), week: Math.max(0, seWeek - sentWeek) },
       windows: { today, weekStart },
+      weeks,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

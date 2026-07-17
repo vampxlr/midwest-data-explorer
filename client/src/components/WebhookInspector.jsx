@@ -83,7 +83,11 @@ export default function WebhookInspector({ compactTitle }) {
 
   async function load(p = page, so = sentOnly, v = view) {
     setRefreshing(true);
-    try { setD(v === 'sent' ? (await api.getForwardedPage(p * 50)).data : (await api.getWebhookPage(p * 50, so, v)).data); }
+    try {
+      setD(v === 'sent' ? (await api.getForwardedPage(p * 50)).data
+        : v === 'missing' ? (await api.getMissingPage(p * 50, auditDays)).data
+        : (await api.getWebhookPage(p * 50, so, v)).data);
+    }
     catch {}
     finally { setRefreshing(false); }
   }
@@ -186,9 +190,40 @@ export default function WebhookInspector({ compactTitle }) {
         </div>
       )}
 
+      {/* Last 7 weeks: store registrations vs sends — should match week by week */}
+      {rec?.weeks && (
+        <details style={{ marginBottom: 12, fontSize: 12 }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-3)', fontWeight: 700 }}>📅 Last 7 weeks — registrations vs sent to Meta</summary>
+          <div style={{ overflowX: 'auto', marginTop: 8 }}>
+            <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: 420 }}>
+              <thead><tr style={{ color: 'var(--text-4)', fontSize: 10.5, textTransform: 'uppercase', textAlign: 'left' }}>
+                <th style={{ padding: '4px 12px 4px 0' }}>Week</th><th style={{ padding: '4px 12px', textAlign: 'right' }}>Registrations</th>
+                <th style={{ padding: '4px 12px', textAlign: 'right' }}>Sent to Meta</th><th style={{ padding: '4px 12px', textAlign: 'right' }}>Gap</th>
+              </tr></thead>
+              <tbody>
+                {rec.weeks.map((w, i) => {
+                  const gap = Math.max(0, w.store - w.sent);
+                  return (
+                    <tr key={i} style={{ borderTop: '1px solid var(--border-sub)' }}>
+                      <td style={{ padding: '5px 12px 5px 0', whiteSpace: 'nowrap' }}>{w.start} → {w.end}{i === 0 && ' (this week)'}</td>
+                      <td style={{ padding: '5px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{w.store}</td>
+                      <td style={{ padding: '5px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{w.sent}</td>
+                      <td style={{ padding: '5px 12px', textAlign: 'right', fontWeight: 700, color: gap > 0 ? '#ef4444' : 'var(--viz-up)' }}>{gap > 0 ? gap : '✓'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 6 }}>
+            Gaps older than 7 days can't be sent (Meta's backfill limit) — the pipeline went live Jul 12, so earlier weeks will always show a gap.
+          </div>
+        </details>
+      )}
+
       {/* Webhook deliveries vs cross-check findings — separate logs */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        {[['hooks', '📨 Webhook deliveries'], ['audit', '🔍 Cross-check findings'], ['sent', '✅ Forwarded to Meta']].map(([v, l]) => (
+        {[['hooks', '📨 Webhook deliveries'], ['audit', '🔍 Cross-check findings'], ['sent', '✅ Forwarded to Meta'], ['missing', '🕳 Not sent']].map(([v, l]) => (
           <button key={v} onClick={() => { setView(v); setPage(0); }} style={{
             padding: '4px 14px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
             border: view === v ? '1px solid var(--accent-light)' : '1px solid var(--border)',
