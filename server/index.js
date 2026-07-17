@@ -4290,14 +4290,14 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
     let candidates = [];
     if (!store.IS_CONVEX) {
       candidates = db.results.filter(r => r.created && new Date(r.created).getTime() >= cutoff)
-        .map(r => ({ id: String(r.id), created: r.created }));
+        .map(r => ({ id: String(r.id), created: r.created, email: r.email || null, eventId: String(r.eventId || ''), eventName: r.eventName || null }));
     } else {
       // Convex: scan only actively-selling events (open status) to stay in budget
       const openEvents = Object.values(db.events).filter(e => e.status === 1).slice(0, 25);
       for (const ev of openEvents) {
         try {
           const rows = await store.convexQuery('reports:resultsByEvent', { eventId: String(ev.id) });
-          for (const r of (rows || [])) if (r.created && new Date(r.created).getTime() >= cutoff) candidates.push({ id: String(r.id), created: r.created });
+          for (const r of (rows || [])) if (r.created && new Date(r.created).getTime() >= cutoff) candidates.push({ id: String(r.id), created: r.created, email: r.email || null, eventId: String(r.eventId || ev.id), eventName: r.eventName || ev.name || null });
         } catch {}
       }
     }
@@ -4308,17 +4308,29 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
     let sent = 0;
     const items = [];
     const cfg = (await orgTrackingAll())['midwest-3on3'] || null;
+    const sentLedger = sentMap;
     for (const m of batch) {
+      // Enrich from OUR STORE (smart-update keeps it fresh) — no SE calls
       let outcome;
-      await new Promise(r => setTimeout(r, 400));   // SE 500s under burst — pace the lookups
-      if (new Date(m.created).getTime() < metaLimit) {
-        try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000, { send: false }); }
-        catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100), resultCreated: m.created }; }
-      } else
-      try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000); }
-      catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100) }; }
+      const tooOld = new Date(m.created).getTime() < metaLimit;
+      if (!m.email) {
+        outcome = { decision: 'found unsent — no email in store row', reason: 'store row has no contact; run a purge-reload for this event to refresh answers', eventId: m.eventId, eventName: m.eventName, resultCreated: m.created };
+      } else if (tooOld) {
+        outcome = { decision: 'found unsent — outside Meta 7-day backfill window (enriched from store, not sent)', reason: 'Meta rejects conversions older than 7 days', eventId: m.eventId, eventName: m.eventName, resultCreated: m.created, contactMasked: maskEmail(m.email), hasEmail: true };
+      } else {
+        let value = null;
+        const dl = ((await kvGet('deadlines:all')) || {})[m.eventId];
+        if (dl) { const day = String(m.created).slice(0, 10); value = (dl.earlyBird && day <= dl.earlyBird) ? (dl.earlyBirdPrice || dl.finalPrice) : (dl.finalPrice || dl.earlyBirdPrice); }
+        const override = cfg?.metaPixelId && cfg?.capiTokenEnc ? { pixelId: cfg.metaPixelId, token: decryptSecret(cfg.capiTokenEnc) } : null;
+        const eventTimeSec = Math.min(Math.floor(new Date(m.created).getTime() / 1000), Math.floor(Date.now() / 1000));
+        const args = { email: m.email, value, eventId: 'se-' + m.id, eventTimeSec, ...(override || {}) };
+        const ok = await capiSend('CompleteRegistration', args);
+        if (ok && value) await capiSend('Purchase', { ...args, eventId: 'se-' + m.id + '-p' });
+        if (ok) { sentLedger[m.id] = { at: new Date().toISOString(), created: m.created }; await kvSet('sewh:sent', sentLedger); }
+        outcome = { decision: ok ? '🟢 AUDIT: missed sale found in store → sent to Meta' : 'store find, but CAPI send failed', reason: ok ? 'enriched from the local store (no SE call needed)' : (capiSend.lastError || 'CAPI not configured'), eventId: m.eventId, eventName: m.eventName, resultCreated: m.created, contactMasked: maskEmail(m.email), hasEmail: true, value, capiSent: ok };
+      }
       if (outcome.capiSent) sent++;
-      items.push({ id: m.id, decision: outcome.decision || '?', eventName: outcome.eventName || null, value: outcome.value || null, capiSent: !!outcome.capiSent, contactMasked: outcome.contactMasked || null });
+      items.push({ id: m.id, decision: outcome.decision, eventName: outcome.eventName || null, value: outcome.value || null, capiSent: !!outcome.capiSent, contactMasked: outcome.contactMasked || null });
       await appendCapped('sewh:audit', {
         at: new Date().toISOString(), accountKey: 'midwest-3on3', keyOk: true,
         type: 'audit.' + days + 'd', resourceId: m.id,
