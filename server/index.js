@@ -4195,6 +4195,7 @@ async function drainFailedDeliveries(limit, accountFilter = null) {
   const targets = all.slice(0, Math.min(Math.max(limit || 8, 1), 20));
   const seen = new Set();
   let sent = 0, done = 0;
+  const items = [];
   for (const r of targets) {
     if (seen.has(String(r.resourceId))) { r.decision = 'duplicate delivery of a retried result'; r.reason = 'same resourceId reprocessed above'; continue; }
     seen.add(String(r.resourceId));
@@ -4211,6 +4212,7 @@ async function drainFailedDeliveries(limit, accountFilter = null) {
       });
       if (outcome.capiSent) sent++;
       done++;
+      items.push({ id: r.resourceId, decision: outcome.decision || '?', eventName: outcome.eventName || null, value: outcome.value || null, capiSent: !!outcome.capiSent, contactMasked: outcome.contactMasked || null });
     } catch (err) {
       r.decision = `enrichment failed: ${err.message.slice(0, 120)}`;
       r.retriedAt = new Date().toISOString();
@@ -4224,7 +4226,7 @@ async function drainFailedDeliveries(limit, accountFilter = null) {
       await kvSet('sewh:stats', stats);
     }
   }
-  return { retried: done, uniqueResults: seen.size, sentToMeta: sent, remaining: Math.max(0, all.length - targets.length) };
+  return { retried: done, uniqueResults: seen.size, sentToMeta: sent, remaining: Math.max(0, all.length - targets.length), totalFailed: all.length, items };
 }
 
 app.post('/api/webhooks/reprocess', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
@@ -4282,12 +4284,14 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
     const limit = Math.min(Number(req.query.limit) || 10, 15);
     const batch = missing.slice(0, limit);
     let sent = 0;
+    const items = [];
     const cfg = (await orgTrackingAll())['midwest-3on3'] || null;
     for (const m of batch) {
       let outcome;
       try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000); }
       catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100) }; }
       if (outcome.capiSent) sent++;
+      items.push({ id: m.id, decision: outcome.decision || '?', eventName: outcome.eventName || null, value: outcome.value || null, capiSent: !!outcome.capiSent, contactMasked: outcome.contactMasked || null });
       await appendCapped('sewh:recent', {
         at: new Date().toISOString(), accountKey: 'midwest-3on3', keyOk: true,
         type: 'audit.7d', resourceId: m.id,
@@ -4301,7 +4305,7 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
       }, 400);
     }
     if (sent) { const st = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 }; st.capiSent += sent; await kvSet('sewh:stats', st); }
-    res.json({ ok: true, checked: candidates.length, alreadySent: candidates.length - missing.length, missing: missing.length, processed: batch.length, sentToMeta: sent, remaining: Math.max(0, missing.length - batch.length) });
+    res.json({ ok: true, checked: candidates.length, alreadySent: candidates.length - missing.length, missing: missing.length, processed: batch.length, sentToMeta: sent, remaining: Math.max(0, missing.length - batch.length), items });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

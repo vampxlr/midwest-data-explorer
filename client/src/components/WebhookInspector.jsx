@@ -10,6 +10,69 @@ import { toast } from 'react-hot-toast';
 export default function WebhookInspector({ compactTitle }) {
   const [d, setD] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Cross-check progress: bar + console report, like the Smart Update panels
+  const [audit, setAudit] = useState(null); // {running, done, total, sent, log:[{ts,msg,level}]}
+  const auditLog = (msg, level = 'info') =>
+    setAudit(a => ({ ...a, log: [...(a?.log || []), { ts: new Date().toLocaleTimeString('en-US', { hour12: false }), msg, level }].slice(-200) }));
+
+  async function runAudit() {
+    setRefreshing(true);
+    setAudit({ running: true, done: 0, total: null, sent: 0, log: [] });
+    auditLog('🔍 Cross-check started — scanning the last 7 days of registrations in the store…');
+    try {
+      let done = 0, sent = 0, guard = 0;
+      while (guard++ < 25) {
+        const r = (await api.auditWebhooks()).data;
+        if (done === 0) {
+          auditLog(`Found ${r.checked} registrations in the window · ${r.alreadySent} already forwarded · ${r.missing + r.processed - r.processed} to verify`, 'info');
+        }
+        for (const it of (r.items || [])) {
+          auditLog(
+            `${it.capiSent ? '✓ SENT' : '↷'} ${it.eventName ? it.eventName.slice(0, 40) : 'result ' + it.id}${it.value ? ' · $' + it.value : ''}${it.contactMasked ? ' · ' + it.contactMasked : ''} — ${it.decision}`,
+            it.capiSent ? 'ok' : 'skip'
+          );
+        }
+        done += r.processed; sent += r.sentToMeta;
+        setAudit(a => ({ ...a, done, sent, total: done + r.remaining }));
+        if (!r.remaining) break;
+      }
+      auditLog(`════ DONE — ${done} verified · ${sent} sent to Meta ════`, sent ? 'ok' : 'info');
+      toast.success(`Cross-check done — ${sent} missed sale${sent === 1 ? '' : 's'} sent to Meta`, { duration: 8000 });
+    } catch (e) {
+      auditLog(`✗ ${e.response?.data?.error || e.message}`, 'error');
+      toast.error(e.response?.data?.error || 'Cross-check failed');
+    }
+    setAudit(a => ({ ...a, running: false }));
+    load();
+  }
+
+  // ♻ Retry failed — same panel, same console, driven by the retry engine
+  async function runRetry() {
+    setRefreshing(true);
+    setAudit({ running: true, done: 0, total: null, sent: 0, log: [] });
+    auditLog('♻ Retrying failed deliveries…');
+    try {
+      let done = 0, sent = 0, guard = 0;
+      while (guard++ < 25) {
+        const r = (await api.reprocessWebhooks()).data;
+        if (done === 0) auditLog(`${r.totalFailed ?? (r.retried + r.remaining)} failed deliveries queued for retry`, 'info');
+        for (const it of (r.items || [])) {
+          auditLog(`${it.capiSent ? '✓ SENT' : '↷'} ${it.eventName ? it.eventName.slice(0, 40) : 'result ' + it.id}${it.value ? ' · $' + it.value : ''}${it.contactMasked ? ' · ' + it.contactMasked : ''} — ${it.decision}`,
+            it.capiSent ? 'ok' : 'skip');
+        }
+        done += r.retried; sent += r.sentToMeta;
+        setAudit(a => ({ ...a, done, sent, total: done + r.remaining }));
+        if (!r.remaining) break;
+      }
+      auditLog(`════ DONE — ${done} retried · ${sent} sent to Meta ════`, sent ? 'ok' : 'info');
+      toast.success(`Retried ${done} — ${sent} sent to Meta`, { duration: 6000 });
+    } catch (e) {
+      auditLog(`✗ ${e.response?.data?.error || e.message}`, 'error');
+      toast.error(e.response?.data?.error || 'Retry failed');
+    }
+    setAudit(a => ({ ...a, running: false }));
+    load();
+  }
 
   async function load() {
     setRefreshing(true);
@@ -25,6 +88,7 @@ export default function WebhookInspector({ compactTitle }) {
 
   if (!d) return <div className="no-data" style={{ padding: 14 }}>Loading webhook deliveries…</div>;
   const { stats, deliveries } = d;
+  const failedCount = deliveries.filter(r => /enrichment failed|not found in SportsEngine/.test(r.decision || '')).length;
 
   return (
     <div>
@@ -36,40 +100,54 @@ export default function WebhookInspector({ compactTitle }) {
           {d?.deliveries?.some(r => /enrichment failed|not found in SportsEngine/.test(r.decision || '')) && (
             <button className="btn-primary" style={{ padding: '4px 12px', fontSize: 12 }} disabled={refreshing}
               title="Re-run enrichment for every failed delivery (freshness judged at original delivery time)"
-              onClick={async () => {
-                setRefreshing(true);
-                try {
-                  let total = 0, sent = 0, guard = 0;
-                  // batched server-side (Vercel time limit) — drain until done
-                  while (guard++ < 12) {
-                    const r = await api.reprocessWebhooks();
-                    total += r.data.retried; sent += r.data.sentToMeta;
-                    if (!r.data.remaining) break;
-                  }
-                  toast.success(`Retried ${total} deliveries — ${sent} sent to Meta`, { duration: 6000 });
-                } catch (e) { toast.error(e.response?.data?.error || 'Retry failed'); }
-                load();
-              }}>♻ Retry failed</button>
+              onClick={runRetry}>♻ Retry failed{failedCount ? ` (${failedCount})` : ''}</button>
           )}
           <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }} disabled={refreshing}
             title="Cross-check the last 7 days of registrations in the store against what was forwarded to Meta; sends anything missed"
-            onClick={async () => {
-              setRefreshing(true);
-              try {
-                let sent = 0, found = 0, checked = 0, guard = 0;
-                while (guard++ < 10) {
-                  const r = await api.auditWebhooks();
-                  checked = r.data.checked; found += r.data.processed; sent += r.data.sentToMeta;
-                  if (!r.data.remaining) break;
-                }
-                toast.success(`Audited ${checked} registrations — ${found} not previously forwarded, ${sent} sent to Meta now`, { duration: 8000 });
-              } catch (e) { toast.error(e.response?.data?.error || 'Audit failed'); }
-              load();
-            }}>🔍 Cross-check 7 days</button>
+            onClick={runAudit}>{audit?.running ? '⏳ Cross-checking…' : '🔍 Cross-check 7 days'}</button>
           <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }}
             onClick={load} disabled={refreshing}>{refreshing ? '⏳' : '🔄 Refresh'}</button>
         </span>
       </div>
+      {/* Cross-check progress bar + console report */}
+      {audit && (
+        <div style={{ marginBottom: 12 }}>
+          <style>{`@keyframes wiSlide { from { background-position: 0 0; } to { background-position: 44px 0; } }`}</style>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <div style={{ flex: 1, background: 'var(--surface-1)', borderRadius: 8, height: 8, overflow: 'hidden' }}>
+              {audit.running && !audit.total ? (
+                <div style={{ width: '100%', height: '100%', opacity: 0.85,
+                  background: 'repeating-linear-gradient(45deg, var(--accent-2) 0 12px, transparent 12px 22px)',
+                  backgroundSize: '44px 100%', animation: 'wiSlide 0.9s linear infinite' }} />
+              ) : (
+                <div style={{ width: `${audit.total ? Math.round((audit.done / audit.total) * 100) : (audit.running ? 0 : 100)}%`,
+                  height: '100%', borderRadius: 8, transition: 'width 0.4s ease',
+                  background: audit.running ? 'var(--viz-1)' : 'var(--viz-up)' }} />
+              )}
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap',
+              color: audit.running ? 'var(--viz-1)' : 'var(--viz-up)' }}>
+              {audit.running
+                ? (audit.total ? `${audit.done}/${audit.total} verified` : 'Scanning store…')
+                : `Done — ${audit.sent} sent to Meta`}
+            </span>
+          </div>
+          <div style={{
+            background: '#080a0f', border: '1px solid var(--surface-1)', borderRadius: 8,
+            padding: '10px 12px', maxHeight: 220, overflowY: 'auto',
+            fontFamily: '"Cascadia Code","Fira Code",Consolas,monospace', fontSize: 11.5, lineHeight: 1.7,
+          }}>
+            {audit.log.map((l, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10 }}>
+                <span style={{ color: '#1e3a5f', flexShrink: 0, minWidth: 56 }}>{l.ts}</span>
+                <span style={{ color: l.level === 'ok' ? '#22c55e' : l.level === 'error' ? '#ef4444' : l.level === 'skip' ? '#8b93a3' : '#c8ceda', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{l.msg}</span>
+              </div>
+            ))}
+            {audit.running && <div style={{ color: '#60a5fa' }}>▋</div>}
+          </div>
+        </div>
+      )}
+
       <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
         Received: <b>{stats.total || 0}</b> · forwarded to Meta: <b>{stats.capiSent || 0}</b>
         {stats.rejected > 0 && <> · <span style={{ color: '#f59e0b' }}>bad/missing key: <b>{stats.rejected}</b></span></>}
