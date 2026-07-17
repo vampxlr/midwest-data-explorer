@@ -83,7 +83,7 @@ export default function WebhookInspector({ compactTitle }) {
 
   async function load(p = page, so = sentOnly, v = view) {
     setRefreshing(true);
-    try { setD((await api.getWebhookPage(p * 50, so, v)).data); }
+    try { setD(v === 'sent' ? (await api.getForwardedPage(p * 50)).data : (await api.getWebhookPage(p * 50, so, v)).data); }
     catch {}
     finally { setRefreshing(false); }
   }
@@ -188,7 +188,7 @@ export default function WebhookInspector({ compactTitle }) {
 
       {/* Webhook deliveries vs cross-check findings — separate logs */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-        {[['hooks', '📨 Webhook deliveries'], ['audit', '🔍 Cross-check findings']].map(([v, l]) => (
+        {[['hooks', '📨 Webhook deliveries'], ['audit', '🔍 Cross-check findings'], ['sent', '✅ Forwarded to Meta']].map(([v, l]) => (
           <button key={v} onClick={() => { setView(v); setPage(0); }} style={{
             padding: '4px 14px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
             border: view === v ? '1px solid var(--accent-light)' : '1px solid var(--border)',

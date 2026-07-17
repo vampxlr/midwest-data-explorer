@@ -4348,6 +4348,23 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// The forwarded list — the send ledger, enriched from the logs where possible
+app.get('/api/webhooks/forwarded', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+  const [ledger, recent, auditRows] = await Promise.all([kvGet('sewh:sent'), kvGet('sewh:recent'), kvGet('sewh:audit')]);
+  const detail = {};
+  for (const r of [...(auditRows || []), ...(recent || [])]) if (r.resourceId && r.capiSent) detail[String(r.resourceId)] = r;
+  const rows = Object.entries(ledger || {}).map(([id, v]) => ({
+    resourceId: id, sentAt: v?.at || v, registeredAt: v?.created || null,
+    eventName: detail[id]?.eventName || null, value: detail[id]?.value || null, contactMasked: detail[id]?.contactMasked || null,
+  })).sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt)));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  res.json({ total: rows.length, offset, deliveries: rows.slice(offset, offset + 50).map(r => ({
+    at: r.sentAt, type: 'forwarded', resourceId: r.resourceId, capiSent: true, keyOk: true, hasEmail: !!r.contactMasked,
+    decision: 'forwarded to Meta', reason: null, eventName: r.eventName, value: r.value, contactMasked: r.contactMasked,
+    resultCreated: r.registeredAt, sample: '(send ledger entry)',
+  })), totalStored: rows.length });
+});
+
 // Reconciliation: Meta events sent (total/today/week) vs SportsEngine
 // registrations in the same windows — equal numbers = healthy; the gap is
 // what the cross-check should recover.
