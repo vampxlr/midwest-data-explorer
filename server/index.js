@@ -55,6 +55,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
+  '/api/cron/daily',          // Vercel cron (gated by CRON_SECRET when set)
 ]);
 app.use((req, res, next) => {
   // /api/webhooks/* is public by prefix — SE signs nothing (we gate with a key
@@ -4166,6 +4167,13 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
     if (!match) stats.rejected = (stats.rejected || 0) + 1;
     stats.lastAt = new Date().toISOString();
     await kvSet('sewh:stats', stats);
+
+    // Self-healing: each healthy delivery quietly retries up to 2 older failed
+    // ones — once a breakage is fixed, the backlog drains without anyone
+    // pressing Retry. (Runs before the response; Vercel kills post-response work.)
+    if (match && !/enrichment failed/.test(outcome.decision || '')) {
+      try { await drainFailedDeliveries(2); } catch {}
+    }
     res.json({ ok: true });
   } catch (err) {
     console.warn('[sewh] failed:', err.message);
@@ -4176,47 +4184,76 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
 // Reprocess failed deliveries (e.g. after an SE schema change broke
 // enrichment): re-runs each failed registrationResult with the freshness
 // window judged at its original delivery time, updates the rows in place.
+// Shared retry engine: re-run failed deliveries (freshness judged at original
+// delivery time), update rows in place. Used by the ♻ Retry button, the
+// per-webhook self-heal, and the daily cron.
+async function drainFailedDeliveries(limit, accountFilter = null) {
+  const recent = (await kvGet('sewh:recent')) || [];
+  const all = recent.filter(r =>
+    /enrichment failed|not found in SportsEngine/.test(r.decision || '') && r.resourceId &&
+    (!accountFilter || r.accountKey === accountFilter));
+  const targets = all.slice(0, Math.min(Math.max(limit || 8, 1), 20));
+  const seen = new Set();
+  let sent = 0, done = 0;
+  for (const r of targets) {
+    if (seen.has(String(r.resourceId))) { r.decision = 'duplicate delivery of a retried result'; r.reason = 'same resourceId reprocessed above'; continue; }
+    seen.add(String(r.resourceId));
+    const match = { accountKey: r.accountKey || 'midwest-3on3', cfg: (await orgTrackingAll())[r.accountKey || 'midwest-3on3'] || null };
+    try {
+      const outcome = await processRegistrationResult(match, String(r.resourceId), new Date(r.at).getTime());
+      Object.assign(r, {
+        decision: outcome.decision, reason: outcome.reason || null,
+        eventId: outcome.eventId || null, eventName: outcome.eventName || null,
+        resultCreated: outcome.resultCreated || null, contactMasked: outcome.contactMasked || null,
+        hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
+        value: outcome.value || null, capiSent: !!outcome.capiSent,
+        retriedAt: new Date().toISOString(),
+      });
+      if (outcome.capiSent) sent++;
+      done++;
+    } catch (err) {
+      r.decision = `enrichment failed: ${err.message.slice(0, 120)}`;
+      r.retriedAt = new Date().toISOString();
+    }
+  }
+  if (targets.length) {
+    await kvSet('sewh:recent', recent);
+    if (sent) {
+      const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
+      stats.capiSent += sent;
+      await kvSet('sewh:stats', stats);
+    }
+  }
+  return { retried: done, uniqueResults: seen.size, sentToMeta: sent, remaining: Math.max(0, all.length - targets.length) };
+}
+
 app.post('/api/webhooks/reprocess', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
   try {
     const me = await userStore.findById(req.user.id);
     const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
-    const recent = (await kvGet('sewh:recent')) || [];
-    const all = recent.filter(r =>
-      /enrichment failed|not found in SportsEngine/.test(r.decision || '') && r.resourceId &&
-      (platform || r.accountKey === me.accountKey));
-    // Batched: each SE lookup takes ~1-2s and Vercel caps the invocation —
-    // callers loop until remaining === 0.
-    const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 20);
-    const targets = all.slice(0, limit);
-    const seen = new Set();
-    let sent = 0, done = 0;
-    for (const r of targets) {
-      if (seen.has(String(r.resourceId))) { r.decision = 'duplicate delivery of a retried result'; r.reason = 'same resourceId reprocessed above'; continue; }
-      seen.add(String(r.resourceId));
-      const match = { accountKey: r.accountKey || 'midwest-3on3', cfg: (await orgTrackingAll())[r.accountKey || 'midwest-3on3'] || null };
-      try {
-        const outcome = await processRegistrationResult(match, String(r.resourceId), new Date(r.at).getTime());
-        Object.assign(r, {
-          decision: outcome.decision, reason: outcome.reason || null,
-          eventId: outcome.eventId || null, eventName: outcome.eventName || null,
-          resultCreated: outcome.resultCreated || null, contactMasked: outcome.contactMasked || null,
-          hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
-          value: outcome.value || null, capiSent: !!outcome.capiSent,
-          retriedAt: new Date().toISOString(),
-        });
-        if (outcome.capiSent) sent++;
-        done++;
-      } catch (err) {
-        r.decision = `enrichment failed: ${err.message.slice(0, 120)}`;
-        r.retriedAt = new Date().toISOString();
-      }
-    }
-    await kvSet('sewh:recent', recent);
-    const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
-    stats.capiSent += sent;
-    await kvSet('sewh:stats', stats);
-    res.json({ ok: true, retried: done, uniqueResults: seen.size, sentToMeta: sent, remaining: Math.max(0, all.length - targets.length) });
+    const out = await drainFailedDeliveries(Number(req.query.limit) || 8, platform ? null : me.accountKey);
+    res.json({ ok: true, ...out });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Daily cron (vercel.json, 09:00 UTC): retry any failed webhook deliveries and
+// refresh the Meta ads data so dashboards open warm. Vercel sends
+// Authorization: Bearer <CRON_SECRET> when that env var is set.
+app.get('/api/cron/daily', async (req, res) => {
+  if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: 'bad cron secret' });
+  }
+  const out = {};
+  try { out.webhookRetry = await drainFailedDeliveries(8); } catch (e) { out.webhookRetry = { error: e.message }; }
+  try {
+    // Self-call the ads sync with a short-lived internal admin token
+    const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
+    const tok = auth.signToken({ id: 'cron', username: 'cron', role: 'admin' });
+    const r = await axios.post(`${host}/api/ads/sync`, {}, { headers: { Authorization: `Bearer ${tok}` }, timeout: 45000 });
+    out.adsSync = r.data;
+  } catch (e) { out.adsSync = { error: e.response?.data?.error || e.message }; }
+  console.log('[cron] daily:', JSON.stringify(out).slice(0, 300));
+  res.json({ ok: true, ...out });
 });
 
 // Webhook inspector — every recorded delivery with raw payloads.

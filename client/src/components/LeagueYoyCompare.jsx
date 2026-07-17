@@ -113,6 +113,19 @@ function shiftDay(dateStr, delta) {
   return d.toISOString().slice(0, 10);
 }
 
+// 1-3 items per row — used by both the slot picker and the charts grid
+function ColsPicker({ label, value, onChange }) {
+  return (
+    <label style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:'var(--text-4)' }}>
+      {label}
+      <select value={value} onChange={e => onChange(Number(e.target.value))}
+        style={{ background:'var(--surface-1)', border:'1px solid var(--line)', color:'var(--text-1)', borderRadius:6, padding:'3px 6px', fontSize:11 }}>
+        {[1, 2, 3].map(n => <option key={n} value={n}>{n}</option>)}
+      </select>
+    </label>
+  );
+}
+
 function PairChart({ currentEv, priorEv, deadlines }) {
   const [seriesA, setSeriesA] = useState([]);
   const [seriesB, setSeriesB] = useState([]);
@@ -242,6 +255,11 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
   const [state, setState] = useState(loadSaved);
   const { count, slots, aiAssist } = state;
   const deadlineMap = useDeadlineMap();
+  // How many slots / charts per row (1-3), persisted per browser
+  const [slotCols, _setSlotCols] = useState(() => Number(localStorage.getItem('mw3-yoy-slot-cols')) || 3);
+  const [chartCols, _setChartCols] = useState(() => Number(localStorage.getItem('mw3-yoy-chart-cols')) || 3);
+  const setSlotCols  = (n) => { _setSlotCols(n);  try { localStorage.setItem('mw3-yoy-slot-cols', n); } catch {} };
+  const setChartCols = (n) => { _setChartCols(n); try { localStorage.setItem('mw3-yoy-chart-cols', n); } catch {} };
   const hydratedRef = React.useRef(false);
   const saveTimerRef = React.useRef(null);
 
@@ -416,15 +434,16 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
               {COUNT_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
+          <ColsPicker label="Per row:" value={slotCols} onChange={setSlotCols} />
         </div>
 
-        <div className="yoy-slot-grid">
+        <div className="yoy-slot-grid" style={{ gap:16, gridTemplateColumns:`repeat(${slotCols}, minmax(0, 1fr))` }}>
           {slots.map((slot, i) => {
             const compareOptions = compareOptionsFor(slot);
             return (
               <div key={i} style={{
                 display:'flex', flexDirection:'column', gap:8,
-                background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:'10px 12px',
+                background:'var(--surface-2)', border:'1px solid var(--line)', borderRadius:10, padding:'14px 16px',
               }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <span style={{ fontSize:10, color:'var(--text-4)', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.5px' }}>
@@ -461,9 +480,12 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         title="Comparison Charts"
         defaultOpen
         style={{ marginTop:16 }}
-        right={<DeadlineToggle />}
+        right={<>
+          <ColsPicker label="Per row" value={chartCols} onChange={setChartCols} />
+          <DeadlineToggle />
+        </>}
       >
-        <div className="grid-3">
+        <div style={{ display:'grid', gap:16, gridTemplateColumns:`repeat(${chartCols}, minmax(0, 1fr))` }}>
           {slots.map((slot, i) => {
             if (!slot.currentId || !slot.priorId) return null;
             const currentEv = eventById[slot.currentId];
