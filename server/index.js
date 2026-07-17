@@ -4293,7 +4293,7 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
         .map(r => ({ id: String(r.id), created: r.created, email: r.email || null, eventId: String(r.eventId || ''), eventName: r.eventName || null }));
     } else {
       // Convex: scan only actively-selling events (open status) to stay in budget
-      const openEvents = Object.values(db.events).filter(e => e.status === 1).slice(0, 25);
+      const openEvents = Object.values(db.events).filter(e => e.status === 1).slice(0, 120);
       for (const ev of openEvents) {
         try {
           const rows = await store.convexQuery('reports:resultsByEvent', { eventId: String(ev.id) });
@@ -4358,7 +4358,8 @@ app.get('/api/webhooks/forwarded', auth.requireAuth, auth.requireRole('admin'), 
     eventName: detail[id]?.eventName || null, value: detail[id]?.value || null, contactMasked: detail[id]?.contactMasked || null,
   })).sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt)));
   const offset = Math.max(0, Number(req.query.offset) || 0);
-  res.json({ total: rows.length, offset, deliveries: rows.slice(offset, offset + 50).map(r => ({
+  const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
+  res.json({ stats, total: rows.length, offset, deliveries: rows.slice(offset, offset + 50).map(r => ({
     at: r.sentAt, type: 'forwarded', resourceId: r.resourceId, capiSent: true, keyOk: true, hasEmail: !!r.contactMasked,
     decision: 'forwarded to Meta', reason: null, eventName: r.eventName, value: r.value, contactMasked: r.contactMasked,
     resultCreated: r.registeredAt, sample: '(send ledger entry)',

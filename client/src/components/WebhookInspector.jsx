@@ -218,7 +218,7 @@ export default function WebhookInspector({ compactTitle }) {
               background: r.keyOk === false ? 'rgba(245,158,11,0.06)' : 'var(--bg-hover)',
             }}>
               <summary style={{ cursor: 'pointer', color: 'var(--text-2)' }}>
-                {r.at.replace('T', ' ').slice(0, 19)} · {r.type}
+                {String(r.at||'').replace('T', ' ').slice(0, 19)} · {r.type}
                 {r.keyOk === false && <span style={{ color: '#f59e0b', fontWeight: 700 }}> · ⚠ key rejected</span>}
                 {r.eventName && <span style={{ color: 'var(--text-4)' }}> · {String(r.eventName).slice(0, 34)}</span>}
                 {r.value ? ` · $${r.value}` : ''}
