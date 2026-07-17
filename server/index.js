@@ -4190,6 +4190,15 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
     // pressing Retry. (Runs before the response; Vercel kills post-response work.)
     if (match && !/enrichment failed/.test(outcome.decision || '')) {
       try { await drainFailedDeliveries(2); } catch {}
+      try {
+        const g2 = (await kvGet('sewh:lastAutoAudit')) || 0;
+        if (Date.now() - Number(g2) > 6 * 3600 * 1000) {
+          await kvSet('sewh:lastAutoAudit', Date.now());
+          const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
+          const tok = auth.signToken({ id: 'auto-audit', username: 'auto-audit', role: 'admin' });
+          await axios.post(`${host}/api/webhooks/audit7d?limit=15`, {}, { headers: { Authorization: `Bearer ${tok}` }, timeout: 40000 }).catch(() => {});
+        }
+      } catch {}
     }
     res.json({ ok: true });
   } catch (err) {
@@ -4267,6 +4276,11 @@ app.get('/api/cron/daily', async (req, res) => {
   }
   const out = {};
   try { out.webhookRetry = await drainFailedDeliveries(8); } catch (e) { out.webhookRetry = { error: e.message }; }
+  try {
+    const host2 = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
+    const tok2 = auth.signToken({ id: 'cron', username: 'cron', role: 'admin' });
+    out.audit = (await axios.post(`${host2}/api/webhooks/audit7d?limit=15`, {}, { headers: { Authorization: `Bearer ${tok2}` }, timeout: 45000 })).data;
+  } catch (e) { out.audit = { error: e.message }; }
   try {
     // Self-call the ads sync with a short-lived internal admin token
     const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';

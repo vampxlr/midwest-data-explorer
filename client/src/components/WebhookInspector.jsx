@@ -205,9 +205,13 @@ export default function WebhookInspector({ compactTitle }) {
       </div>
       {deliveries.length === 0 ? (
         <div className="no-data" style={{ padding: '18px 14px' }}>
-          Nothing has reached the endpoint yet. If a registration definitely happened, SportsEngine either
-          hasn't got the webhook URL saved, the toggles are off, or it delivers with a delay — this list
-          records <b>every</b> request the moment one arrives.
+          {stats?.total > 0
+            ? <>No rows in this view's buffer right now — <b>{stats.total}</b> deliveries have been received all-time
+              (older display rows rotate out and audit pollution was cleaned). New deliveries appear here the moment
+              they arrive; the ✅ Forwarded tab and the tiles above hold the permanent accounting.</>
+            : <>Nothing has reached the endpoint yet. If a registration definitely happened, SportsEngine either
+              hasn't got the webhook URL saved, the toggles are off, or it delivers with a delay — this list
+              records <b>every</b> request the moment one arrives.</>}
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 6, maxHeight: 420, overflowY: 'auto' }}>
