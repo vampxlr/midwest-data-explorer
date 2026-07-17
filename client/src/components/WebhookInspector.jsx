@@ -15,6 +15,7 @@ export default function WebhookInspector({ compactTitle }) {
   const [page, setPage] = useState(0);
   const [sentOnly, setSentOnly] = useState(false);
   const [auditDays, setAuditDays] = useState(7);
+  const [view, setView] = useState('hooks'); // 'hooks' = webhook deliveries · 'audit' = cross-check findings
   const auditLog = (msg, level = 'info') =>
     setAudit(a => ({ ...a, log: [...(a?.log || []), { ts: new Date().toLocaleTimeString('en-US', { hour12: false }), msg, level }].slice(-200) }));
 
@@ -47,7 +48,7 @@ export default function WebhookInspector({ compactTitle }) {
       toast.error(e.response?.data?.error || 'Cross-check failed');
     }
     setAudit(a => ({ ...a, running: false }));
-    load();
+    setPage(0); setView('audit');   // findings live in their own log view
   }
 
   // ♻ Retry failed — same panel, same console, driven by the retry engine
@@ -78,13 +79,13 @@ export default function WebhookInspector({ compactTitle }) {
     load();
   }
 
-  async function load(p = page, so = sentOnly) {
+  async function load(p = page, so = sentOnly, v = view) {
     setRefreshing(true);
-    try { setD((await api.getWebhookPage(p * 50, so)).data); }
+    try { setD((await api.getWebhookPage(p * 50, so, v)).data); }
     catch {}
     finally { setRefreshing(false); }
   }
-  useEffect(() => { load(); }, [page, sentOnly]);
+  useEffect(() => { load(); }, [page, sentOnly, view]);
 
   if (!d) return <div className="no-data" style={{ padding: 14 }}>Loading webhook deliveries…</div>;
   const { stats, deliveries } = d;
@@ -151,6 +152,18 @@ export default function WebhookInspector({ compactTitle }) {
           </div>
         </div>
       )}
+
+      {/* Webhook deliveries vs cross-check findings — separate logs */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+        {[['hooks', '📨 Webhook deliveries'], ['audit', '🔍 Cross-check findings']].map(([v, l]) => (
+          <button key={v} onClick={() => { setView(v); setPage(0); }} style={{
+            padding: '4px 14px', borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            border: view === v ? '1px solid var(--accent-light)' : '1px solid var(--border)',
+            background: view === v ? 'rgba(99,102,241,0.14)' : 'var(--bg-hover)',
+            color: view === v ? 'var(--accent-light)' : 'var(--text-3)',
+          }}>{l}</button>
+        ))}
+      </div>
 
       <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10 }}>
         Received: <b>{stats.total || 0}</b> · forwarded to Meta: <b>{stats.capiSent || 0}</b>

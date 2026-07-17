@@ -4037,7 +4037,7 @@ const maskEmail = (e) => e ? String(e).replace(/^(.).*(@.*)$/, '$1***$2') : null
 // asOfMs: "new registration" freshness is judged against when the webhook was
 // DELIVERED, not when we process — so retrying a failed delivery days later
 // still classifies it correctly.
-async function processRegistrationResult(match, resourceId, asOfMs = Date.now()) {
+async function processRegistrationResult(match, resourceId, asOfMs = Date.now(), opts = {}) {
   const sentMap = (await kvGet('sewh:sent')) || {};
   if (sentMap[resourceId]) {
     return { decision: 'duplicate — this registration was already forwarded to Meta', reason: `first sent ${String(sentMap[resourceId]).slice(0, 16).replace('T', ' ')}` };
@@ -4073,6 +4073,12 @@ async function processRegistrationResult(match, resourceId, asOfMs = Date.now())
   if (dl) {
     const regDay = resultCreated.slice(0, 10);
     value = (dl.earlyBird && regDay <= dl.earlyBird) ? (dl.earlyBirdPrice || dl.finalPrice) : (dl.finalPrice || dl.earlyBirdPrice);
+  }
+
+  if (opts.send === false) {
+    return { ...base, decision: 'found unsent — outside Meta 7-day backfill window (enriched, not sent)',
+      reason: 'Meta rejects conversions older than 7 days; full details recorded for visibility',
+      value, capiSent: false, contactMasked: maskEmail(contact.email), hasEmail: !!contact.email, hasPhone: !!contact.phone };
   }
 
   const override = match.cfg?.metaPixelId && match.cfg?.capiTokenEnc
@@ -4294,13 +4300,14 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
     for (const m of batch) {
       let outcome;
       if (new Date(m.created).getTime() < metaLimit) {
-        outcome = { decision: 'found unsent — outside Meta 7-day backfill window (reported only)', resultCreated: m.created, reason: 'Meta rejects conversions older than 7 days; recorded for visibility' };
+        try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000, { send: false }); }
+        catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100), resultCreated: m.created }; }
       } else
       try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000); }
       catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100) }; }
       if (outcome.capiSent) sent++;
       items.push({ id: m.id, decision: outcome.decision || '?', eventName: outcome.eventName || null, value: outcome.value || null, capiSent: !!outcome.capiSent, contactMasked: outcome.contactMasked || null });
-      await appendCapped('sewh:recent', {
+      await appendCapped('sewh:audit', {
         at: new Date().toISOString(), accountKey: 'midwest-3on3', keyOk: true,
         type: 'audit.' + days + 'd', resourceId: m.id,
         decision: outcome.capiSent ? '🟢 AUDIT: missed sale found → sent to Meta' : 'audit: ' + (outcome.decision || '?'),
@@ -4322,7 +4329,8 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
 app.get('/api/webhooks/deliveries', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
   const me = await userStore.findById(req.user.id);
   const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
-  const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet('sewh:recent')]);
+  const src = req.query.view === 'audit' ? 'sewh:audit' : 'sewh:recent';
+  const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet(src)]);
   let rows = (recent || []).filter(r => platform || r.accountKey === me.accountKey);
   if (req.query.sent === '1') rows = rows.filter(r => r.capiSent);
   const offset = Math.max(0, Number(req.query.offset) || 0);
