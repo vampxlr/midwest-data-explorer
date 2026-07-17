@@ -4168,9 +4168,13 @@ app.post('/api/webhooks/reprocess', auth.requireAuth, auth.requireRole('admin'),
     const me = await userStore.findById(req.user.id);
     const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
     const recent = (await kvGet('sewh:recent')) || [];
-    const targets = recent.filter(r =>
+    const all = recent.filter(r =>
       /enrichment failed|not found in SportsEngine/.test(r.decision || '') && r.resourceId &&
       (platform || r.accountKey === me.accountKey));
+    // Batched: each SE lookup takes ~1-2s and Vercel caps the invocation —
+    // callers loop until remaining === 0.
+    const limit = Math.min(Math.max(Number(req.query.limit) || 8, 1), 20);
+    const targets = all.slice(0, limit);
     const seen = new Set();
     let sent = 0, done = 0;
     for (const r of targets) {
@@ -4198,7 +4202,7 @@ app.post('/api/webhooks/reprocess', auth.requireAuth, auth.requireRole('admin'),
     const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
     stats.capiSent += sent;
     await kvSet('sewh:stats', stats);
-    res.json({ ok: true, retried: done, uniqueResults: seen.size, sentToMeta: sent });
+    res.json({ ok: true, retried: done, uniqueResults: seen.size, sentToMeta: sent, remaining: Math.max(0, all.length - targets.length) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

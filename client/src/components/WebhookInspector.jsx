@@ -35,8 +35,14 @@ export default function WebhookInspector({ compactTitle }) {
               onClick={async () => {
                 setRefreshing(true);
                 try {
-                  const r = await api.reprocessWebhooks();
-                  toast.success(`Retried ${r.data.retried} deliveries — ${r.data.sentToMeta} sent to Meta`, { duration: 6000 });
+                  let total = 0, sent = 0, guard = 0;
+                  // batched server-side (Vercel time limit) — drain until done
+                  while (guard++ < 12) {
+                    const r = await api.reprocessWebhooks();
+                    total += r.data.retried; sent += r.data.sentToMeta;
+                    if (!r.data.remaining) break;
+                  }
+                  toast.success(`Retried ${total} deliveries — ${sent} sent to Meta`, { duration: 6000 });
                 } catch (e) { toast.error(e.response?.data?.error || 'Retry failed'); }
                 load();
               }}>♻ Retry failed</button>
