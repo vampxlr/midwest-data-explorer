@@ -4147,7 +4147,20 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
       hasEmail: !!outcome.hasEmail, hasPhone: !!outcome.hasPhone,
       value: outcome.value || null, capiSent: !!outcome.capiSent,
       sample: JSON.stringify(body).slice(0, 4000) || '(empty body)',
-    }, 50);
+    }, 200);
+
+    // Silent-breakage guard: enrichment failures (e.g. an SE schema change)
+    // email the owner — at most once per 6h — instead of waiting to be noticed.
+    if (/enrichment failed/.test(outcome.decision || '')) {
+      const alertState = (await kvGet('sewh:alert')) || {};
+      if (!alertState.lastAt || Date.now() - new Date(alertState.lastAt).getTime() > 6 * 3600 * 1000) {
+        await kvSet('sewh:alert', { lastAt: new Date().toISOString() });
+        sendEmail(SUPER_ADMIN_EMAIL,
+          '⚠ SportsEngine → Meta signal: enrichment is failing',
+          `A registration webhook could not be enriched:\n\n${outcome.decision}\n\nResource ${resourceId} · ${new Date().toISOString()}\n\nCheck the 📡 Tracking & Signal page — the raw payload and error are recorded there, and ♻ Retry failed will recover the missed sales once the cause is fixed. (This alert is sent at most once every 6 hours.)`
+        ).catch(() => {});
+      }
+    }
     const stats = (await kvGet('sewh:stats')) || { total: 0, capiSent: 0 };
     stats.total++; if (outcome.capiSent) stats.capiSent++;
     if (!match) stats.rejected = (stats.rejected || 0) + 1;
