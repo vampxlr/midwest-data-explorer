@@ -12,17 +12,21 @@ export default function WebhookInspector({ compactTitle }) {
   const [refreshing, setRefreshing] = useState(false);
   // Cross-check progress: bar + console report, like the Smart Update panels
   const [audit, setAudit] = useState(null); // {running, done, total, sent, log:[{ts,msg,level}]}
+  const [page, setPage] = useState(0);
+  const [sentOnly, setSentOnly] = useState(false);
+  const [auditDays, setAuditDays] = useState(7);
   const auditLog = (msg, level = 'info') =>
     setAudit(a => ({ ...a, log: [...(a?.log || []), { ts: new Date().toLocaleTimeString('en-US', { hour12: false }), msg, level }].slice(-200) }));
 
   async function runAudit() {
     setRefreshing(true);
     setAudit({ running: true, done: 0, total: null, sent: 0, log: [] });
-    auditLog('🔍 Cross-check started — scanning the last 7 days of registrations in the store…');
+    auditLog(`🔍 Cross-check started — scanning the last ${auditDays} days of registrations in the store…`);
+    if (auditDays > 7) auditLog('Note: finds older than 7 days are reported only — Meta rejects conversions past its 7-day backfill window', 'skip');
     try {
       let done = 0, sent = 0, guard = 0;
       while (guard++ < 25) {
-        const r = (await api.auditWebhooks()).data;
+        const r = (await api.auditWebhooks(auditDays)).data;
         if (done === 0) {
           auditLog(`Found ${r.checked} registrations in the window · ${r.alreadySent} already forwarded · ${r.missing + r.processed - r.processed} to verify`, 'info');
         }
@@ -74,21 +78,17 @@ export default function WebhookInspector({ compactTitle }) {
     load();
   }
 
-  async function load() {
+  async function load(p = page, so = sentOnly) {
     setRefreshing(true);
-    try { setD((await api.getWebhookPage(0)).data); }
+    try { setD((await api.getWebhookPage(p * 50, so)).data); }
     catch {}
     finally { setRefreshing(false); }
   }
-  async function loadMore() {
-    const r = await api.getWebhookPage(d.deliveries.length).catch(() => null);
-    if (r) setD(x => ({ ...r.data, deliveries: [...x.deliveries, ...r.data.deliveries] }));
-  }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [page, sentOnly]);
 
   if (!d) return <div className="no-data" style={{ padding: 14 }}>Loading webhook deliveries…</div>;
   const { stats, deliveries } = d;
-  const failedCount = deliveries.filter(r => /enrichment failed|not found in SportsEngine/.test(r.decision || '')).length;
+  const failedCount = deliveries.filter(r => /enrichment failed|not found in SportsEngine|incomplete registration/.test(r.decision || '')).length;
 
   return (
     <div>
@@ -97,14 +97,18 @@ export default function WebhookInspector({ compactTitle }) {
           {compactTitle || 'Everything SportsEngine sent to the webhook endpoint — including rejected or key-less requests.'}
         </div>
         <span style={{ display: 'flex', gap: 6 }}>
-          {d?.deliveries?.some(r => /enrichment failed|not found in SportsEngine/.test(r.decision || '')) && (
+          {d?.deliveries?.some(r => /enrichment failed|not found in SportsEngine|incomplete registration/.test(r.decision || '')) && (
             <button className="btn-primary" style={{ padding: '4px 12px', fontSize: 12 }} disabled={refreshing}
               title="Re-run enrichment for every failed delivery (freshness judged at original delivery time)"
               onClick={runRetry}>♻ Retry failed{failedCount ? ` (${failedCount})` : ''}</button>
           )}
+          <select value={auditDays} onChange={e => setAuditDays(Number(e.target.value))}
+            style={{ fontSize: 11, borderRadius: 8, padding: '2px 6px', background: 'var(--bg-hover)', color: 'var(--text-2)', border: '1px solid var(--border)' }}>
+            {[7, 14, 30, 60].map(n => <option key={n} value={n}>{n}d</option>)}
+          </select>
           <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }} disabled={refreshing}
-            title="Cross-check the last 7 days of registrations in the store against what was forwarded to Meta; sends anything missed"
-            onClick={runAudit}>{audit?.running ? '⏳ Cross-checking…' : '🔍 Cross-check 7 days'}</button>
+            title="Cross-check registrations in the store against what was forwarded to Meta; sends anything missed (>7d finds are reported only)"
+            onClick={runAudit}>{audit?.running ? '⏳ Cross-checking…' : `🔍 Cross-check ${auditDays} days`}</button>
           <button className="btn-secondary" style={{ width: 'auto', margin: 0, padding: '4px 12px', fontSize: 12 }}
             onClick={load} disabled={refreshing}>{refreshing ? '⏳' : '🔄 Refresh'}</button>
         </span>
@@ -207,11 +211,26 @@ export default function WebhookInspector({ compactTitle }) {
           ))}
         </div>
       )}
-      {d.totalStored > deliveries.length && (
-        <button className="btn-secondary" style={{ width: '100%', marginTop: 8 }} onClick={loadMore}>
-          Show more ({deliveries.length} of {d.totalStored} stored)
-        </button>
-      )}
+      {/* numbered pagination + sent-only filter */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-3)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={sentOnly} onChange={e => { setSentOnly(e.target.checked); setPage(0); }} />
+          ✓ Sent to Meta only
+        </label>
+        {d.totalStored > 50 && (
+          <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            {Array.from({ length: Math.ceil(d.totalStored / 50) }, (_, i) => (
+              <button key={i} onClick={() => setPage(i)} disabled={refreshing} style={{
+                minWidth: 28, padding: '3px 8px', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                border: page === i ? '1px solid var(--accent-light)' : '1px solid var(--border)',
+                background: page === i ? 'rgba(99,102,241,0.14)' : 'var(--bg-hover)',
+                color: page === i ? 'var(--accent-light)' : 'var(--text-3)',
+              }}>{i + 1}</button>
+            ))}
+            <span style={{ fontSize: 11, color: 'var(--text-4)', marginLeft: 4 }}>{d.totalStored} stored</span>
+          </span>
+        )}
+      </div>
     </div>
   );
 }

@@ -4189,8 +4189,11 @@ app.post(['/api/webhooks/sportsengine', '/api/webhooks/sportsengine/:key'], asyn
 // per-webhook self-heal, and the daily cron.
 async function drainFailedDeliveries(limit, accountFilter = null) {
   const recent = (await kvGet('sewh:recent')) || [];
+  // Only failures where data can appear later: transient errors, results not
+  // yet visible in SE, and incomplete checkouts. Terminal verdicts (old edits,
+  // duplicates, no contact) are never worth retrying.
   const all = recent.filter(r =>
-    /enrichment failed|not found in SportsEngine/.test(r.decision || '') && r.resourceId &&
+    /enrichment failed|not found in SportsEngine|incomplete registration/.test(r.decision || '') && r.resourceId &&
     (!accountFilter || r.accountKey === accountFilter));
   const targets = all.slice(0, Math.min(Math.max(limit || 8, 1), 20));
   const seen = new Set();
@@ -4263,7 +4266,9 @@ app.get('/api/cron/daily', async (req, res) => {
 // and record each find as an 'audit.7d' row in the log.
 app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
   try {
-    const cutoff = Date.now() - 7 * 86400000;
+    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 60);
+    const cutoff = Date.now() - days * 86400000;
+    const metaLimit = Date.now() - 7 * 86400000 + 3600000; // Meta rejects event_time >7d old
     const db = await store.load();
     let candidates = [];
     if (!store.IS_CONVEX) {
@@ -4288,13 +4293,16 @@ app.post('/api/webhooks/audit7d', auth.requireAuth, auth.requireRole('admin'), a
     const cfg = (await orgTrackingAll())['midwest-3on3'] || null;
     for (const m of batch) {
       let outcome;
+      if (new Date(m.created).getTime() < metaLimit) {
+        outcome = { decision: 'found unsent — outside Meta 7-day backfill window (reported only)', resultCreated: m.created, reason: 'Meta rejects conversions older than 7 days; recorded for visibility' };
+      } else
       try { outcome = await processRegistrationResult({ accountKey: 'midwest-3on3', cfg }, m.id, new Date(m.created).getTime() + 3600000); }
       catch (e) { outcome = { decision: 'audit enrichment failed: ' + e.message.slice(0, 100) }; }
       if (outcome.capiSent) sent++;
       items.push({ id: m.id, decision: outcome.decision || '?', eventName: outcome.eventName || null, value: outcome.value || null, capiSent: !!outcome.capiSent, contactMasked: outcome.contactMasked || null });
       await appendCapped('sewh:recent', {
         at: new Date().toISOString(), accountKey: 'midwest-3on3', keyOk: true,
-        type: 'audit.7d', resourceId: m.id,
+        type: 'audit.' + days + 'd', resourceId: m.id,
         decision: outcome.capiSent ? '🟢 AUDIT: missed sale found → sent to Meta' : 'audit: ' + (outcome.decision || '?'),
         reason: outcome.reason || 'found by 7-day store cross-check (no webhook had forwarded it)',
         eventId: outcome.eventId || null, eventName: outcome.eventName || null,
@@ -4315,7 +4323,8 @@ app.get('/api/webhooks/deliveries', auth.requireAuth, auth.requireRole('admin'),
   const me = await userStore.findById(req.user.id);
   const platform = ['owner', 'superadmin'].includes(me?.role) || !me?.accountKey || me?.accountKey === 'midwest-3on3';
   const [stats, recent] = await Promise.all([kvGet('sewh:stats'), kvGet('sewh:recent')]);
-  const rows = (recent || []).filter(r => platform || r.accountKey === me.accountKey);
+  let rows = (recent || []).filter(r => platform || r.accountKey === me.accountKey);
+  if (req.query.sent === '1') rows = rows.filter(r => r.capiSent);
   const offset = Math.max(0, Number(req.query.offset) || 0);
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   res.json({ stats: stats || { total: 0, capiSent: 0 }, deliveries: rows.slice(offset, offset + limit), totalStored: rows.length, offset, scope: platform ? 'all' : me.accountKey });
