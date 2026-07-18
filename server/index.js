@@ -3021,6 +3021,26 @@ app.delete('/api/export/league-csv/:token', auth.requireAdmin, async (req, res) 
 });
 
 // ── Shared helper: filter results from store.json for audience endpoints ────────
+// Convex mode never loads the 30k-row results table into store.load() (it's
+// stubbed to [] there, by design — see store.js). Contacts/audience endpoints
+// need real rows though, so pull them per-event via the already-deployed
+// indexed query. When no eventIds filter is given ("all leagues" mode, the
+// UI's default), fall back to every event the store knows has results.
+async function loadContactResults(db, eventIds) {
+  if (!store.IS_CONVEX) return db.results;
+  let ids = eventIds && eventIds.length ? eventIds.map(String) : null;
+  if (!ids) ids = Object.values(db.events).filter(e => (e.resultCount || 0) > 0).map(e => String(e.id));
+  const all = [];
+  const CONCURRENCY = 8;
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    const batches = await Promise.all(
+      ids.slice(i, i + CONCURRENCY).map(eid => store.convexQuery('reports:resultsByEvent', { eventId: eid }).catch(() => []))
+    );
+    for (const rows of batches) all.push(...rows);
+  }
+  return all;
+}
+
 function filterStoreResults(db, { eventIds, gradYearFrom, gradYearTo, genders } = {}) {
   const eidSet    = eventIds ? new Set(eventIds.map(String)) : null;
   const genderSet = genders  ? new Set(genders.map(s => s.toLowerCase())) : null;
@@ -3047,8 +3067,10 @@ function filterStoreResults(db, { eventIds, gradYearFrom, gradYearTo, genders } 
 app.get('/api/contacts/preview', async (req, res) => {
   const { eventIds, gradYearFrom, gradYearTo, genders } = req.query;
   const db = await store.load();
+  const idList = eventIds ? eventIds.split(',').map(s => s.trim()) : null;
+  db.results = await loadContactResults(db, idList);
   const filtered = filterStoreResults(db, {
-    eventIds:     eventIds     ? eventIds.split(',').map(s=>s.trim())  : null,
+    eventIds:     idList,
     gradYearFrom: gradYearFrom || null,
     gradYearTo:   gradYearTo   || null,
     genders:      genders      ? genders.split(',').map(s=>s.trim())   : null,
@@ -3081,9 +3103,11 @@ app.get('/api/contacts/preview', async (req, res) => {
 app.get('/api/contacts/export', async (req, res) => {
   const { eventIds, gradYearFrom, gradYearTo, genders, label = 'audience' } = req.query;
   const db = await store.load();
+  const idList = eventIds ? eventIds.split(',').map(s => s.trim()) : null;
+  db.results = await loadContactResults(db, idList);
 
   const filtered = filterStoreResults(db, {
-    eventIds:     eventIds     ? eventIds.split(',').map(s=>s.trim())     : null,
+    eventIds:     idList,
     gradYearFrom: gradYearFrom || null,
     gradYearTo:   gradYearTo   || null,
     genders:      genders      ? genders.split(',').map(s=>s.trim())      : null,
