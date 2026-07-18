@@ -8,7 +8,7 @@ import SearchableSelect from './SearchableSelect.jsx';
 import Collapsible from './Collapsible.jsx';
 import { DeadlineToggle, useDeadlinesOn, useDeadlineMap, nearestLabel } from '../deadlines.jsx';
 
-const MAX_SLOTS     = 10;
+const MAX_SLOTS     = 20;
 const DEFAULT_COUNT = 5;
 const COUNT_OPTIONS = Array.from({ length: MAX_SLOTS }, (_, i) => i + 1); // 1..10
 const STORAGE_KEY   = 'mw3-dashboard-yoy-slots';
