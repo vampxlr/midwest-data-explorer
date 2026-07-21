@@ -5102,7 +5102,10 @@ ${kbText}`;
         {
           systemInstruction: { parts: [{ text: system }] },
           contents: history.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-          generationConfig: { maxOutputTokens: 400 },
+          // Newer Gemini Flash models spend output tokens on internal
+          // "thinking" before the visible text — a small cap truncates
+          // replies mid-sentence, so give generous headroom.
+          generationConfig: { maxOutputTokens: 2500 },
         },
         { headers: { 'x-goog-api-key': s.geminiKey, 'content-type': 'application/json' }, timeout: 30000 }
       );
