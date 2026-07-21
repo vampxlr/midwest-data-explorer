@@ -4949,6 +4949,7 @@ async function assistantSettings() {
     extraInstructions: s.extraInstructions || '',
     accent: s.accent || '#f97316',
     kbDocUrl: s.kbDocUrl || '',
+    leadNotifyEmail: s.leadNotifyEmail || '',
     widgetKey: s.widgetKey || null,
   };
 }
@@ -5045,6 +5046,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   res.json({
     hasApiKey: s.hasApiKey, hasGeminiKey: s.hasGeminiKey, model: s.model, name: s.name, greeting: s.greeting,
     extraInstructions: s.extraInstructions, accent: s.accent, kbDocUrl: s.kbDocUrl,
+    leadNotifyEmail: s.leadNotifyEmail, emailConfigured: !!process.env.RESEND_API_KEY,
     kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, docChars: kb.doc ? kb.doc.chars : 0, paths: kb.pages.map(p => p.path) } : null,
     embed: `<script src="${host}/api/widget.js?key=${cur.widgetKey}" async></script>`,
   });
@@ -5052,7 +5054,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
 app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const cur = (await kvGet('assistant:settings')) || {};
-  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl']) {
+  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail']) {
     if (b[k] !== undefined) cur[k] = String(b[k]);
   }
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
@@ -5164,6 +5166,18 @@ ${kbText}`;
       const cfg = ((await kvGet('tracking:orgs')) || {})['midwest-3on3'];
       const override = cfg?.metaPixelId && cfg?.capiTokenEnc ? { pixelId: cfg.metaPixelId, token: decryptSecret(cfg.capiTokenEnc) } : {};
       capiSend('Lead', { email, phone, ip: req.ip, ua: req.headers['user-agent'], sourceUrl: page, ...override }).catch(() => {});
+      // Email follow-ups (no-ops until RESEND_API_KEY is configured):
+      // the visitor gets the registration link, the owner gets the lead.
+      if (email) {
+        sendEmail(email, 'Your Midwest 3 on 3 registration link 🏀',
+          `Hi! Thanks for chatting with ${s.name} at Midwest 3 on 3 Basketball.\n\nHere's the registration page you asked about:\nhttps://www.midwest3on3.com/leagues\n\nSpots and early-bird prices are first come, first served — don't wait too long!\n\nQuestions? Just reply to this email or write to Christy@3on3HoopsHub.com.\n\n— Midwest 3 on 3 Basketball`
+        ).catch(() => {});
+      }
+      if (s.leadNotifyEmail) {
+        sendEmail(s.leadNotifyEmail, `New lead from ${s.name}: ${email || phone}`,
+          `${s.name} captured a new lead on ${page || 'the website'}:\n\n${email ? 'Email: ' + email + '\n' : ''}${phone ? 'Phone: ' + phone + '\n' : ''}\nRecent conversation:\n${history.slice(-4).map(m => `${m.role === 'user' ? 'Visitor' : s.name}: ${m.content.slice(0, 200)}`).join('\n')}`
+        ).catch(() => {});
+      }
     }
     res.json({ reply });
   } catch (err) {

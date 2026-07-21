@@ -26,7 +26,7 @@ export default function Assistant() {
     try {
       await api.saveAssistant({
         name: cfg.name, greeting: cfg.greeting, model: cfg.model, accent: cfg.accent,
-        extraInstructions: cfg.extraInstructions, kbDocUrl: cfg.kbDocUrl || '',
+        extraInstructions: cfg.extraInstructions, kbDocUrl: cfg.kbDocUrl || '', leadNotifyEmail: cfg.leadNotifyEmail || '',
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(geminiKey.trim() ? { geminiKey: geminiKey.trim() } : {}),
       });
@@ -105,6 +105,11 @@ export default function Assistant() {
         <Field label="Greeting (first message visitors see)">
           <textarea className="field-input" style={{ width: '100%', minHeight: 54, boxSizing: 'border-box' }} value={cfg.greeting} onChange={e => upd({ greeting: e.target.value })} />
         </Field>
+        <div style={{ marginTop: 10 }}>
+          <Field label={`Lead notification email (optional — get an email each time a visitor leaves their contact)${cfg.emailConfigured ? '' : ' — ⚠ email sending is off until RESEND_API_KEY is set on the server'}`}>
+            <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} value={cfg.leadNotifyEmail || ''} onChange={e => upd({ leadNotifyEmail: e.target.value })} placeholder="you@example.com" />
+          </Field>
+        </div>
         <div style={{ marginTop: 10 }}>
           <Field label="Knowledge doc URL (optional — a Google Doc with policies/FAQs; set sharing to 'Anyone with the link'. Re-fetched on every KB rebuild)">
             <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} value={cfg.kbDocUrl || ''} onChange={e => upd({ kbDocUrl: e.target.value })} placeholder="https://docs.google.com/document/d/…" />
