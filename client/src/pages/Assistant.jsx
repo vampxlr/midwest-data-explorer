@@ -93,8 +93,9 @@ export default function Assistant() {
             <select className="field-input" value={cfg.model} onChange={e => upd({ model: e.target.value })}>
               <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 — fast & cheap</option>
               <option value="claude-sonnet-5">Claude Sonnet 5 — smarter, pricier</option>
-              <option value="gemini-2.5-flash">Gemini 2.5 Flash — free tier available</option>
-              <option value="gemini-flash-latest">Gemini Flash (latest)</option>
+              <option value="gemini-flash-lite-latest">Gemini Flash-Lite — best free-tier limits (15/min)</option>
+              <option value="gemini-flash-latest">Gemini Flash (latest) — free tier ~20/day</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash — older keys only</option>
             </select>
           </Field>
           <Field label="Accent color">
