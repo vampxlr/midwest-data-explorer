@@ -83,6 +83,12 @@ export default function Assistant() {
           <code style={{ fontSize: 11, background: 'var(--bg-hover)', padding: '8px 12px', borderRadius: 8, wordBreak: 'break-all', flex: 1, minWidth: 260 }}>{cfg.embed}</code>
           <button className="btn-secondary" style={{ width: 'auto', margin: 0 }}
             onClick={() => navigator.clipboard.writeText(cfg.embed).then(() => toast.success('Embed snippet copied'))}>📋 Copy</button>
+          <button className="btn-primary" style={{ width: 'auto', margin: 0 }} onClick={() => previewWidget(cfg.embed)}>
+            👀 Preview widget on this page
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 6 }}>
+          Preview loads the exact same script the website would — the bubble appears bottom-right, just like it will on midwest3on3.com. Click again to remove it.
         </div>
       </div>
 
@@ -213,6 +219,28 @@ function Status({ ok, okText, badText }) {
       color: ok ? 'var(--viz-up)' : '#f59e0b',
     }}>{ok ? `✓ ${okText}` : `⚠ ${badText}`}</span>
   );
+}
+
+// Load the real embeddable widget into this page (toggle) — identical to what
+// the public site gets, so what you see here is what visitors will see.
+function previewWidget(embed) {
+  const existing = document.getElementById('mw3-chat-bubble');
+  if (existing) {
+    // widget renders the bubble + a panel sibling; remove both and the script
+    existing.nextElementSibling?.remove();
+    existing.remove();
+    document.getElementById('mw3-widget-preview')?.remove();
+    toast('Widget preview removed', { icon: '🫥' });
+    return;
+  }
+  const src = (embed.match(/src="([^"]+)"/) || [])[1];
+  if (!src) return toast.error('No embed snippet available yet — save settings first');
+  const sc = document.createElement('script');
+  sc.id = 'mw3-widget-preview';
+  sc.src = src;
+  sc.async = true;
+  document.body.appendChild(sc);
+  toast.success('Widget loaded — look bottom-right 👉');
 }
 
 // Bare URLs in replies become clickable, exactly like the site widget does
