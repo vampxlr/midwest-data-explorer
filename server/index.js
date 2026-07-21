@@ -4781,7 +4781,7 @@ function matchScrapedEvents(parsed, events) {
     scored.push({ ev, s });
     if (s > bs) bs = s;
   }
-  return bs >= 0.3 ? scored.filter(x => x.s >= bs - 0.001).map(x => x.ev) : [];
+  return bs >= 0.3 ? scored.filter(x => x.s >= bs - 0.001) : [];
 }
 
 async function fetchSitePage(url) {
@@ -4824,23 +4824,30 @@ app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, r
     }
 
     const existing = (await kvGet('deadlines:all')) || {};
-    let matched = 0;
+    // Two-pass: an event keeps only its BEST-scoring page. Last-writer-wins
+    // let a weak generic match (Orono fall page → Wayzata event) overwrite a
+    // strong correct one (Wayzata summer page) just by scrape order.
+    const best = {};
     for (const r of results) {
       if (r.error || (!r.earlyBird && !r.finalDeadline)) continue;
-      for (const ev of matchScrapedEvents(r, events)) {
+      for (const { ev, s } of matchScrapedEvents(r, events)) {
         const id = String(ev.id);
-        // Manual overrides always win — but only once they actually HOLD a
-        // date. An empty stub from "+ Add manually" (nobody filled it in yet)
-        // must not block the scraper from finding real data forever.
-        if (existing[id]?.manual && (existing[id].earlyBird || existing[id].finalDeadline)) continue;
-        existing[id] = {
-          eventName: ev.name,
-          earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
-          earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
-          source: r.path, scrapedAt: new Date().toISOString(),
-        };
-        matched++;
+        if (!best[id] || s > best[id].s) best[id] = { ev, r, s };
       }
+    }
+    let matched = 0;
+    for (const [id, { ev, r }] of Object.entries(best)) {
+      // Manual overrides always win — but only once they actually HOLD a
+      // date. An empty stub from "+ Add manually" (nobody filled it in yet)
+      // must not block the scraper from finding real data forever.
+      if (existing[id]?.manual && (existing[id].earlyBird || existing[id].finalDeadline)) continue;
+      existing[id] = {
+        eventName: ev.name,
+        earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
+        earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
+        source: r.path, scrapedAt: new Date().toISOString(),
+      };
+      matched++;
     }
     await kvSet('deadlines:all', existing);
     res.json({
@@ -4971,13 +4978,14 @@ async function assistantLiveContext() {
     for (const e of events.slice(0, 80)) {
       const d = dl[String(e.id)];
       let extra = '';
+      const closed = !!(d?.finalDeadline && d.finalDeadline < today);
       if (d) {
         const parts = [];
         if (d.earlyBird)     parts.push(`early-bird deadline ${d.earlyBird}${d.earlyBirdPrice ? ` ($${d.earlyBirdPrice})` : ''}${d.earlyBird < today ? ' (PASSED)' : ''}`);
-        if (d.finalDeadline) parts.push(`final registration deadline ${d.finalDeadline}${d.finalPrice ? ` ($${d.finalPrice})` : ''}${d.finalDeadline < today ? ' (CLOSED)' : ''}`);
+        if (d.finalDeadline) parts.push(`final registration deadline ${d.finalDeadline}${d.finalPrice ? ` ($${d.finalPrice})` : ''}${closed ? ' (PASSED)' : ''}`);
         if (parts.length) extra = ` — ${parts.join(', ')}`;
       }
-      lines.push(`- ${e.name}: OPEN for registration${extra}`);
+      lines.push(`- ${e.name}: ${closed ? 'registration CLOSED (final deadline has passed — do NOT tell visitors this one is open; suggest a similar open league instead)' : 'OPEN for registration'}${extra}`);
     }
     return `Today's date: ${today}\nCurrently open for registration (${lines.length} events):\n${lines.join('\n')}`;
   } catch { return ''; }
