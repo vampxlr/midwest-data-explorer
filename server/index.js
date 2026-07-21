@@ -5082,8 +5082,8 @@ app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/admin/assistant/convos', auth.requireRole('admin'), async (req, res) => {
-  const [convos, leads] = await Promise.all([kvGet('assistant:convos'), kvGet('assistant:leads')]);
-  res.json({ convos: convos || [], leads: leads || [] });
+  const [convos, leads, unanswered] = await Promise.all([kvGet('assistant:convos'), kvGet('assistant:leads'), kvGet('assistant:unanswered')]);
+  res.json({ convos: convos || [], leads: leads || [], unanswered: unanswered || [] });
 });
 
 // ── FAQ bank: pre-generated answers with live-data placeholders ──────────────
@@ -5119,23 +5119,59 @@ async function assistantOpenDeadlines() {
     .filter(x => !(x.d.finalDeadline && x.d.finalDeadline < today))
     .sort((a, b) => String(a.d.finalDeadline || '9999').localeCompare(String(b.d.finalDeadline || '9999')));
 }
+const faqShortName = (n) => String(n).replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim();
+const faqDlLine = (x) => {
+  const p = [];
+  if (x.d.earlyBird) p.push(`early-bird deadline ${x.d.earlyBird}${x.d.earlyBirdPrice ? ` ($${x.d.earlyBirdPrice}/team)` : ''}`);
+  if (x.d.finalDeadline) p.push(`final registration deadline ${x.d.finalDeadline}${x.d.finalPrice ? ` ($${x.d.finalPrice}/team)` : ''}`);
+  return `${faqShortName(x.name)}: ${p.join(', ') || 'see the league page for deadlines'}`;
+};
+// Words too generic to identify a specific event by name (seasons, event types)
+const FAQ_GENERIC_EVENT_WORDS = new Set(['summer', 'fall', 'winter', 'spring', 'august', 'september', 'october', 'november', 'december', 'holiday', 'clinic', 'camp', 'camps', 'shooting', 'skills', 'skill', 'game', 'play', 'program', 'list', 'building', 'boot', 'mea', 'advanced', 'footwork', 'finishing', 'scoring', 'thanksgiving', 'registration']);
+const faqEventMention = (question, open) => {
+  const qt = new Set(faqTokens(question));
+  return open.filter(x => faqTokens(faqShortName(x.name)).some(t => qt.has(t) && !FAQ_GENERIC_EVENT_WORDS.has(t)));
+};
 async function renderFaqAnswer(answer, questionText) {
   if (!/\{\{/.test(answer)) return answer;
   const open = await assistantOpenDeadlines();
-  const shortName = (n) => String(n).replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim();
-  // if the visitor named a specific open league, answer for that one
-  const qt = new Set(faqTokens(questionText));
-  const mentioned = open.filter(x => faqTokens(shortName(x.name)).some(t => qt.has(t)));
-  const dlLine = (x) => {
-    const p = [];
-    if (x.d.earlyBird) p.push(`early-bird deadline ${x.d.earlyBird}${x.d.earlyBirdPrice ? ` ($${x.d.earlyBirdPrice}/team)` : ''}`);
-    if (x.d.finalDeadline) p.push(`final registration deadline ${x.d.finalDeadline}${x.d.finalPrice ? ` ($${x.d.finalPrice}/team)` : ''}`);
-    return `${shortName(x.name)}: ${p.join(', ') || 'see the league page for deadlines'}`;
-  };
+  const mentioned = faqEventMention(questionText, open);
   const chosen = mentioned.length ? mentioned : open.filter(x => x.d.finalDeadline).slice(0, 3);
   return answer
-    .replaceAll('{{OPEN_LEAGUES}}', [...new Set(open.map(x => shortName(x.name)))].join(', ') || 'several events — see https://www.midwest3on3.com/leagues')
-    .replaceAll('{{LEAGUE_DEADLINES}}', chosen.map(dlLine).join('. ') || 'see https://www.midwest3on3.com/leagues for current deadlines');
+    .replaceAll('{{OPEN_LEAGUES}}', [...new Set(open.map(x => faqShortName(x.name)).filter(Boolean))].join(', ') || 'several events — see https://www.midwest3on3.com/leagues')
+    .replaceAll('{{LEAGUE_DEADLINES}}', chosen.map(faqDlLine).join('. ') || 'see https://www.midwest3on3.com/leagues for current deadlines');
+}
+
+// Rule-based answers that need no LLM and no FAQ bank: greetings, contact
+// capture, specific-league lookups, open/cost/reminder intents. All dynamic
+// values come from live registration data.
+function builtinAnswer(qRaw, s, open) {
+  const q = normQuestion(qRaw);
+  const t = new Set(q.split(' ').filter(Boolean));
+  const has = (...ws) => ws.some(w => t.has(w));
+  const email = qRaw.match(/[^\s@]+@[^\s@]+\.[^\s@]{2,}/);
+  const phone = qRaw.match(/\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/);
+  if (email || phone) return `Perfect, got it! We'll follow up at ${email ? email[0] : phone[0]} with registration info and a reminder before the deadline. Anything else I can help with?`;
+  if (/^(hi+|hey+|hello+|yo|sup|howdy|good (morning|afternoon|evening))\b/.test(q) && t.size <= 3) return s.greeting;
+  if (/\bthank/.test(q)) return `You're welcome! Anything else about our leagues, tournaments or camps?`;
+  const mentioned = faqEventMention(qRaw, open);
+  if (/remind/.test(q)) {
+    const which = mentioned.length ? faqShortName(mentioned[0].name) : 'registration';
+    return `Happy to set that up! Just type your email here and we'll remind you before the ${which} deadline.`;
+  }
+  if (mentioned.length) {
+    return `Here's the latest on ${[...new Set(mentioned.map(x => faqShortName(x.name)))].join(' and ')}: ${mentioned.map(faqDlLine).join('. ')}. You can register at https://www.midwest3on3.com/leagues — want to leave your email for a reminder before the deadline?`;
+  }
+  const leagues = open.filter(x => /league/i.test(x.name));
+  if (has('open', 'opening', 'openning', 'openings', 'available', 'active', 'current', 'ongoing') && has('league', 'leagues', 'register', 'registration', 'registrations', 'signup', 'event', 'events', 'spot', 'spots', 'team', 'teams')) {
+    const names = [...new Set(leagues.map(x => faqShortName(x.name)).filter(Boolean))];
+    return `Right now ${names.length} leagues are open for registration: ${names.join(', ')}. See dates, locations and divisions at https://www.midwest3on3.com/leagues`;
+  }
+  if (has('cost', 'costs', 'price', 'prices', 'pricing', 'fee', 'fees', 'much')) {
+    const lines = leagues.filter(x => x.d.finalDeadline).slice(0, 3).map(faqDlLine).join('. ');
+    return `Here are current prices and deadlines: ${lines || 'see each event page for pricing'}. Registering before the early-bird deadline saves you money! Full details at https://www.midwest3on3.com/leagues`;
+  }
+  return null;
 }
 
 // Admin: LLM reads the knowledge base once and writes the FAQ bank
@@ -5154,7 +5190,7 @@ RULES:
 - Static policies ARE safe to bake in: team sizes, no practices, no standings, free-agent process, escalation email, formats, philosophy, shirt info, weather policy, etc.
 - "alts": 4-8 alternative phrasings of the same question, the varied ways real parents type it (short, misspelled-ish, casual).
 Return ONLY a JSON array, no prose: [{"q":"...","alts":["...",...],"a":"..."}]
-
+${await kvGet('assistant:unanswered').then(u => (u || []).length ? '\nREAL VISITOR QUESTIONS THAT HAD NO ANSWER — make sure the bank covers each of these (answer from the knowledge base; use the placeholders for anything dynamic):\n' + [...new Set((u || []).slice(0, 40).map(x => '- ' + x.q))].join('\n') + '\n' : '').catch(() => '')}
 === KNOWLEDGE BASE ===
 ${kbText}`;
     let raw;
@@ -5269,15 +5305,26 @@ app.post('/api/assistant/chat', async (req, res) => {
     const cacheable = history.length === 1;
     let cachedReply = cacheable ? cacheGet(history[0].content) : null;
 
-    // FAQ bank: pre-written answers (live placeholders rendered fresh) — zero
-    // AI tokens. 'hybrid' tries FAQ then falls through to the LLM; 'faq' runs
-    // with no LLM at all; 'llm' skips the bank entirely.
+    // Token-free answer layers, in order: built-in intent rules (greetings,
+    // contact capture, league lookups, open/cost/reminder) → FAQ bank
+    // (pre-written answers, live placeholders rendered fresh). 'hybrid' falls
+    // through to the LLM on a miss; 'faq' runs with no LLM at all.
     const mode = s.answerMode || 'hybrid';
+    let answerSrc = cachedReply ? 'cache' : 'llm';
     if (!cachedReply && mode !== 'llm') {
-      const bank = (await kvGet('assistant:faq'))?.items || [];
-      const hit = matchFaq(bank, history[history.length - 1].content);
-      if (hit) cachedReply = await renderFaqAnswer(hit.a, history[history.length - 1].content);
-      else if (mode === 'faq') cachedReply = `Great question — I don't have that one handy! You'll find everything at https://www.midwest3on3.com, or reach out through https://www.midwest3on3.com/contact-us and the team will get you an answer. Want to leave your email so someone follows up with you?`;
+      const q = history[history.length - 1].content;
+      const open = await assistantOpenDeadlines().catch(() => []);
+      const builtin = builtinAnswer(q, s, open);
+      if (builtin) { cachedReply = builtin; answerSrc = 'builtin'; }
+      else {
+        const bank = (await kvGet('assistant:faq'))?.items || [];
+        const hit = matchFaq(bank, q);
+        if (hit) { cachedReply = await renderFaqAnswer(hit.a, q); answerSrc = 'faq'; }
+        else if (mode === 'faq') {
+          cachedReply = `Great question — I don't have that one handy! You'll find everything at https://www.midwest3on3.com, or reach out through https://www.midwest3on3.com/contact-us and the team will get you an answer. Want to leave your email so someone follows up with you?`;
+          answerSrc = 'unanswered';
+        }
+      }
     }
 
     const kb = (await kvGet('assistant:kb')) || { pages: [] };
@@ -5341,8 +5388,12 @@ ${kbText}`;
     const userMsg = history[history.length - 1].content;
     appendCapped('assistant:convos', {
       at: new Date().toISOString(), sessionId: String(sessionId || '').slice(0, 40),
-      page: String(page || '').slice(0, 200), q: userMsg.slice(0, 400), a: reply.slice(0, 600),
+      page: String(page || '').slice(0, 200), q: userMsg.slice(0, 400), a: reply.slice(0, 600), src: answerSrc,
     }, 300).catch(() => {});
+    // Every question is kept for analysis (what do people actually ask?), and
+    // FAQ misses go to a dedicated list — raw material for the next FAQ bank.
+    appendCapped('assistant:questions', { at: new Date().toISOString(), q: userMsg.slice(0, 300), src: answerSrc }, 1000).catch(() => {});
+    if (answerSrc === 'unanswered') appendCapped('assistant:unanswered', { at: new Date().toISOString(), q: userMsg.slice(0, 300) }, 500).catch(() => {});
     const email = (userMsg.match(/[^\s@]+@[^\s@]+\.[^\s@]{2,}/) || [])[0] || null;
     const phone = !email ? ((userMsg.match(/\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [])[0] || null) : null;
     if (email || phone) {

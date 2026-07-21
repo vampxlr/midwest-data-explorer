@@ -191,7 +191,7 @@ export default function Assistant() {
       <div className="card">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
           <h2 style={{ margin: 0 }}>Inbox</h2>
-          {[['leads', `🎯 Leads (${inbox?.leads?.length ?? 0})`], ['convos', `💬 Conversations (${inbox?.convos?.length ?? 0})`]].map(([v, l]) => (
+          {[['leads', `🎯 Leads (${inbox?.leads?.length ?? 0})`], ['convos', `💬 Conversations (${inbox?.convos?.length ?? 0})`], ['unanswered', `❓ Unanswered (${inbox?.unanswered?.length ?? 0})`]].map(([v, l]) => (
             <button key={v} onClick={() => setTab(v)} className={tab === v ? 'btn-primary' : 'btn-secondary'}
               style={{ width: 'auto', margin: 0, padding: '4px 14px', fontSize: 12 }}>{l}</button>
           ))}
@@ -204,6 +204,17 @@ export default function Assistant() {
                   <b>{l.email || l.phone}</b>
                   <span style={{ color: 'var(--text-4)' }}> · {String(l.at).replace('T', ' ').slice(0, 16)}{l.page ? ` · ${l.page.replace(/^https?:\/\/[^/]+/, '')}` : ''}</span>
                   <div style={{ color: 'var(--text-3)', fontSize: 11.5, marginTop: 3 }}>{l.context}</div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : tab === 'unanswered' ? (
+          (inbox.unanswered || []).length === 0 ? <div className="no-data" style={{ padding: 16 }}>Nothing here — every question got an answer. Questions that miss the FAQ bank in No-LLM mode land here; regenerating the FAQ bank automatically covers them.</div> : (
+            <div style={{ display: 'grid', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
+              {inbox.unanswered.map((u, i) => (
+                <div key={i} style={{ border: '1px solid var(--border-sub)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5 }}>
+                  <span style={{ color: 'var(--text-4)', fontSize: 11 }}>{String(u.at).replace('T', ' ').slice(0, 16)}</span>
+                  <div style={{ marginTop: 3 }}>{u.q}</div>
                 </div>
               ))}
             </div>
