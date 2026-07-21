@@ -26,7 +26,7 @@ export default function Assistant() {
     try {
       await api.saveAssistant({
         name: cfg.name, greeting: cfg.greeting, model: cfg.model, accent: cfg.accent,
-        extraInstructions: cfg.extraInstructions,
+        extraInstructions: cfg.extraInstructions, kbDocUrl: cfg.kbDocUrl || '',
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(geminiKey.trim() ? { geminiKey: geminiKey.trim() } : {}),
       });
@@ -105,6 +105,11 @@ export default function Assistant() {
           <textarea className="field-input" style={{ width: '100%', minHeight: 54, boxSizing: 'border-box' }} value={cfg.greeting} onChange={e => upd({ greeting: e.target.value })} />
         </Field>
         <div style={{ marginTop: 10 }}>
+          <Field label="Knowledge doc URL (optional — a Google Doc with policies/FAQs; set sharing to 'Anyone with the link'. Re-fetched on every KB rebuild)">
+            <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} value={cfg.kbDocUrl || ''} onChange={e => upd({ kbDocUrl: e.target.value })} placeholder="https://docs.google.com/document/d/…" />
+          </Field>
+        </div>
+        <div style={{ marginTop: 10 }}>
           <Field label="Extra instructions for the assistant (optional — e.g. current promos, tone, things to push)">
             <textarea className="field-input" style={{ width: '100%', minHeight: 54, boxSizing: 'border-box' }} value={cfg.extraInstructions} onChange={e => upd({ extraInstructions: e.target.value })} placeholder="e.g. This month, emphasize the fall leagues — early bird ends soon." />
           </Field>
@@ -115,7 +120,7 @@ export default function Assistant() {
             {rebuilding ? '🌐 Scraping midwest3on3.com…' : '🌐 Rebuild knowledge base'}
           </button>
           {cfg.kb && <span style={{ fontSize: 11, color: 'var(--text-4)' }}>
-            KB built {String(cfg.kb.builtAt).replace('T', ' ').slice(0, 16)} · {cfg.kb.pages} pages · {(cfg.kb.chars / 1000).toFixed(0)}k chars
+            KB built {String(cfg.kb.builtAt).replace('T', ' ').slice(0, 16)} · {cfg.kb.pages} pages{cfg.kb.docChars ? ` + owner doc (${(cfg.kb.docChars / 1000).toFixed(0)}k)` : ''} · {(cfg.kb.chars / 1000).toFixed(0)}k chars
           </span>}
         </div>
       </div>

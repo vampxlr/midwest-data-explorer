@@ -4948,6 +4948,7 @@ async function assistantSettings() {
     greeting: s.greeting || "Hi! I'm Sarah 👋 I can answer anything about our leagues, tournaments and camps — dates, prices, deadlines, how it all works. What would you like to know?",
     extraInstructions: s.extraInstructions || '',
     accent: s.accent || '#f97316',
+    kbDocUrl: s.kbDocUrl || '',
     widgetKey: s.widgetKey || null,
   };
 }
@@ -5013,9 +5014,21 @@ app.post('/api/admin/assistant/rebuild-kb', auth.requireRole('admin'), async (re
       }));
       pages.push(...batch.filter(Boolean));
     }
-    const kb = { builtAt: new Date().toISOString(), pages, chars: pages.reduce((s, p) => s + p.text.length, 0) };
+    // Owner-authored knowledge doc (Google Doc): fetch the latest text export
+    // every rebuild so the owner keeps editing in Docs and Sarah stays current.
+    let doc = null;
+    const settings = await assistantSettings();
+    if (settings.kbDocUrl) {
+      const m = String(settings.kbDocUrl).match(/docs\.google\.com\/document\/d\/([\w-]+)/);
+      const exportUrl = m ? `https://docs.google.com/document/d/${m[1]}/export?format=txt` : settings.kbDocUrl;
+      const r = await axios.get(exportUrl, { timeout: 20000, maxContentLength: 2000000, responseType: 'text' });
+      const text = String(r.data || '').replace(/^﻿/, '').replace(/\r\n/g, '\n').trim().slice(0, 90000);
+      if (text.length > 500) doc = { url: settings.kbDocUrl, text, chars: text.length };
+      else throw new Error('knowledge doc fetched but looks empty — is link sharing set to "Anyone with the link"?');
+    }
+    const kb = { builtAt: new Date().toISOString(), pages, doc, chars: pages.reduce((s, p) => s + p.text.length, 0) + (doc ? doc.chars : 0) };
     await kvSet('assistant:kb', kb);
-    res.json({ ok: true, pages: pages.length, chars: kb.chars, paths: pages.map(p => p.path) });
+    res.json({ ok: true, pages: pages.length, chars: kb.chars, docChars: doc ? doc.chars : 0, paths: pages.map(p => p.path) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -5031,15 +5044,15 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
   res.json({
     hasApiKey: s.hasApiKey, hasGeminiKey: s.hasGeminiKey, model: s.model, name: s.name, greeting: s.greeting,
-    extraInstructions: s.extraInstructions, accent: s.accent,
-    kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, paths: kb.pages.map(p => p.path) } : null,
+    extraInstructions: s.extraInstructions, accent: s.accent, kbDocUrl: s.kbDocUrl,
+    kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, docChars: kb.doc ? kb.doc.chars : 0, paths: kb.pages.map(p => p.path) } : null,
     embed: `<script src="${host}/api/widget.js?key=${cur.widgetKey}" async></script>`,
   });
 });
 app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const cur = (await kvGet('assistant:settings')) || {};
-  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent']) {
+  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl']) {
     if (b[k] !== undefined) cur[k] = String(b[k]);
   }
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
@@ -5093,8 +5106,8 @@ GOALS, in order: (1) answer accurately from LIVE DATA and the KNOWLEDGE BASE bel
 ${s.extraInstructions ? '\nOWNER INSTRUCTIONS: ' + s.extraInstructions + '\n' : ''}
 === LIVE DATA (real-time from our registration system) ===
 ${live}
-
-=== KNOWLEDGE BASE (from midwest3on3.com) ===
+${kb.doc ? `\n=== OFFICIAL KNOWLEDGE BASE DOCUMENT (written by the league owner — follow its policies, tone guidance and escalation rules; for dates/costs/deadlines LIVE DATA above still wins) ===\n${kb.doc.text}\n` : ''}
+=== SITE CONTENT (from midwest3on3.com) ===
 ${kbText}`;
 
     let reply;
