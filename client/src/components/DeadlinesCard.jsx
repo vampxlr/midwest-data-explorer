@@ -62,6 +62,10 @@ export default function DeadlinesCard() {
 
   const entries = Object.entries(deadlines).sort((a, b) => (b[1].earlyBird || '').localeCompare(a[1].earlyBird || ''));
 
+  // Scraper stores site-relative paths ("/leagues/summer/wayzata-league"),
+  // manual entries may hold full URLs — normalize both to something clickable.
+  const sourceUrl = (d) => d.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : null;
+
   return (
     <div className="card" style={{ marginTop:20 }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:8, marginBottom:8 }}>
@@ -124,7 +128,11 @@ export default function DeadlinesCard() {
                 <EditRow key={id} id={id} d={d} onSave={save} onCancel={() => setEditing(null)} />
               ) : (
                 <tr key={id} id={`deadline-row-${id}`}>
-                  <td style={{ color:'var(--text-1)', fontWeight:500 }}>{d.eventName}{d.manual && <span className="badge badge-purple" style={{ marginLeft:6, fontSize:9 }}>manual</span>}</td>
+                  <td style={{ color:'var(--text-1)', fontWeight:500 }}>
+                    {d.eventName}
+                    {d.manual && <span className="badge badge-purple" style={{ marginLeft:6, fontSize:9 }}>manual</span>}
+                    {sourceUrl(d) && <a href={sourceUrl(d)} target="_blank" rel="noopener noreferrer" title={`Open the page these deadlines came from: ${sourceUrl(d)}`} style={{ marginLeft:6, fontSize:12, textDecoration:'none' }}>🔗</a>}
+                  </td>
                   <td>{d.earlyBird || '—'}</td>
                   <td>{d.earlyBirdPrice ? `$${d.earlyBirdPrice}` : '—'}</td>
                   <td>{d.finalDeadline || '—'}</td>
@@ -144,7 +152,12 @@ function EditRow({ id, d, onSave, onCancel }) {
   const [f, setF] = useState({ ...d });
   return (
     <tr id={`deadline-row-${id}`} style={{ background: 'rgba(99,102,241,0.08)' }}>
-      <td style={{ color:'var(--text-1)' }}>{d.eventName}</td>
+      <td style={{ color:'var(--text-1)' }}>
+        {d.eventName}
+        <input type="url" className="field-input" style={{ display:'block', width:'100%', minWidth:180, marginTop:4, fontSize:11, boxSizing:'border-box' }}
+          value={f.source || ''} placeholder="Page URL (e.g. https://www.midwest3on3.com/leagues/…)"
+          onChange={e => setF(x => ({ ...x, source: e.target.value }))} />
+      </td>
       <td><input type="date" className="field-input" value={f.earlyBird || ''} onChange={e => setF(x => ({ ...x, earlyBird: e.target.value }))} /></td>
       <td><input type="number" className="field-input" style={{ width:80 }} value={f.earlyBirdPrice ?? ''} onChange={e => setF(x => ({ ...x, earlyBirdPrice: e.target.value ? Number(e.target.value) : null }))} /></td>
       <td><input type="date" className="field-input" value={f.finalDeadline || ''} onChange={e => setF(x => ({ ...x, finalDeadline: e.target.value }))} /></td>

@@ -4920,13 +4920,14 @@ app.post('/api/deadlines/import', auth.requireRole('admin'), async (req, res) =>
 });
 
 app.put('/api/deadlines/:eventId', auth.requireRole('admin'), async (req, res) => {
-  const { earlyBird, finalDeadline, earlyBirdPrice, finalPrice, eventName } = req.body || {};
+  const { earlyBird, finalDeadline, earlyBirdPrice, finalPrice, eventName, source } = req.body || {};
   const all = (await kvGet('deadlines:all')) || {};
   all[String(req.params.eventId)] = {
     ...(all[String(req.params.eventId)] || {}),
     eventName: eventName || all[String(req.params.eventId)]?.eventName,
     earlyBird: earlyBird || null, finalDeadline: finalDeadline || null,
     earlyBirdPrice: earlyBirdPrice ?? null, finalPrice: finalPrice ?? null,
+    source: source !== undefined ? (String(source).trim() || null) : (all[String(req.params.eventId)]?.source ?? null),
     manual: true, updatedAt: new Date().toISOString(),
   };
   await kvSet('deadlines:all', all);
