@@ -5110,6 +5110,13 @@ ${kb.doc ? `\n=== OFFICIAL KNOWLEDGE BASE DOCUMENT (written by the league owner 
 === SITE CONTENT (from midwest3on3.com) ===
 ${kbText}`;
 
+    const callAnthropic = async (model) => {
+      const r = await axios.post('https://api.anthropic.com/v1/messages', {
+        model, max_tokens: 600, system, messages: history,
+      }, { headers: { 'x-api-key': s.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 });
+      return (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+    };
+
     let reply;
     if (isGemini) {
       // Gemini Flash "thinks" internally by default and those thoughts eat the
@@ -5127,14 +5134,16 @@ ${kbText}`;
       try { r = await axios.post(geminiUrl, geminiBody(true), geminiHeaders); }
       catch (err) {
         if (err.response?.status === 400) r = await axios.post(geminiUrl, geminiBody(false), geminiHeaders);
+        else if (err.response?.status === 429 && s.apiKey) {
+          // Gemini quota exhausted (free tier is tiny) — fall back to Claude
+          reply = await callAnthropic('claude-haiku-4-5-20251001');
+        }
+        else if (err.response?.status === 429) return res.json({ reply: `I'm getting a lot of questions right now! Give me a minute and ask again — or check https://www.midwest3on3.com/leagues in the meantime.` });
         else throw err;
       }
-      reply = (r.data?.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
+      if (r) reply = (r.data?.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
     } else {
-      const r = await axios.post('https://api.anthropic.com/v1/messages', {
-        model: s.model, max_tokens: 400, system, messages: history,
-      }, { headers: { 'x-api-key': s.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 });
-      reply = (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+      reply = await callAnthropic(s.model);
     }
     reply = reply || "Sorry — I didn't catch that. Could you rephrase?";
 
