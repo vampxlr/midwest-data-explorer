@@ -17,8 +17,13 @@ export default function Assistant() {
   const [inbox, setInbox] = useState(null);
   const [tab, setTab] = useState('leads');
 
-  const load = () => api.getAssistant().then(r => setCfg(r.data)).catch(() => {});
+  const [loadErr, setLoadErr] = useState(null);
+  const load = () => api.getAssistant().then(r => setCfg(r.data))
+    .catch(err => setLoadErr(err.response?.status === 403
+      ? 'Your account does not have admin access for this page — if you were recently promoted, sign out and sign back in to refresh your session.'
+      : (err.response?.data?.error || 'Could not load assistant settings — try refreshing.')));
   useEffect(() => { load(); api.getAssistantConvos().then(r => setInbox(r.data)).catch(() => {}); }, []);
+  if (loadErr && !cfg) return <div className="no-data" style={{ padding: 20 }}>⚠ {loadErr}</div>;
   if (!cfg) return <div className="no-data" style={{ padding: 20 }}>Loading…</div>;
   const upd = (patch) => setCfg(c => ({ ...c, ...patch }));
 
