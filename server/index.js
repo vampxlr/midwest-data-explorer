@@ -5087,6 +5087,8 @@ app.post('/api/assistant/chat', async (req, res) => {
 
 STYLE: Warm, concise, conversational — 1-4 short sentences per reply, like texting a helpful friend. Never invent facts. If you don't know, say so and point to the contact page. When a specific league/camp is discussed, include its page link from the knowledge base so they can register.
 
+FORMAT: Plain conversational text ONLY — never use markdown (no asterisks, no ** bold, no bullet lists, no [text](url) syntax). When sharing a link, write the bare URL like https://www.midwest3on3.com/leagues — the chat window makes bare URLs clickable automatically. Always finish your sentences completely.
+
 GOALS, in order: (1) answer accurately from LIVE DATA and the KNOWLEDGE BASE below — LIVE DATA wins if they conflict (it's real-time); (2) guide interested visitors toward registering, mentioning early-bird pricing when a deadline is coming up; (3) if someone seems interested but not ready, naturally offer: "want to leave your email so we can send you the registration link / remind you before the deadline?" — never pushy, ask at most once.
 ${s.extraInstructions ? '\nOWNER INSTRUCTIONS: ' + s.extraInstructions + '\n' : ''}
 === LIVE DATA (real-time from our registration system) ===
@@ -5097,19 +5099,24 @@ ${kbText}`;
 
     let reply;
     if (isGemini) {
-      const r = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.model)}:generateContent`,
-        {
-          systemInstruction: { parts: [{ text: system }] },
-          contents: history.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
-          // Newer Gemini Flash models spend output tokens on internal
-          // "thinking" before the visible text — a small cap truncates
-          // replies mid-sentence, so give generous headroom.
-          generationConfig: { maxOutputTokens: 2500 },
-        },
-        { headers: { 'x-goog-api-key': s.geminiKey, 'content-type': 'application/json' }, timeout: 30000 }
-      );
-      reply = (r.data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+      // Gemini Flash "thinks" internally by default and those thoughts eat the
+      // output-token budget, truncating replies mid-sentence. Disable thinking
+      // (a short Q&A widget doesn't need it — faster and cheaper); if a model
+      // rejects thinkingConfig, retry once without it.
+      const geminiBody = (withThinkingOff) => ({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: history.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+        generationConfig: { maxOutputTokens: 2500, ...(withThinkingOff ? { thinkingConfig: { thinkingBudget: 0 } } : {}) },
+      });
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.model)}:generateContent`;
+      const geminiHeaders = { headers: { 'x-goog-api-key': s.geminiKey, 'content-type': 'application/json' }, timeout: 30000 };
+      let r;
+      try { r = await axios.post(geminiUrl, geminiBody(true), geminiHeaders); }
+      catch (err) {
+        if (err.response?.status === 400) r = await axios.post(geminiUrl, geminiBody(false), geminiHeaders);
+        else throw err;
+      }
+      reply = (r.data?.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
     } else {
       const r = await axios.post('https://api.anthropic.com/v1/messages', {
         model: s.model, max_tokens: 400, system, messages: history,

@@ -182,6 +182,15 @@ function Status({ ok, okText, badText }) {
   );
 }
 
+// Bare URLs in replies become clickable, exactly like the site widget does
+function linkify(text, role) {
+  const parts = String(text).split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((p, i) => /^https?:\/\//.test(p)
+    ? <a key={i} href={p} target="_blank" rel="noopener noreferrer"
+        style={{ color: role === 'user' ? '#fff' : 'var(--accent-light)', textDecoration: 'underline', wordBreak: 'break-all' }}>{p}</a>
+    : p);
+}
+
 // Try Sarah right here — uses the same public endpoint the site widget calls
 function TestChat({ embed, name, hasApiKey }) {
   const key = (embed.match(/key=([^"&]+)/) || [])[1] || '';
@@ -219,8 +228,8 @@ function TestChat({ embed, name, hasApiKey }) {
             background: m.role === 'user' ? 'var(--accent)' : 'var(--surface-1)',
             color: m.role === 'user' ? '#fff' : 'var(--text-1)',
             border: m.role === 'user' ? 'none' : '1px solid var(--border-sub)',
-            borderRadius: 12, padding: '7px 12px', fontSize: 13, whiteSpace: 'pre-wrap',
-          }}>{m.content}</div>
+            borderRadius: 12, padding: '7px 12px', fontSize: 13, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          }}>{linkify(m.content, m.role)}</div>
         ))}
         {busy && <div style={{ fontSize: 12, color: 'var(--text-4)' }}>…</div>}
         <div ref={endRef} />
