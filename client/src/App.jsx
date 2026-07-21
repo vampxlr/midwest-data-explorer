@@ -14,6 +14,7 @@ import BootTerminal    from './components/BootTerminal.jsx';
 import DataManagement  from './pages/DataManagement.jsx';
 import Deadlines       from './pages/Deadlines.jsx';
 import TrackingSignal  from './pages/TrackingSignal.jsx';
+import Assistant       from './pages/Assistant.jsx';
 import Login        from './pages/Login.jsx';
 import Users        from './pages/Users.jsx';
 import Landing      from './pages/Landing.jsx';
@@ -279,6 +280,7 @@ export default function App() {
                     <>
                       <NavLink to="/deadlines"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>⏰</span> Deadlines</NavLink>
                       <NavLink to="/tracking"    onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📡</span> Tracking & Signal</NavLink>
+                      <NavLink to="/assistant"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🤖</span> Site Assistant</NavLink>
                     </>
                   )}
                   {(user.role === 'admin' || isSuperAdmin) && (
@@ -365,6 +367,7 @@ export default function App() {
               <Route path="/data"          element={<DataManagement ctx={ctx} />} />
               <Route path="/deadlines"     element={<Deadlines />} />
               <Route path="/tracking"      element={<TrackingSignal />} />
+              <Route path="/assistant"     element={<Assistant />} />
               {(user.role === 'admin' || isSuperAdmin) && <Route path="/users" element={<Users />} />}
               <Route path="/guide"         element={<Guide />} />
             </Routes>

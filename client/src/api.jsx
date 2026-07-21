@@ -193,6 +193,13 @@ export const api = {
   getWebhookDeliveries: () => axios.get(`${BASE}/webhooks/deliveries`),
   reprocessWebhooks:    () => axios.post(`${BASE}/webhooks/reprocess`),
   getReconcile:         () => axios.get(`${BASE}/webhooks/reconcile`),
+
+  // ── Sarah — AI site assistant ──────────────────────────────────────────────
+  getAssistant:        ()     => axios.get(`${BASE}/admin/assistant`),
+  saveAssistant:       (body) => axios.put(`${BASE}/admin/assistant`, body),
+  rebuildAssistantKb:  ()     => axios.post(`${BASE}/admin/assistant/rebuild-kb`),
+  getAssistantConvos:  ()     => axios.get(`${BASE}/admin/assistant/convos`),
+  assistantChat:       (body) => axios.post(`${BASE}/assistant/chat`, body),
   getForwardedPage: (offset) => axios.get(`${BASE}/webhooks/forwarded?offset=${offset}`),
   getMissingPage: (offset, days) => axios.get(`${BASE}/webhooks/missing?offset=${offset}&days=${days || 7}`),
   auditWebhooks:    (days) => axios.post(`${BASE}/webhooks/audit7d?days=${days || 7}`),

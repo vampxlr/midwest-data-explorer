@@ -55,6 +55,8 @@ const PUBLIC_API_PATHS = new Set([
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
+  '/api/assistant/chat',      // site chat widget (gated by per-org widget key)
+  '/api/widget.js',           // the embeddable chat widget script itself
   '/api/cron/daily',          // Vercel cron (gated by CRON_SECRET when set)
 ]);
 app.use((req, res, next) => {
@@ -4925,6 +4927,247 @@ app.put('/api/deadlines/:eventId', auth.requireRole('admin'), async (req, res) =
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// SARAH — AI registration assistant. An embeddable chat widget for the org's
+// public website that answers from (a) a scraped site knowledge base and
+// (b) LIVE Data Explorer facts (open leagues, EB/final deadlines, prices),
+// captures visitor contact info as leads, and fires Meta CAPI Lead events so
+// the ads that drove the conversation get attribution. Dormant-safe: without
+// an Anthropic API key the widget politely says the assistant is offline.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function assistantSettings() {
+  const s = (await kvGet('assistant:settings')) || {};
+  return {
+    apiKey: s.apiKeyEnc ? decryptSecret(s.apiKeyEnc) : (process.env.ANTHROPIC_API_KEY || null),
+    hasApiKey: !!(s.apiKeyEnc || process.env.ANTHROPIC_API_KEY),
+    model: s.model || 'claude-haiku-4-5-20251001',
+    name: s.name || 'Sarah',
+    greeting: s.greeting || "Hi! I'm Sarah 👋 I can answer anything about our leagues, tournaments and camps — dates, prices, deadlines, how it all works. What would you like to know?",
+    extraInstructions: s.extraInstructions || '',
+    accent: s.accent || '#f97316',
+    widgetKey: s.widgetKey || null,
+  };
+}
+
+// Live facts the model can quote: currently-open events with their deadlines
+// and prices — the thing a static chatbot can never get right.
+async function assistantLiveContext() {
+  try {
+    const [db, deadlines] = await Promise.all([store.load(), kvGet('deadlines:all')]);
+    const dl = deadlines || {};
+    const today = store.todayCDT();
+    const lines = [];
+    const events = Object.values(db.events)
+      .filter(e => e.status === 1)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    for (const e of events.slice(0, 80)) {
+      const d = dl[String(e.id)];
+      let extra = '';
+      if (d) {
+        const parts = [];
+        if (d.earlyBird)     parts.push(`early-bird deadline ${d.earlyBird}${d.earlyBirdPrice ? ` ($${d.earlyBirdPrice})` : ''}${d.earlyBird < today ? ' (PASSED)' : ''}`);
+        if (d.finalDeadline) parts.push(`final registration deadline ${d.finalDeadline}${d.finalPrice ? ` ($${d.finalPrice})` : ''}${d.finalDeadline < today ? ' (CLOSED)' : ''}`);
+        if (parts.length) extra = ` — ${parts.join(', ')}`;
+      }
+      lines.push(`- ${e.name}: OPEN for registration${extra}`);
+    }
+    return `Today's date: ${today}\nCurrently open for registration (${lines.length} events):\n${lines.join('\n')}`;
+  } catch { return ''; }
+}
+
+// Scrape the org's public site into the knowledge base the model answers from
+app.post('/api/admin/assistant/rebuild-kb', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const listingPaths = ['/', '/leagues', '/tournaments', '/camps', '/about-midwest-3-on-3', '/faqs', '/contact-us'];
+    const subpages = new Set(listingPaths);
+    for (const p of ['/leagues', '/tournaments', '/camps', '/']) {
+      try {
+        const html = await fetchSitePage(SITE_BASE + p);
+        for (const m of String(html).matchAll(/href="([^"]+)"/gi)) {
+          let path = m[1].replace(/^https?:\/\/(www\.)?midwest3on3\.com/i, '');
+          if (/^https?:|^mailto:|^tel:|^#/i.test(path)) continue;
+          if (!path.startsWith('/')) path = '/' + path;
+          path = path.split(/[#?]/)[0].replace(/\/$/, '');
+          if (!path) continue;
+          if (/league|tournament|camp|clinic|faq|about|contact|rules|philosoph|waiver|start-a-new/i.test(path)) subpages.add(path);
+        }
+      } catch {}
+    }
+    const pages = [];
+    const paths = [...subpages].slice(0, 60);
+    for (let i = 0; i < paths.length; i += 5) {
+      const batch = await Promise.all(paths.slice(i, i + 5).map(async (path) => {
+        try {
+          const html = await fetchSitePage(SITE_BASE + (path === '/' ? '' : path));
+          const title = (String(html).match(/<title>([^<]*)<\/title>/i) || [])[1]?.replace(/\s*&mdash;.*$/, '').trim() || path;
+          let text = htmlToText(html);
+          // strip the repeated nav/menu boilerplate that pads every Squarespace page
+          const bodyStart = text.search(/Open Menu Close Menu(?!.*Open Menu Close Menu)/s);
+          if (bodyStart > 0) text = text.slice(bodyStart + 'Open Menu Close Menu'.length);
+          text = text.replace(/\s+/g, ' ').trim().slice(0, 4500);
+          return text.length > 200 ? { path, url: SITE_BASE + path, title, text } : null;
+        } catch { return null; }
+      }));
+      pages.push(...batch.filter(Boolean));
+    }
+    const kb = { builtAt: new Date().toISOString(), pages, chars: pages.reduce((s, p) => s + p.text.length, 0) };
+    await kvSet('assistant:kb', kb);
+    res.json({ ok: true, pages: pages.length, chars: kb.chars, paths: pages.map(p => p.path) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin: settings + status + the copy-paste embed snippet
+app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
+  const cur = (await kvGet('assistant:settings')) || {};
+  if (!cur.widgetKey) {
+    cur.widgetKey = cryptoLib.randomBytes(12).toString('base64url');
+    await kvSet('assistant:settings', cur);
+  }
+  const s = await assistantSettings();
+  const kb = (await kvGet('assistant:kb')) || null;
+  const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
+  res.json({
+    hasApiKey: s.hasApiKey, model: s.model, name: s.name, greeting: s.greeting,
+    extraInstructions: s.extraInstructions, accent: s.accent,
+    kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, paths: kb.pages.map(p => p.path) } : null,
+    embed: `<script src="${host}/api/widget.js?key=${cur.widgetKey}" async></script>`,
+  });
+});
+app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
+  const b = req.body || {};
+  const cur = (await kvGet('assistant:settings')) || {};
+  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent']) {
+    if (b[k] !== undefined) cur[k] = String(b[k]);
+  }
+  if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
+  if (!cur.widgetKey) cur.widgetKey = cryptoLib.randomBytes(12).toString('base64url');
+  await kvSet('assistant:settings', cur);
+  res.json({ ok: true });
+});
+app.get('/api/admin/assistant/convos', auth.requireRole('admin'), async (req, res) => {
+  const [convos, leads] = await Promise.all([kvGet('assistant:convos'), kvGet('assistant:leads')]);
+  res.json({ convos: convos || [], leads: leads || [] });
+});
+
+// Public chat endpoint the widget calls. Stateless per call — the widget
+// sends its own trimmed history. Keyed + rate limited per IP.
+const chatRate = new Map();
+app.post('/api/assistant/chat', async (req, res) => {
+  try {
+    const { key, sessionId, messages, page } = req.body || {};
+    const cur = (await kvGet('assistant:settings')) || {};
+    if (!cur.widgetKey || key !== cur.widgetKey) return res.status(401).json({ error: 'bad key' });
+
+    const ip = req.ip || 'x';
+    const now = Date.now();
+    const rl = chatRate.get(ip) || { n: 0, reset: now + 3600000 };
+    if (now > rl.reset) { rl.n = 0; rl.reset = now + 3600000; }
+    if (++rl.n > 40) return res.status(429).json({ reply: "You've sent quite a few messages — give me a short break and try again in a bit!" });
+    chatRate.set(ip, rl);
+
+    const s = await assistantSettings();
+    if (!s.apiKey) return res.json({ reply: `${s.name} is offline right now — please check the website pages for details, or reach out through the contact page. We'll be back shortly!`, offline: true });
+
+    const history = (Array.isArray(messages) ? messages : [])
+      .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .slice(-12)
+      .map(m => ({ role: m.role, content: String(m.content).slice(0, 600) }));
+    if (!history.length || history[history.length - 1].role !== 'user') return res.status(400).json({ error: 'last message must be from user' });
+
+    const kb = (await kvGet('assistant:kb')) || { pages: [] };
+    const kbText = kb.pages.map(p => `### ${p.title} (${p.url})\n${p.text}`).join('\n\n').slice(0, 38000);
+    const live = await assistantLiveContext();
+
+    const system = `You are ${s.name}, the friendly registration assistant for Midwest 3 on 3 Basketball (midwest3on3.com) — youth 3-on-3 basketball leagues, tournaments and camps in Minnesota and Wisconsin.
+
+STYLE: Warm, concise, conversational — 1-4 short sentences per reply, like texting a helpful friend. Never invent facts. If you don't know, say so and point to the contact page. When a specific league/camp is discussed, include its page link from the knowledge base so they can register.
+
+GOALS, in order: (1) answer accurately from LIVE DATA and the KNOWLEDGE BASE below — LIVE DATA wins if they conflict (it's real-time); (2) guide interested visitors toward registering, mentioning early-bird pricing when a deadline is coming up; (3) if someone seems interested but not ready, naturally offer: "want to leave your email so we can send you the registration link / remind you before the deadline?" — never pushy, ask at most once.
+${s.extraInstructions ? '\nOWNER INSTRUCTIONS: ' + s.extraInstructions + '\n' : ''}
+=== LIVE DATA (real-time from our registration system) ===
+${live}
+
+=== KNOWLEDGE BASE (from midwest3on3.com) ===
+${kbText}`;
+
+    const r = await axios.post('https://api.anthropic.com/v1/messages', {
+      model: s.model, max_tokens: 400, system, messages: history,
+    }, { headers: { 'x-api-key': s.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 });
+    const reply = (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('') || "Sorry — I didn't catch that. Could you rephrase?";
+
+    // Log the exchange + capture leads (email/phone in the user's message →
+    // lead record + Meta CAPI Lead so the driving ad gets credit)
+    const userMsg = history[history.length - 1].content;
+    appendCapped('assistant:convos', {
+      at: new Date().toISOString(), sessionId: String(sessionId || '').slice(0, 40),
+      page: String(page || '').slice(0, 200), q: userMsg.slice(0, 400), a: reply.slice(0, 600),
+    }, 300).catch(() => {});
+    const email = (userMsg.match(/[^\s@]+@[^\s@]+\.[^\s@]{2,}/) || [])[0] || null;
+    const phone = !email ? ((userMsg.match(/\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [])[0] || null) : null;
+    if (email || phone) {
+      appendCapped('assistant:leads', {
+        at: new Date().toISOString(), email, phone, page: String(page || '').slice(0, 200),
+        context: history.slice(-4).map(m => `${m.role}: ${m.content.slice(0, 120)}`).join(' | '),
+      }, 300).catch(() => {});
+      const cfg = ((await kvGet('tracking:orgs')) || {})['midwest-3on3'];
+      const override = cfg?.metaPixelId && cfg?.capiTokenEnc ? { pixelId: cfg.metaPixelId, token: decryptSecret(cfg.capiTokenEnc) } : {};
+      capiSend('Lead', { email, phone, ip: req.ip, ua: req.headers['user-agent'], sourceUrl: page, ...override }).catch(() => {});
+    }
+    res.json({ reply });
+  } catch (err) {
+    const detail = err.response?.data?.error?.message || err.message;
+    console.warn('[assistant] chat failed:', detail);
+    res.status(500).json({ reply: 'Sorry, something hiccuped on my end — try that again in a moment!', error: detail });
+  }
+});
+
+// The embeddable widget — one <script> tag on the public site renders the
+// bubble + chat panel and talks back to this server. Vanilla JS, all styles
+// inline, no dependencies, safe on any page.
+app.get('/api/widget.js', async (req, res) => {
+  const s = await assistantSettings();
+  const cfg = JSON.stringify({ name: s.name, greeting: s.greeting, accent: s.accent, key: String(req.query.key || '') });
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.send(`(function(){
+var CFG=${cfg};
+var API=(document.currentScript&&document.currentScript.src?new URL(document.currentScript.src).origin:'')+ '/api/assistant/chat';
+if(!CFG.key||document.getElementById('mw3-chat-bubble'))return;
+var open=false,busy=false,hist=[];
+try{hist=JSON.parse(sessionStorage.getItem('mw3-chat')||'[]')}catch(e){}
+var sid=sessionStorage.getItem('mw3-sid')||(Date.now().toString(36)+Math.random().toString(36).slice(2,8));
+sessionStorage.setItem('mw3-sid',sid);
+function el(t,st,parent){var e=document.createElement(t);if(st)e.setAttribute('style',st);if(parent)parent.appendChild(e);return e}
+var Z='2147483000';
+var bubble=el('button','position:fixed;bottom:22px;right:22px;width:60px;height:60px;border-radius:50%;border:none;cursor:pointer;z-index:'+Z+';background:'+CFG.accent+';color:#fff;font-size:28px;box-shadow:0 6px 24px rgba(0,0,0,.35);transition:transform .15s;line-height:1',document.body);
+bubble.id='mw3-chat-bubble';bubble.textContent='🏀';bubble.title='Chat with '+CFG.name;
+bubble.onmouseenter=function(){bubble.style.transform='scale(1.08)'};bubble.onmouseleave=function(){bubble.style.transform=''};
+var panel=el('div','position:fixed;bottom:94px;right:22px;width:min(370px,calc(100vw - 32px));height:min(540px,calc(100vh - 120px));z-index:'+Z+';background:#fff;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.35);display:none;flex-direction:column;overflow:hidden;font-family:-apple-system,Segoe UI,Roboto,sans-serif',document.body);
+var head=el('div','background:'+CFG.accent+';color:#fff;padding:14px 16px;font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px',panel);
+head.innerHTML='<span style="font-size:20px">🏀</span><span>'+CFG.name+' · Midwest 3 on 3</span><span style="margin-left:auto;font-size:10px;font-weight:400;opacity:.85">online</span>';
+var msgs=el('div','flex:1;overflow-y:auto;padding:14px;background:#f6f7f9;display:flex;flex-direction:column;gap:8px',panel);
+var form=el('form','display:flex;gap:8px;padding:10px;background:#fff;border-top:1px solid #e5e7eb',panel);
+var input=el('input','flex:1;border:1px solid #d1d5db;border-radius:20px;padding:9px 14px;font-size:14px;outline:none',form);
+input.placeholder='Ask about leagues, prices, dates…';input.maxLength=500;
+var send=el('button','border:none;background:'+CFG.accent+';color:#fff;border-radius:50%;width:38px;height:38px;cursor:pointer;font-size:16px;flex-shrink:0',form);
+send.type='submit';send.textContent='➤';
+function add(role,text){var b=el('div','max-width:82%;padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.45;white-space:pre-wrap;word-break:break-word;'+(role==='user'?'align-self:flex-end;background:'+CFG.accent+';color:#fff;border-bottom-right-radius:4px':'align-self:flex-start;background:#fff;color:#111;border:1px solid #e5e7eb;border-bottom-left-radius:4px'),msgs);
+b.innerHTML=String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/(https?:\\/\\/[^\\s<]+)/g,'<a href="$1" target="_blank" rel="noopener" style="color:'+(role==='user'?'#fff':CFG.accent)+';text-decoration:underline">$1</a>');
+msgs.scrollTop=msgs.scrollHeight;return b}
+function save(){try{sessionStorage.setItem('mw3-chat',JSON.stringify(hist.slice(-20)))}catch(e){}}
+function render(){msgs.innerHTML='';add('assistant',CFG.greeting);hist.forEach(function(m){add(m.role,m.content)})}
+bubble.onclick=function(){open=!open;panel.style.display=open?'flex':'none';bubble.textContent=open?'✕':'🏀';if(open){render();input.focus()}};
+form.onsubmit=function(ev){ev.preventDefault();var q=input.value.trim();if(!q||busy)return;input.value='';
+hist.push({role:'user',content:q});add('user',q);save();busy=true;
+var t=add('assistant','…');var dots=setInterval(function(){t.textContent=t.textContent.length>=3?'.':t.textContent+'.'},350);
+fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:CFG.key,sessionId:sid,page:location.href,messages:hist.slice(-12)})})
+.then(function(r){return r.json()}).then(function(d){clearInterval(dots);t.remove();var a=d.reply||'Sorry, something went wrong — try again!';hist.push({role:'assistant',content:a});add('assistant',a);save()})
+.catch(function(){clearInterval(dots);t.remove();add('assistant','Hmm, I could not connect — please try again in a moment.')})
+.finally(function(){busy=false;input.focus()})};
+})();`);
+});
+
 // META ADS REPORTING — read-only Marketing API sync + classification + reports
 // Token: in-app setting (encrypted, write-only) wins over META_ACCESS_TOKEN env.
 // ══════════════════════════════════════════════════════════════════════════════
