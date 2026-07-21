@@ -198,6 +198,7 @@ export const api = {
   getAssistant:        ()     => axios.get(`${BASE}/admin/assistant`),
   saveAssistant:       (body) => axios.put(`${BASE}/admin/assistant`, body),
   rebuildAssistantKb:  ()     => axios.post(`${BASE}/admin/assistant/rebuild-kb`),
+  generateAssistantFaq:()     => axios.post(`${BASE}/admin/assistant/generate-faq`),
   getAssistantConvos:  ()     => axios.get(`${BASE}/admin/assistant/convos`),
   assistantChat:       (body) => axios.post(`${BASE}/assistant/chat`, body),
   getForwardedPage: (offset) => axios.get(`${BASE}/webhooks/forwarded?offset=${offset}`),

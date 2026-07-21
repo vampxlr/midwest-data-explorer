@@ -14,6 +14,7 @@ export default function Assistant() {
   const [mcKey, setMcKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
+  const [genFaq, setGenFaq] = useState(false);
   const [inbox, setInbox] = useState(null);
   const [tab, setTab] = useState('leads');
 
@@ -33,6 +34,7 @@ export default function Assistant() {
       await api.saveAssistant({
         name: cfg.name, greeting: cfg.greeting, model: cfg.model, accent: cfg.accent,
         extraInstructions: cfg.extraInstructions, kbDocUrl: cfg.kbDocUrl || '', leadNotifyEmail: cfg.leadNotifyEmail || '',
+        answerMode: cfg.answerMode || 'hybrid',
         mailchimpListId: cfg.mailchimpListId || '',
         ...(mcKey.trim() ? { mailchimpKey: mcKey.trim() } : {}),
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
@@ -43,6 +45,16 @@ export default function Assistant() {
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
     finally { setBusy(false); }
+  }
+
+  async function generateFaq() {
+    setGenFaq(true);
+    try {
+      const r = await api.generateAssistantFaq();
+      toast.success(`FAQ bank generated — ${r.data.count} ready-made answers`);
+      load();
+    } catch (err) { toast.error(err.response?.data?.error || 'Generation failed'); }
+    finally { setGenFaq(false); }
   }
 
   async function rebuild() {
@@ -118,6 +130,13 @@ export default function Assistant() {
               <option value="gemini-2.5-flash">Gemini 2.5 Flash — older keys only</option>
             </select>
           </Field>
+          <Field label="Answer mode">
+            <select className="field-input" value={cfg.answerMode || 'hybrid'} onChange={e => upd({ answerMode: e.target.value })}>
+              <option value="hybrid">Hybrid — FAQ bank first, AI for the rest (recommended)</option>
+              <option value="llm">AI only — every question goes to the model</option>
+              <option value="faq">No-LLM — FAQ bank only, zero AI cost</option>
+            </select>
+          </Field>
           <Field label="Accent color">
             <input type="color" className="field-input" style={{ width: 60, padding: 2, height: 34 }} value={cfg.accent} onChange={e => upd({ accent: e.target.value })} />
           </Field>
@@ -153,8 +172,13 @@ export default function Assistant() {
           <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} onClick={rebuild} disabled={rebuilding}>
             {rebuilding ? '🌐 Scraping midwest3on3.com…' : '🌐 Rebuild knowledge base'}
           </button>
+          <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} onClick={generateFaq} disabled={genFaq}
+            title="The AI reads the whole knowledge base ONCE and writes ~50 ready-made answers. Static facts are baked in; deadlines/prices/open leagues stay live via placeholders. Matched questions then cost zero AI tokens.">
+            {genFaq ? '🧠 Generating FAQ bank…' : '🧠 Generate FAQ bank'}
+          </button>
           {cfg.kb && <span style={{ fontSize: 11, color: 'var(--text-4)' }}>
             KB built {String(cfg.kb.builtAt).replace('T', ' ').slice(0, 16)} · {cfg.kb.pages} pages{cfg.kb.docChars ? ` + owner doc (${(cfg.kb.docChars / 1000).toFixed(0)}k)` : ''} · {(cfg.kb.chars / 1000).toFixed(0)}k chars
+            {cfg.faq ? ` · FAQ bank: ${cfg.faq.count} answers` : ' · no FAQ bank yet'}
           </span>}
         </div>
       </div>

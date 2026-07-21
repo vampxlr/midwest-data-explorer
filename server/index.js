@@ -4956,6 +4956,7 @@ async function assistantSettings() {
     greeting: s.greeting || "Hi! I'm Sarah 👋 I can answer anything about our leagues, tournaments and camps — dates, prices, deadlines, how it all works. What would you like to know?",
     extraInstructions: s.extraInstructions || '',
     accent: s.accent || '#f97316',
+    answerMode: s.answerMode || 'hybrid', // 'hybrid' | 'llm' | 'faq' (no-LLM)
     kbDocUrl: s.kbDocUrl || '',
     leadNotifyEmail: s.leadNotifyEmail || '',
     mailchimpKey: s.mailchimpKeyEnc ? decryptSecret(s.mailchimpKeyEnc) : null,
@@ -5061,6 +5062,8 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
     leadNotifyEmail: s.leadNotifyEmail, emailConfigured: !!process.env.RESEND_API_KEY,
     hasMailchimp: s.hasMailchimp, mailchimpListId: s.mailchimpListId,
     abuse: ((await kvGet('assistant:abuse')) || []).slice(0, 20),
+    answerMode: s.answerMode,
+    faq: await kvGet('assistant:faq').then(f => f ? { builtAt: f.builtAt, count: f.items.length } : null).catch(() => null),
     kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, docChars: kb.doc ? kb.doc.chars : 0, paths: kb.pages.map(p => p.path) } : null,
     embed: `<script src="${host}/api/widget.js?key=${cur.widgetKey}" async></script>`,
   });
@@ -5068,7 +5071,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
 app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const cur = (await kvGet('assistant:settings')) || {};
-  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail', 'mailchimpListId']) {
+  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail', 'mailchimpListId', 'answerMode']) {
     if (b[k] !== undefined) cur[k] = String(b[k]);
   }
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
@@ -5081,6 +5084,106 @@ app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
 app.get('/api/admin/assistant/convos', auth.requireRole('admin'), async (req, res) => {
   const [convos, leads] = await Promise.all([kvGet('assistant:convos'), kvGet('assistant:leads')]);
   res.json({ convos: convos || [], leads: leads || [] });
+});
+
+// ── FAQ bank: pre-generated answers with live-data placeholders ──────────────
+// Generated ONCE from the knowledge base by the LLM (admin button). Static
+// facts are baked into the answers; anything that changes (open leagues,
+// deadlines, prices) is a {{PLACEHOLDER}} rendered from live data at answer
+// time. Matched FAQ questions cost zero AI tokens.
+const FAQ_STOPWORDS = new Set(['the', 'and', 'for', 'are', 'can', 'you', 'your', 'our', 'what', 'how', 'when', 'where', 'why', 'who', 'does', 'this', 'that', 'with', 'have', 'get', 'about', 'basketball', 'league', 'leagues']);
+const faqTokens = (str) => normQuestion(str).split(' ').filter(w => w.length > 2 && !FAQ_STOPWORDS.has(w));
+function matchFaq(items, question) {
+  const qt = new Set(faqTokens(question));
+  if (qt.size === 0) return null;
+  let best = null, bs = 0;
+  for (const it of items) {
+    for (const cand of [it.q, ...(it.alts || [])]) {
+      const ct = new Set(faqTokens(cand));
+      if (!ct.size) continue;
+      let inter = 0; for (const t of qt) if (ct.has(t)) inter++;
+      const score = inter / Math.min(qt.size, ct.size);
+      if (inter >= 2 && score >= 0.65 && score > bs) { bs = score; best = it; }
+      else if (inter >= 1 && qt.size <= 2 && score >= 0.99 && score > bs) { bs = score; best = it; }
+    }
+  }
+  return best;
+}
+async function assistantOpenDeadlines() {
+  const [db, deadlines] = await Promise.all([store.load(), kvGet('deadlines:all')]);
+  const dl = deadlines || {};
+  const today = store.todayCDT();
+  return Object.values(db.events)
+    .filter(e => e.status === 1)
+    .map(e => ({ name: e.name, d: dl[String(e.id)] || {} }))
+    .filter(x => !(x.d.finalDeadline && x.d.finalDeadline < today))
+    .sort((a, b) => String(a.d.finalDeadline || '9999').localeCompare(String(b.d.finalDeadline || '9999')));
+}
+async function renderFaqAnswer(answer, questionText) {
+  if (!/\{\{/.test(answer)) return answer;
+  const open = await assistantOpenDeadlines();
+  const shortName = (n) => String(n).replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim();
+  // if the visitor named a specific open league, answer for that one
+  const qt = new Set(faqTokens(questionText));
+  const mentioned = open.filter(x => faqTokens(shortName(x.name)).some(t => qt.has(t)));
+  const dlLine = (x) => {
+    const p = [];
+    if (x.d.earlyBird) p.push(`early-bird deadline ${x.d.earlyBird}${x.d.earlyBirdPrice ? ` ($${x.d.earlyBirdPrice}/team)` : ''}`);
+    if (x.d.finalDeadline) p.push(`final registration deadline ${x.d.finalDeadline}${x.d.finalPrice ? ` ($${x.d.finalPrice}/team)` : ''}`);
+    return `${shortName(x.name)}: ${p.join(', ') || 'see the league page for deadlines'}`;
+  };
+  const chosen = mentioned.length ? mentioned : open.filter(x => x.d.finalDeadline).slice(0, 3);
+  return answer
+    .replaceAll('{{OPEN_LEAGUES}}', [...new Set(open.map(x => shortName(x.name)))].join(', ') || 'several events — see https://www.midwest3on3.com/leagues')
+    .replaceAll('{{LEAGUE_DEADLINES}}', chosen.map(dlLine).join('. ') || 'see https://www.midwest3on3.com/leagues for current deadlines');
+}
+
+// Admin: LLM reads the knowledge base once and writes the FAQ bank
+app.post('/api/admin/assistant/generate-faq', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const s = await assistantSettings();
+    const kb = (await kvGet('assistant:kb')) || { pages: [] };
+    const kbText = (kb.doc ? kb.doc.text.slice(0, 55000) + '\n\n' : '') +
+      kb.pages.map(p => `### ${p.title} (${p.url})\n${p.text}`).join('\n\n').slice(0, 25000);
+    if (kbText.length < 1000) return res.status(400).json({ error: 'Knowledge base is empty — rebuild it first' });
+    const prompt = `You are preparing the pre-written FAQ answer bank for ${s.name}, the chat assistant of Midwest 3 on 3 Basketball (midwest3on3.com). Read the knowledge base below and produce the 45-60 questions visitors most likely ask, each with an answer.
+
+RULES:
+- Answers: warm, conversational plain text, 1-4 short sentences, no markdown, bare URLs only. Include the relevant page URL when one exists.
+- NEVER bake in anything that changes over time — specific dates, deadlines, prices, or which leagues/camps are currently open. Where such info belongs, use EXACTLY these placeholders instead: {{OPEN_LEAGUES}} (replaced with the list of currently-open events) or {{LEAGUE_DEADLINES}} (replaced with current deadline + price info).
+- Static policies ARE safe to bake in: team sizes, no practices, no standings, free-agent process, escalation email, formats, philosophy, shirt info, weather policy, etc.
+- "alts": 4-8 alternative phrasings of the same question, the varied ways real parents type it (short, misspelled-ish, casual).
+Return ONLY a JSON array, no prose: [{"q":"...","alts":["...",...],"a":"..."}]
+
+=== KNOWLEDGE BASE ===
+${kbText}`;
+    let raw;
+    if (String(s.model).startsWith('gemini')) {
+      if (!s.geminiKey) return res.status(400).json({ error: 'No Gemini key saved' });
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.model)}:generateContent`;
+      const opts = { headers: { 'x-goog-api-key': s.geminiKey, 'content-type': 'application/json' }, timeout: 120000 };
+      const body = (cfg) => ({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: cfg });
+      let r;
+      try { r = await axios.post(url, body({ maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 0 }, responseMimeType: 'application/json' }), opts); }
+      catch (e1) {
+        if (e1.response?.status !== 400) throw e1;
+        r = await axios.post(url, body({ maxOutputTokens: 8192 }), opts);
+      }
+      raw = (r.data?.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
+    } else {
+      if (!s.apiKey) return res.status(400).json({ error: 'No Anthropic key saved' });
+      const r = await axios.post('https://api.anthropic.com/v1/messages',
+        { model: s.model, max_tokens: 16000, messages: [{ role: 'user', content: prompt }] },
+        { headers: { 'x-api-key': s.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 120000 });
+      raw = (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+    }
+    const jsonText = raw.replace(/^```(json)?/m, '').replace(/```\s*$/m, '').trim();
+    const items = JSON.parse(jsonText.slice(jsonText.indexOf('['), jsonText.lastIndexOf(']') + 1))
+      .filter(x => x && x.q && x.a).map(x => ({ q: String(x.q), alts: (x.alts || []).map(String).slice(0, 8), a: String(x.a) }));
+    if (!items.length) return res.status(500).json({ error: 'Model returned no usable FAQ items — try again' });
+    await kvSet('assistant:faq', { builtAt: new Date().toISOString(), items });
+    res.json({ ok: true, count: items.length });
+  } catch (err) { res.status(500).json({ error: err.response?.data?.error?.message || err.message }); }
 });
 
 // Public chat endpoint the widget calls. Stateless per call — the widget
@@ -5152,7 +5255,8 @@ app.post('/api/assistant/chat', async (req, res) => {
       return res.status(429).json({ reply: "I'm getting a lot of questions right now! Give me a minute and ask again — or check https://www.midwest3on3.com/leagues in the meantime." });
     }
     const isGemini = String(s.model).startsWith('gemini');
-    if (isGemini ? !s.geminiKey : !s.apiKey) return res.json({ reply: `${s.name} is offline right now — please check the website pages for details, or reach out through the contact page. We'll be back shortly!`, offline: true });
+    // no-LLM mode needs no API key at all — only block keyless chats when a model call would be required
+    if ((s.answerMode || 'hybrid') !== 'faq' && (isGemini ? !s.geminiKey : !s.apiKey)) return res.json({ reply: `${s.name} is offline right now — please check the website pages for details, or reach out through the contact page. We'll be back shortly!`, offline: true });
 
     const history = (Array.isArray(messages) ? messages : [])
       .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
@@ -5163,7 +5267,18 @@ app.post('/api/assistant/chat', async (req, res) => {
     // Repeat opening questions (no conversation context) are answered from
     // cache — zero AI tokens. Follow-ups always go to the model.
     const cacheable = history.length === 1;
-    const cachedReply = cacheable ? cacheGet(history[0].content) : null;
+    let cachedReply = cacheable ? cacheGet(history[0].content) : null;
+
+    // FAQ bank: pre-written answers (live placeholders rendered fresh) — zero
+    // AI tokens. 'hybrid' tries FAQ then falls through to the LLM; 'faq' runs
+    // with no LLM at all; 'llm' skips the bank entirely.
+    const mode = s.answerMode || 'hybrid';
+    if (!cachedReply && mode !== 'llm') {
+      const bank = (await kvGet('assistant:faq'))?.items || [];
+      const hit = matchFaq(bank, history[history.length - 1].content);
+      if (hit) cachedReply = await renderFaqAnswer(hit.a, history[history.length - 1].content);
+      else if (mode === 'faq') cachedReply = `Great question — I don't have that one handy! You'll find everything at https://www.midwest3on3.com, or reach out through https://www.midwest3on3.com/contact-us and the team will get you an answer. Want to leave your email so someone follows up with you?`;
+    }
 
     const kb = (await kvGet('assistant:kb')) || { pages: [] };
     const kbText = kb.pages.map(p => `### ${p.title} (${p.url})\n${p.text}`).join('\n\n').slice(0, 38000);
