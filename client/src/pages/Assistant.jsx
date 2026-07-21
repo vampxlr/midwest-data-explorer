@@ -10,6 +10,7 @@ import { api } from '../api.jsx';
 export default function Assistant() {
   const [cfg, setCfg] = useState(null);
   const [apiKey, setApiKey] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [inbox, setInbox] = useState(null);
@@ -27,8 +28,9 @@ export default function Assistant() {
         name: cfg.name, greeting: cfg.greeting, model: cfg.model, accent: cfg.accent,
         extraInstructions: cfg.extraInstructions,
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        ...(geminiKey.trim() ? { geminiKey: geminiKey.trim() } : {}),
       });
-      setApiKey('');
+      setApiKey(''); setGeminiKey('');
       toast.success('Assistant settings saved');
       load();
     } catch (err) { toast.error(err.response?.data?.error || 'Save failed'); }
@@ -55,7 +57,9 @@ export default function Assistant() {
       {/* Status + embed */}
       <div className="card">
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
-          <Status ok={cfg.hasApiKey} okText="AI connected" badText="No API key — assistant offline" />
+          <Status ok={cfg.model?.startsWith('gemini') ? cfg.hasGeminiKey : cfg.hasApiKey}
+            okText={`AI connected (${cfg.model?.startsWith('gemini') ? 'Gemini' : 'Claude'})`}
+            badText={`No ${cfg.model?.startsWith('gemini') ? 'Gemini' : 'Anthropic'} key for the selected model — assistant offline`} />
           <Status ok={!!cfg.kb} okText={cfg.kb ? `Knowledge base: ${cfg.kb.pages} pages` : ''} badText="Knowledge base not built yet" />
         </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', marginBottom: 6 }}>
@@ -75,15 +79,22 @@ export default function Assistant() {
           <Field label="Assistant name">
             <input className="field-input" style={{ width: 130 }} value={cfg.name} onChange={e => upd({ name: e.target.value })} />
           </Field>
-          <Field label={`Anthropic API key ${cfg.hasApiKey ? '(saved)' : '— get one at console.anthropic.com'}`}>
-            <input className="field-input" type="password" style={{ width: 260 }} value={apiKey}
+          <Field label={`Anthropic API key ${cfg.hasApiKey ? '(saved)' : '— console.anthropic.com'}`}>
+            <input className="field-input" type="password" style={{ width: 230 }} value={apiKey}
               placeholder={cfg.hasApiKey ? '••••••••  (unchanged)' : 'sk-ant-…'}
               onChange={e => setApiKey(e.target.value)} />
           </Field>
-          <Field label="Model">
+          <Field label={`Gemini API key ${cfg.hasGeminiKey ? '(saved)' : '— aistudio.google.com (free tier)'}`}>
+            <input className="field-input" type="password" style={{ width: 230 }} value={geminiKey}
+              placeholder={cfg.hasGeminiKey ? '••••••••  (unchanged)' : 'AIza…'}
+              onChange={e => setGeminiKey(e.target.value)} />
+          </Field>
+          <Field label="Model (needs the matching key above)">
             <select className="field-input" value={cfg.model} onChange={e => upd({ model: e.target.value })}>
-              <option value="claude-haiku-4-5-20251001">Haiku 4.5 — fast & cheap (recommended)</option>
-              <option value="claude-sonnet-5">Sonnet 5 — smarter, pricier</option>
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 — fast & cheap</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5 — smarter, pricier</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash — free tier available</option>
+              <option value="gemini-flash-latest">Gemini Flash (latest)</option>
             </select>
           </Field>
           <Field label="Accent color">
@@ -110,7 +121,8 @@ export default function Assistant() {
       </div>
 
       {/* Test chat */}
-      <TestChat embed={cfg.embed} name={cfg.name} hasApiKey={cfg.hasApiKey} />
+      <TestChat embed={cfg.embed} name={cfg.name}
+        hasApiKey={cfg.model?.startsWith('gemini') ? cfg.hasGeminiKey : cfg.hasApiKey} />
 
       {/* Inbox */}
       <div className="card">

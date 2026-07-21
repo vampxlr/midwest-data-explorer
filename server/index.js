@@ -4941,6 +4941,8 @@ async function assistantSettings() {
   return {
     apiKey: s.apiKeyEnc ? decryptSecret(s.apiKeyEnc) : (process.env.ANTHROPIC_API_KEY || null),
     hasApiKey: !!(s.apiKeyEnc || process.env.ANTHROPIC_API_KEY),
+    geminiKey: s.geminiKeyEnc ? decryptSecret(s.geminiKeyEnc) : (process.env.GEMINI_API_KEY || null),
+    hasGeminiKey: !!(s.geminiKeyEnc || process.env.GEMINI_API_KEY),
     model: s.model || 'claude-haiku-4-5-20251001',
     name: s.name || 'Sarah',
     greeting: s.greeting || "Hi! I'm Sarah 👋 I can answer anything about our leagues, tournaments and camps — dates, prices, deadlines, how it all works. What would you like to know?",
@@ -5028,7 +5030,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const kb = (await kvGet('assistant:kb')) || null;
   const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
   res.json({
-    hasApiKey: s.hasApiKey, model: s.model, name: s.name, greeting: s.greeting,
+    hasApiKey: s.hasApiKey, hasGeminiKey: s.hasGeminiKey, model: s.model, name: s.name, greeting: s.greeting,
     extraInstructions: s.extraInstructions, accent: s.accent,
     kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, paths: kb.pages.map(p => p.path) } : null,
     embed: `<script src="${host}/api/widget.js?key=${cur.widgetKey}" async></script>`,
@@ -5041,6 +5043,7 @@ app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
     if (b[k] !== undefined) cur[k] = String(b[k]);
   }
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
+  if (b.geminiKey && !/^•+$/.test(b.geminiKey)) cur.geminiKeyEnc = encryptSecret(String(b.geminiKey).trim());
   if (!cur.widgetKey) cur.widgetKey = cryptoLib.randomBytes(12).toString('base64url');
   await kvSet('assistant:settings', cur);
   res.json({ ok: true });
@@ -5067,7 +5070,8 @@ app.post('/api/assistant/chat', async (req, res) => {
     chatRate.set(ip, rl);
 
     const s = await assistantSettings();
-    if (!s.apiKey) return res.json({ reply: `${s.name} is offline right now — please check the website pages for details, or reach out through the contact page. We'll be back shortly!`, offline: true });
+    const isGemini = String(s.model).startsWith('gemini');
+    if (isGemini ? !s.geminiKey : !s.apiKey) return res.json({ reply: `${s.name} is offline right now — please check the website pages for details, or reach out through the contact page. We'll be back shortly!`, offline: true });
 
     const history = (Array.isArray(messages) ? messages : [])
       .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
@@ -5091,10 +5095,25 @@ ${live}
 === KNOWLEDGE BASE (from midwest3on3.com) ===
 ${kbText}`;
 
-    const r = await axios.post('https://api.anthropic.com/v1/messages', {
-      model: s.model, max_tokens: 400, system, messages: history,
-    }, { headers: { 'x-api-key': s.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 });
-    const reply = (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('') || "Sorry — I didn't catch that. Could you rephrase?";
+    let reply;
+    if (isGemini) {
+      const r = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(s.model)}:generateContent`,
+        {
+          systemInstruction: { parts: [{ text: system }] },
+          contents: history.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+          generationConfig: { maxOutputTokens: 400 },
+        },
+        { headers: { 'x-goog-api-key': s.geminiKey, 'content-type': 'application/json' }, timeout: 30000 }
+      );
+      reply = (r.data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+    } else {
+      const r = await axios.post('https://api.anthropic.com/v1/messages', {
+        model: s.model, max_tokens: 400, system, messages: history,
+      }, { headers: { 'x-api-key': s.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, timeout: 30000 });
+      reply = (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+    }
+    reply = reply || "Sorry — I didn't catch that. Could you rephrase?";
 
     // Log the exchange + capture leads (email/phone in the user's message →
     // lead record + Meta CAPI Lead so the driving ad gets credit)
