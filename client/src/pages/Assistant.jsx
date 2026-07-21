@@ -69,6 +69,12 @@ export default function Assistant() {
             okText={`AI connected (${cfg.model?.startsWith('gemini') ? 'Gemini' : 'Claude'})`}
             badText={`No ${cfg.model?.startsWith('gemini') ? 'Gemini' : 'Anthropic'} key for the selected model — assistant offline`} />
           <Status ok={!!cfg.kb} okText={cfg.kb ? `Knowledge base: ${cfg.kb.pages} pages` : ''} badText="Knowledge base not built yet" />
+          {cfg.abuse?.length > 0 && (
+            <span className="badge" style={{ background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontSize: 11, padding: '3px 10px', borderRadius: 999 }}
+              title={cfg.abuse.slice(0, 5).map(a => `${a.at.slice(0, 16).replace('T', ' ')} — ${a.kind} (${a.ip})`).join('\n')}>
+              ⚠ {cfg.abuse.length} abuse event{cfg.abuse.length > 1 ? 's' : ''} flagged — hover for details
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', marginBottom: 6 }}>
           Paste this ONE line into the website (Squarespace: Settings → Advanced → Code Injection → Footer):

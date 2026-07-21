@@ -5060,6 +5060,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
     extraInstructions: s.extraInstructions, accent: s.accent, kbDocUrl: s.kbDocUrl,
     leadNotifyEmail: s.leadNotifyEmail, emailConfigured: !!process.env.RESEND_API_KEY,
     hasMailchimp: s.hasMailchimp, mailchimpListId: s.mailchimpListId,
+    abuse: ((await kvGet('assistant:abuse')) || []).slice(0, 20),
     kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, docChars: kb.doc ? kb.doc.chars : 0, paths: kb.pages.map(p => p.path) } : null,
     embed: `<script src="${host}/api/widget.js?key=${cur.widgetKey}" async></script>`,
   });
@@ -5085,6 +5086,38 @@ app.get('/api/admin/assistant/convos', auth.requireRole('admin'), async (req, re
 // Public chat endpoint the widget calls. Stateless per call — the widget
 // sends its own trimmed history. Keyed + rate limited per IP.
 const chatRate = new Map();
+
+// ── Abuse guard + reply cache ────────────────────────────────────────────────
+// Cache: normalized question → reply. Serves repeat questions without an AI
+// call (saves tokens), and is the graceful fallback once limits trip. Only
+// opening questions (no prior context) are cached — follow-ups depend on the
+// conversation. 6h TTL keeps cached deadlines/prices fresh enough.
+const chatCache = new Map();
+const CHAT_CACHE_TTL = 6 * 3600 * 1000, CHAT_CACHE_MAX = 500;
+const normQuestion = (q) => String(q).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+function cacheGet(q) {
+  const hit = chatCache.get(normQuestion(q));
+  return hit && Date.now() - hit.at < CHAT_CACHE_TTL ? hit.reply : null;
+}
+function cachePut(q, reply) {
+  if (chatCache.size >= CHAT_CACHE_MAX) chatCache.delete(chatCache.keys().next().value);
+  chatCache.set(normQuestion(q), { reply, at: Date.now() });
+}
+// Flood detection: total requests across ALL IPs per minute (a distributed
+// flood never trips a per-IP limit), plus a per-IP burst limit. Note: counters
+// are per serverless instance, so treat them as best-effort tripwires.
+let chatGlobalWin = { start: 0, n: 0 };
+let lastAbuseAlertAt = 0;
+async function flagChatAbuse(kind, ip, detail, s) {
+  appendCapped('assistant:abuse', { at: new Date().toISOString(), kind, ip, detail }, 200).catch(() => {});
+  const now = Date.now();
+  if (now - lastAbuseAlertAt < 6 * 3600 * 1000) return; // at most one alert email / 6h
+  lastAbuseAlertAt = now;
+  const to = s?.leadNotifyEmail || process.env.SUPER_ADMIN_EMAIL;
+  if (to) sendEmail(to, `⚠ Sarah chat abuse detected: ${kind}`,
+    `The assistant chat endpoint tripped a safety limit.\n\nType: ${kind}\nIP: ${ip}\nDetail: ${detail}\nTime: ${new Date().toISOString()}\n\nSarah has switched to cached/limited replies for the affected traffic — no action needed unless this keeps happening. Recent events are listed on the Site Assistant page.`
+  ).catch(() => {});
+}
 app.post('/api/assistant/chat', async (req, res) => {
   try {
     const { key, sessionId, messages, page } = req.body || {};
@@ -5093,12 +5126,31 @@ app.post('/api/assistant/chat', async (req, res) => {
 
     const ip = req.ip || 'x';
     const now = Date.now();
-    const rl = chatRate.get(ip) || { n: 0, reset: now + 3600000 };
-    if (now > rl.reset) { rl.n = 0; rl.reset = now + 3600000; }
-    if (++rl.n > 40) return res.status(429).json({ reply: "You've sent quite a few messages — give me a short break and try again in a bit!" });
-    chatRate.set(ip, rl);
-
     const s = await assistantSettings();
+    const lastUserMsg = Array.isArray(messages) ? [...messages].reverse().find(m => m?.role === 'user')?.content : '';
+    const cachedFallback = () => cacheGet(lastUserMsg || '');
+
+    // Per-IP limits: 40/hour + a 10/minute burst guard
+    const rl = chatRate.get(ip) || { n: 0, reset: now + 3600000, bn: 0, breset: now + 60000 };
+    if (now > rl.reset) { rl.n = 0; rl.reset = now + 3600000; }
+    if (now > rl.breset) { rl.bn = 0; rl.breset = now + 60000; }
+    rl.n++; rl.bn++;
+    chatRate.set(ip, rl);
+    if (rl.n > 40 || rl.bn > 10) {
+      if (rl.n === 41 || rl.bn === 11) flagChatAbuse(rl.bn > 10 ? 'per-ip burst (>10/min)' : 'per-ip hourly limit (>40/h)', ip, `${rl.n} msgs this hour, ${rl.bn} this minute`, s);
+      const c = cachedFallback();
+      if (c) return res.json({ reply: c, cached: true });
+      return res.status(429).json({ reply: "You've sent quite a few messages — give me a short break and try again in a bit!" });
+    }
+
+    // Global flood guard: >60 chats/min across all visitors ≈ not organic
+    if (now - chatGlobalWin.start > 60000) chatGlobalWin = { start: now, n: 0 };
+    if (++chatGlobalWin.n > 60) {
+      if (chatGlobalWin.n === 61) flagChatAbuse('global flood (>60 chats/min)', ip, `${chatGlobalWin.n} chats in the current minute`, s);
+      const c = cachedFallback();
+      if (c) return res.json({ reply: c, cached: true });
+      return res.status(429).json({ reply: "I'm getting a lot of questions right now! Give me a minute and ask again — or check https://www.midwest3on3.com/leagues in the meantime." });
+    }
     const isGemini = String(s.model).startsWith('gemini');
     if (isGemini ? !s.geminiKey : !s.apiKey) return res.json({ reply: `${s.name} is offline right now — please check the website pages for details, or reach out through the contact page. We'll be back shortly!`, offline: true });
 
@@ -5107,6 +5159,11 @@ app.post('/api/assistant/chat', async (req, res) => {
       .slice(-12)
       .map(m => ({ role: m.role, content: String(m.content).slice(0, 600) }));
     if (!history.length || history[history.length - 1].role !== 'user') return res.status(400).json({ error: 'last message must be from user' });
+
+    // Repeat opening questions (no conversation context) are answered from
+    // cache — zero AI tokens. Follow-ups always go to the model.
+    const cacheable = history.length === 1;
+    const cachedReply = cacheable ? cacheGet(history[0].content) : null;
 
     const kb = (await kvGet('assistant:kb')) || { pages: [] };
     const kbText = kb.pages.map(p => `### ${p.title} (${p.url})\n${p.text}`).join('\n\n').slice(0, 38000);
@@ -5133,8 +5190,8 @@ ${kbText}`;
       return (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
     };
 
-    let reply;
-    if (isGemini) {
+    let reply = cachedReply;
+    if (!reply && isGemini) {
       // Gemini Flash "thinks" internally by default and those thoughts eat the
       // output-token budget, truncating replies mid-sentence. Disable thinking
       // (a short Q&A widget doesn't need it — faster and cheaper); if a model
@@ -5158,10 +5215,11 @@ ${kbText}`;
         else throw err;
       }
       if (r) reply = (r.data?.candidates?.[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
-    } else {
+    } else if (!reply) {
       reply = await callAnthropic(s.model);
     }
     reply = reply || "Sorry — I didn't catch that. Could you rephrase?";
+    if (cacheable && !cachedReply) cachePut(history[0].content, reply);
 
     // Log the exchange + capture leads (email/phone in the user's message →
     // lead record + Meta CAPI Lead so the driving ad gets credit)
