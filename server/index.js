@@ -4950,6 +4950,9 @@ async function assistantSettings() {
     accent: s.accent || '#f97316',
     kbDocUrl: s.kbDocUrl || '',
     leadNotifyEmail: s.leadNotifyEmail || '',
+    mailchimpKey: s.mailchimpKeyEnc ? decryptSecret(s.mailchimpKeyEnc) : null,
+    hasMailchimp: !!s.mailchimpKeyEnc,
+    mailchimpListId: s.mailchimpListId || '',
     widgetKey: s.widgetKey || null,
   };
 }
@@ -5047,6 +5050,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
     hasApiKey: s.hasApiKey, hasGeminiKey: s.hasGeminiKey, model: s.model, name: s.name, greeting: s.greeting,
     extraInstructions: s.extraInstructions, accent: s.accent, kbDocUrl: s.kbDocUrl,
     leadNotifyEmail: s.leadNotifyEmail, emailConfigured: !!process.env.RESEND_API_KEY,
+    hasMailchimp: s.hasMailchimp, mailchimpListId: s.mailchimpListId,
     kb: kb ? { builtAt: kb.builtAt, pages: kb.pages.length, chars: kb.chars, docChars: kb.doc ? kb.doc.chars : 0, paths: kb.pages.map(p => p.path) } : null,
     embed: `<script src="${host}/api/widget.js?key=${cur.widgetKey}" async></script>`,
   });
@@ -5054,11 +5058,12 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
 app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const cur = (await kvGet('assistant:settings')) || {};
-  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail']) {
+  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail', 'mailchimpListId']) {
     if (b[k] !== undefined) cur[k] = String(b[k]);
   }
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
   if (b.geminiKey && !/^•+$/.test(b.geminiKey)) cur.geminiKeyEnc = encryptSecret(String(b.geminiKey).trim());
+  if (b.mailchimpKey && !/^•+$/.test(b.mailchimpKey)) cur.mailchimpKeyEnc = encryptSecret(String(b.mailchimpKey).trim());
   if (!cur.widgetKey) cur.widgetKey = cryptoLib.randomBytes(12).toString('base64url');
   await kvSet('assistant:settings', cur);
   res.json({ ok: true });
@@ -5166,9 +5171,25 @@ ${kbText}`;
       const cfg = ((await kvGet('tracking:orgs')) || {})['midwest-3on3'];
       const override = cfg?.metaPixelId && cfg?.capiTokenEnc ? { pixelId: cfg.metaPixelId, token: decryptSecret(cfg.capiTokenEnc) } : {};
       capiSend('Lead', { email, phone, ip: req.ip, ua: req.headers['user-agent'], sourceUrl: page, ...override }).catch(() => {});
+      // Mailchimp: upsert the lead into the audience tagged "Sarah Lead" —
+      // a Mailchimp Customer Journey triggered by that tag sends the actual
+      // email from the org's verified domain. Datacenter comes from the key
+      // suffix (e.g. "...-us21").
+      if (email && s.mailchimpKey && s.mailchimpListId) {
+        (async () => {
+          const dc = (s.mailchimpKey.match(/-(\w+)$/) || [])[1];
+          if (!dc) return;
+          const hash = cryptoLib.createHash('md5').update(email.toLowerCase()).digest('hex');
+          const mcAuth = { auth: { username: 'any', password: s.mailchimpKey }, timeout: 15000 };
+          await axios.put(`https://${dc}.api.mailchimp.com/3.0/lists/${s.mailchimpListId}/members/${hash}`,
+            { email_address: email, status_if_new: 'subscribed' }, mcAuth);
+          await axios.post(`https://${dc}.api.mailchimp.com/3.0/lists/${s.mailchimpListId}/members/${hash}/tags`,
+            { tags: [{ name: 'Sarah Lead', status: 'active' }] }, mcAuth);
+        })().catch(e => console.warn('[assistant] mailchimp lead failed:', e.response?.data?.detail || e.message));
+      }
       // Email follow-ups (no-ops until RESEND_API_KEY is configured):
       // the visitor gets the registration link, the owner gets the lead.
-      if (email) {
+      if (email && !(s.mailchimpKey && s.mailchimpListId)) {
         sendEmail(email, 'Your Midwest 3 on 3 registration link 🏀',
           `Hi! Thanks for chatting with ${s.name} at Midwest 3 on 3 Basketball.\n\nHere's the registration page you asked about:\nhttps://www.midwest3on3.com/leagues\n\nSpots and early-bird prices are first come, first served — don't wait too long!\n\nQuestions? Just reply to this email or write to Christy@3on3HoopsHub.com.\n\n— Midwest 3 on 3 Basketball`
         ).catch(() => {});

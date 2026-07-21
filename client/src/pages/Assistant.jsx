@@ -11,6 +11,7 @@ export default function Assistant() {
   const [cfg, setCfg] = useState(null);
   const [apiKey, setApiKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
+  const [mcKey, setMcKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [inbox, setInbox] = useState(null);
@@ -27,6 +28,8 @@ export default function Assistant() {
       await api.saveAssistant({
         name: cfg.name, greeting: cfg.greeting, model: cfg.model, accent: cfg.accent,
         extraInstructions: cfg.extraInstructions, kbDocUrl: cfg.kbDocUrl || '', leadNotifyEmail: cfg.leadNotifyEmail || '',
+        mailchimpListId: cfg.mailchimpListId || '',
+        ...(mcKey.trim() ? { mailchimpKey: mcKey.trim() } : {}),
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(geminiKey.trim() ? { geminiKey: geminiKey.trim() } : {}),
       });
@@ -105,6 +108,14 @@ export default function Assistant() {
         <Field label="Greeting (first message visitors see)">
           <textarea className="field-input" style={{ width: '100%', minHeight: 54, boxSizing: 'border-box' }} value={cfg.greeting} onChange={e => upd({ greeting: e.target.value })} />
         </Field>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+          <Field label={cfg.hasMailchimp ? 'Mailchimp API key (saved ✓ — paste to replace)' : 'Mailchimp API key (optional — leads auto-added to your audience)'}>
+            <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} type="password" value={mcKey} onChange={e => setMcKey(e.target.value)} placeholder={cfg.hasMailchimp ? '••••••••' : 'xxxxxxxx-us21'} />
+          </Field>
+          <Field label="Mailchimp Audience ID (Mailchimp → Audience → Settings)">
+            <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} value={cfg.mailchimpListId || ''} onChange={e => upd({ mailchimpListId: e.target.value })} placeholder="e.g. a1b2c3d4e5" />
+          </Field>
+        </div>
         <div style={{ marginTop: 10 }}>
           <Field label={`Lead notification email (optional — get an email each time a visitor leaves their contact)${cfg.emailConfigured ? '' : ' — ⚠ email sending is off until RESEND_API_KEY is set on the server'}`}>
             <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} value={cfg.leadNotifyEmail || ''} onChange={e => upd({ leadNotifyEmail: e.target.value })} placeholder="you@example.com" />
