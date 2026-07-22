@@ -3661,12 +3661,26 @@ const PROTECTED_ORG_KEYS = new Set(['midwest-3on3']);
 async function kvSet(key, obj) {
   if (store.IS_CONVEX) await store.convexMutation('prefs:setPref', { userId: '__platform', key, value: JSON.stringify(obj) });
   else { const all = localPrefsLoad(); all[`__platform:${key}`] = JSON.stringify(obj); localPrefsSave(all); }
+  if (typeof kvMemo !== 'undefined') kvMemo.delete(key);
 }
 async function kvGet(key) {
   let raw;
   if (store.IS_CONVEX) raw = await store.convexQuery('prefs:getPref', { userId: '__platform', key });
   else raw = localPrefsLoad()[`__platform:${key}`];
   try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+}
+
+// In-instance read cache for hot, rarely-changing KV blobs (the 170KB
+// knowledge base, FAQ bank, settings, deadlines). Warm serverless instances
+// keep it between requests — cuts Convex bandwidth massively on chat traffic.
+// kvSet invalidates, so same-instance writes are always read-your-own-write.
+const kvMemo = new Map();
+async function kvGetCached(key, ttlMs = 300000) {
+  const hit = kvMemo.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.v;
+  const v = await kvGet(key);
+  kvMemo.set(key, { v, at: Date.now() });
+  return v;
 }
 
 // Sends via Resend when RESEND_API_KEY is configured; returns false otherwise.
@@ -4954,7 +4968,7 @@ app.put('/api/deadlines/:eventId', auth.requireRole('admin'), async (req, res) =
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function assistantSettings() {
-  const s = (await kvGet('assistant:settings')) || {};
+  const s = (await kvGetCached('assistant:settings')) || {};
   return {
     apiKey: s.apiKeyEnc ? decryptSecret(s.apiKeyEnc) : (process.env.ANTHROPIC_API_KEY || null),
     hasApiKey: !!(s.apiKeyEnc || process.env.ANTHROPIC_API_KEY),
@@ -4975,11 +4989,21 @@ async function assistantSettings() {
   };
 }
 
+// Chat-path DB cache: events/deadlines change rarely; 5-min staleness is fine
+// for Sarah and saves a Convex events read on every single chat message.
+let chatDbMemo = { at: 0, v: null };
+async function loadDbCachedForChat() {
+  if (chatDbMemo.v && Date.now() - chatDbMemo.at < 300000) return chatDbMemo.v;
+  chatDbMemo.v = await store.load();
+  chatDbMemo.at = Date.now();
+  return chatDbMemo.v;
+}
+
 // Live facts the model can quote: currently-open events with their deadlines
 // and prices — the thing a static chatbot can never get right.
 async function assistantLiveContext() {
   try {
-    const [db, deadlines] = await Promise.all([store.load(), kvGet('deadlines:all')]);
+    const [db, deadlines] = await Promise.all([loadDbCachedForChat(), kvGetCached('deadlines:all')]);
     const dl = deadlines || {};
     const today = store.todayCDT();
     const lines = [];
@@ -5119,7 +5143,7 @@ function matchFaq(items, question) {
   return best;
 }
 async function assistantOpenDeadlines() {
-  const [db, deadlines] = await Promise.all([store.load(), kvGet('deadlines:all')]);
+  const [db, deadlines] = await Promise.all([loadDbCachedForChat(), kvGetCached('deadlines:all')]);
   const dl = deadlines || {};
   const today = store.todayCDT();
   return Object.values(db.events)
@@ -5326,7 +5350,7 @@ app.post('/api/assistant/chat', async (req, res) => {
       const builtin = builtinAnswer(q, s, open);
       if (builtin) { cachedReply = builtin; answerSrc = 'builtin'; }
       else {
-        const bank = (await kvGet('assistant:faq'))?.items || [];
+        const bank = (await kvGetCached('assistant:faq'))?.items || [];
         const hit = matchFaq(bank, q);
         if (hit) { cachedReply = await renderFaqAnswer(hit.a, q); answerSrc = 'faq'; }
         else if (mode === 'faq') {
@@ -5336,7 +5360,7 @@ app.post('/api/assistant/chat', async (req, res) => {
       }
     }
 
-    const kb = (await kvGet('assistant:kb')) || { pages: [] };
+    const kb = (await kvGetCached('assistant:kb')) || { pages: [] };
     const kbText = kb.pages.map(p => `### ${p.title} (${p.url})\n${p.text}`).join('\n\n').slice(0, 38000);
     const live = await assistantLiveContext();
 
@@ -5398,11 +5422,13 @@ ${kbText}`;
     await appendCapped('assistant:convos', {
       at: new Date().toISOString(), sessionId: String(sessionId || '').slice(0, 40),
       page: String(page || '').slice(0, 200), q: userMsg.slice(0, 400), a: reply.slice(0, 600), src: answerSrc,
-    }, 300).catch(() => {});
+    }, 150).catch(() => {});
     // Every question is kept for analysis (what do people actually ask?), and
     // FAQ misses go to a dedicated list — raw material for the next FAQ bank.
-    await appendCapped('assistant:questions', { at: new Date().toISOString(), q: userMsg.slice(0, 300), src: answerSrc }, 1000).catch(() => {});
-    if (answerSrc === 'unanswered') await appendCapped('assistant:unanswered', { at: new Date().toISOString(), q: userMsg.slice(0, 300) }, 500).catch(() => {});
+    // Caps kept modest: appendCapped rewrites the whole array each time, so
+    // cap size directly multiplies Convex bandwidth per chat message.
+    await appendCapped('assistant:questions', { at: new Date().toISOString(), q: userMsg.slice(0, 300), src: answerSrc }, 400).catch(() => {});
+    if (answerSrc === 'unanswered') await appendCapped('assistant:unanswered', { at: new Date().toISOString(), q: userMsg.slice(0, 300) }, 200).catch(() => {});
     const email = (userMsg.match(/[^\s@]+@[^\s@]+\.[^\s@]{2,}/) || [])[0] || null;
     const phone = !email ? ((userMsg.match(/\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [])[0] || null) : null;
     if (email || phone) {
@@ -5410,7 +5436,7 @@ ${kbText}`;
         at: new Date().toISOString(), email, phone, page: String(page || '').slice(0, 200),
         context: history.slice(-4).map(m => `${m.role}: ${m.content.slice(0, 120)}`).join(' | '),
       }, 300).catch(() => {});
-      const cfg = ((await kvGet('tracking:orgs')) || {})['midwest-3on3'];
+      const cfg = ((await kvGetCached('tracking:orgs')) || {})['midwest-3on3'];
       const override = cfg?.metaPixelId && cfg?.capiTokenEnc ? { pixelId: cfg.metaPixelId, token: decryptSecret(cfg.capiTokenEnc) } : {};
       // NOTE: these must be awaited — Vercel freezes the function the moment
       // the response is sent, so fire-and-forget work silently dies in prod.
