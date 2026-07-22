@@ -10,6 +10,7 @@ const store        = require('./store');
 const blobStorage  = require('./blobStorage');
 const userStore    = require('./userStore');
 const auth         = require('./auth');
+const { localPrefsLoad, localPrefsSave, kvGet, kvSet, kvGetCached, appendCapped, chatLog, chatLogRecent } = require('./kv');
 
 // Aggregator only used for local SSE-based flow; on Vercel we use client-driven endpoints
 let aggregator = null;
@@ -3195,14 +3196,6 @@ app.post('/api/cache/clear', auth.requireRole('admin', 'editor'), async (req, re
 // ── Per-user UI preferences (dashboard slots etc.) ────────────────────────────
 // Convex-backed in production so selections survive devices/browsers; a local
 // JSON file in dev. Value is an opaque JSON string owned by the client.
-const PREFS_FILE = path.join(__dirname, 'data', 'prefs.json');
-function localPrefsLoad() {
-  try { return JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')) || {}; } catch { return {}; }
-}
-function localPrefsSave(obj) {
-  fs.mkdirSync(path.dirname(PREFS_FILE), { recursive: true });
-  fs.writeFileSync(PREFS_FILE, JSON.stringify(obj, null, 2));
-}
 const PREF_KEY_RE = /^[a-z0-9_-]{1,64}$/i;
 
 app.get('/api/prefs/:key', async (req, res) => {
@@ -3663,30 +3656,8 @@ const DELETES_ENABLED = process.env.PLATFORM_DELETES_ENABLED === '1';
 // set — it holds the live Midwest data, Sarah, tracking, everything.
 const PROTECTED_ORG_KEYS = new Set(['midwest-3on3']);
 
-async function kvSet(key, obj) {
-  if (store.IS_CONVEX) await store.convexMutation('prefs:setPref', { userId: '__platform', key, value: JSON.stringify(obj) });
-  else { const all = localPrefsLoad(); all[`__platform:${key}`] = JSON.stringify(obj); localPrefsSave(all); }
-  if (typeof kvMemo !== 'undefined') kvMemo.delete(key);
-}
-async function kvGet(key) {
-  let raw;
-  if (store.IS_CONVEX) raw = await store.convexQuery('prefs:getPref', { userId: '__platform', key });
-  else raw = localPrefsLoad()[`__platform:${key}`];
-  try { return raw ? JSON.parse(raw) : null; } catch { return null; }
-}
-
-// In-instance read cache for hot, rarely-changing KV blobs (the 170KB
-// knowledge base, FAQ bank, settings, deadlines). Warm serverless instances
-// keep it between requests — cuts Convex bandwidth massively on chat traffic.
-// kvSet invalidates, so same-instance writes are always read-your-own-write.
-const kvMemo = new Map();
-async function kvGetCached(key, ttlMs = 300000) {
-  const hit = kvMemo.get(key);
-  if (hit && Date.now() - hit.at < ttlMs) return hit.v;
-  const v = await kvGet(key);
-  kvMemo.set(key, { v, at: Date.now() });
-  return v;
-}
+// KV layer (blobs, cache, capped lists, chat logs) lives in ./kv — see
+// DEVELOPERS.md §3. Extracted verbatim in refactor step 1 (§9).
 
 // ── Convex usage estimation ─────────────────────────────────────────────────
 // store.js meters every Convex round-trip; this flushes the counters into a
@@ -4721,11 +4692,6 @@ app.put('/api/admin/offers', auth.requireRole('superadmin'), async (req, res) =>
 });
 
 // ── Feedback: bug reports, feature requests, auto-captured client errors ──────
-async function appendCapped(key, item, cap) {
-  const list = (await kvGet(key)) || [];
-  list.unshift(item);
-  await kvSet(key, list.slice(0, cap));
-}
 app.post('/api/feedback', async (req, res) => {
   const { type, message, page } = req.body || {};
   if (!message || !['bug', 'feature'].includes(type)) return res.status(400).json({ error: 'type (bug|feature) and message required' });
@@ -5327,28 +5293,6 @@ ${kbText}`;
     res.json({ ok: true, count: items.length });
   } catch (err) { res.status(500).json({ error: err.response?.data?.error?.message || err.message }); }
 });
-
-// High-volume chat logging: insert-only chatLogs table on Convex (~1KB per
-// write); capped KV arrays only in local dev. Reads merge the new table with
-// any legacy KV entries so nothing already logged disappears.
-const CHATLOG_KV_KEY = { convo: 'assistant:convos', question: 'assistant:questions', unanswered: 'assistant:unanswered' };
-const CHATLOG_KV_CAP = { convo: 150, question: 400, unanswered: 200 };
-async function chatLog(type, entry) {
-  if (store.IS_CONVEX) await store.convexMutation('chatLogs:add', { type, at: entry.at, data: JSON.stringify(entry) });
-  else await appendCapped(CHATLOG_KV_KEY[type], entry, CHATLOG_KV_CAP[type]);
-}
-async function chatLogRecent(type, limit) {
-  let rows = [];
-  if (store.IS_CONVEX) {
-    rows = (await store.convexQuery('chatLogs:recent', { type, limit }).catch(() => []))
-      .map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
-  }
-  if (rows.length < limit) {
-    const legacy = (await kvGet(CHATLOG_KV_KEY[type])) || [];
-    rows = [...rows, ...legacy].slice(0, limit);
-  }
-  return rows;
-}
 
 // Public chat endpoint the widget calls. Stateless per call — the widget
 // sends its own trimmed history. Keyed + rate limited per IP.

@@ -8,6 +8,7 @@
     "dev:convex": "npx convex dev",
     "build": "cd client && npm install && npm run build",
     "start": "node api/index.js",
+    "test": "node --test server/*.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "check": "node --check server/index.js && cd client && npx vite build",
     "seed:convex": "node scripts/seedConvex.mjs",
