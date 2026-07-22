@@ -5547,9 +5547,16 @@ app.put('/api/admin/reminders/templates', auth.requireRole('admin'), async (req,
   res.json({ ok: true, count: list.length });
 });
 
-// Audience overview: every open event with its past editions + lapsed count
+// Audience overview: every open event with its past editions + lapsed count.
+// Computing this reads every matched event's full result rows — expensive on
+// Convex bandwidth — so it's cached for the day; ?refresh=1 forces a recompute.
 app.get('/api/admin/reminders/audiences', auth.requireRole('admin'), async (req, res) => {
   try {
+    const today0 = store.todayCDT();
+    const cached = await kvGet('reminders:audience-cache');
+    if (cached && cached.day === today0 && req.query.refresh !== '1') {
+      return res.json({ audiences: cached.audiences, cachedAt: cached.at });
+    }
     const db = await store.load();
     const dl = (await kvGet('deadlines:all')) || {};
     const all = Object.values(db.events);
@@ -5574,6 +5581,7 @@ app.get('/api/admin/reminders/audiences', auth.requireRole('admin'), async (req,
       });
     }
     out.sort((a, b) => String(a.deadlines?.finalDeadline || '9999').localeCompare(String(b.deadlines?.finalDeadline || '9999')));
+    await kvSet('reminders:audience-cache', { day: today0, at: new Date().toISOString(), audiences: out });
     res.json({ audiences: out });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

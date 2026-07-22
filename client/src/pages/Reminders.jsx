@@ -68,7 +68,13 @@ export default function Reminders() {
 
       {/* Audiences */}
       <div className="card">
-        <h2>Lapsed audiences by open event</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <h2 style={{ margin: 0 }}>Lapsed audiences by open event</h2>
+          <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} title="Numbers are cached for the day — recompute after a Smart Update or deadline change"
+            onClick={() => { setAudiences(null); api.reminderAudiences(true).then(r => setAudiences(r.data.audiences)).catch(() => setAudiences([])); }}>
+            ↻ Recompute
+          </button>
+        </div>
         <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '0 0 10px' }}>
           Lapsed = attended a past edition, graduation year {new Date().getFullYear()}+ (or unknown), has an email, not registered this year. Sorted by closest final deadline.
         </p>
