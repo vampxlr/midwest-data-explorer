@@ -5651,6 +5651,71 @@ function renderReminderTemplate(tpl, ev, d) {
   return { subject: fill(tpl.subject), body: fill(tpl.body) };
 }
 
+// ── Email designs: email-safe HTML wrappers (inline CSS, 600px, table-free
+// enough for Gmail/Outlook). The template's plain-text body flows into the
+// chosen design; the CTA button always points at the league's register page.
+const REMINDER_DESIGNS = {
+  classic: {
+    name: 'Classic — clean white card, orange header',
+    render: ({ bodyHtml, title, url, unsub }) => `
+<div style="background:#dfe4ea;padding:24px 12px;font-family:Arial,Helvetica,sans-serif">
+ <div style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #c3cad4;box-shadow:0 2px 8px rgba(0,0,0,0.12)">
+  <div style="background:#ea580c;padding:22px 28px">
+   <div style="color:#ffffff;font-size:13px;font-weight:700;letter-spacing:2px">MIDWEST 3 ON 3 BASKETBALL</div>
+   <div style="color:#ffffff;font-size:22px;font-weight:800;margin-top:6px;line-height:1.3">${title}</div>
+  </div>
+  <div style="padding:26px 28px;font-size:16px;line-height:1.7;color:#111827">${bodyHtml}
+   <div style="text-align:center;margin:28px 0 8px">
+    <a href="${url}" style="background:#ea580c;color:#ffffff;text-decoration:none;font-weight:800;font-size:16px;padding:14px 36px;border-radius:8px;display:inline-block">Register now →</a>
+   </div>
+  </div>
+  <div style="padding:16px 28px;border-top:1px solid #d7dce3;font-size:11px;color:#6b7280;text-align:center">
+   You're receiving this because your family took part in a Midwest 3 on 3 event.<br><a href="${unsub}" style="color:#9ca3af">Unsubscribe</a>
+  </div>
+ </div>
+</div>`,
+  },
+  bold: {
+    name: 'Bold — dark header, big energy',
+    render: ({ bodyHtml, title, url, unsub }) => `
+<div style="background:#111827;padding:24px 12px;font-family:Arial,Helvetica,sans-serif">
+ <div style="max-width:600px;margin:0 auto;background:#1f2937;border-radius:14px;overflow:hidden">
+  <div style="padding:30px 28px;text-align:center;background:linear-gradient(135deg,#1f2937,#111827)">
+   <div style="font-size:38px;line-height:1">🏀</div>
+   <div style="color:#f97316;font-size:12px;font-weight:800;letter-spacing:3px;margin-top:10px">MIDWEST 3 ON 3</div>
+   <div style="color:#ffffff;font-size:24px;font-weight:800;margin-top:8px;line-height:1.3">${title}</div>
+  </div>
+  <div style="background:#ffffff;padding:26px 28px;font-size:15px;line-height:1.65;color:#1f2937">${bodyHtml}
+   <div style="text-align:center;margin:28px 0 8px">
+    <a href="${url}" style="background:#111827;color:#ffffff;text-decoration:none;font-weight:800;font-size:15px;padding:14px 36px;border-radius:999px;display:inline-block">🏀 Grab your spot</a>
+   </div>
+  </div>
+  <div style="padding:16px 28px;font-size:11px;color:#6b7280;text-align:center">
+   More touches. More involvement. More fun.<br><a href="${unsub}" style="color:#6b7280">Unsubscribe</a>
+  </div>
+ </div>
+</div>`,
+  },
+  minimal: {
+    name: 'Minimal — personal, looks hand-written',
+    render: ({ bodyHtml, url, unsub }) => `
+<div style="background:#ffffff;padding:28px 16px;font-family:Georgia,'Times New Roman',serif">
+ <div style="max-width:560px;margin:0 auto;font-size:17px;line-height:1.75;color:#111111">${bodyHtml}
+  <p style="margin:24px 0"><a href="${url}" style="color:#c2410c;font-weight:700;font-size:17px">Register here →</a></p>
+  <hr style="border:none;border-top:1px solid #d1d5db;margin:28px 0 12px">
+  <p style="font-size:12px;color:#6b7280">Midwest 3 on 3 Basketball · <a href="${unsub}" style="color:#6b7280">Unsubscribe</a></p>
+ </div>
+</div>`,
+  },
+};
+function buildReminderHtml(tpl, ev, d) {
+  const { subject, body } = renderReminderTemplate(tpl, ev, d);
+  const url = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
+  const design = REMINDER_DESIGNS[tpl.design] || REMINDER_DESIGNS.classic;
+  const html = design.render({ bodyHtml: body.replace(/\n/g, '<br>'), title: ev.name.replace(/^20\d\d\s*/, ''), url, unsub: '*|UNSUB|*' });
+  return { subject, html };
+}
+
 function mcApi(s) {
   const dc = (String(s.mailchimpKey).match(/-(\w+)$/) || [])[1];
   const base = `https://${dc}.api.mailchimp.com/3.0`;
@@ -5663,7 +5728,7 @@ app.get('/api/admin/reminders/templates', auth.requireRole('admin'), async (req,
 });
 app.put('/api/admin/reminders/templates', auth.requireRole('admin'), async (req, res) => {
   const list = (req.body?.templates || []).filter(t => t && t.id && t.name && t.subject && t.body)
-    .map(t => ({ id: String(t.id).slice(0, 60), name: String(t.name).slice(0, 80), subject: String(t.subject).slice(0, 200), body: String(t.body).slice(0, 8000) }));
+    .map(t => ({ id: String(t.id).slice(0, 60), name: String(t.name).slice(0, 80), subject: String(t.subject).slice(0, 200), body: String(t.body).slice(0, 8000), design: REMINDER_DESIGNS[t.design] ? t.design : 'classic' }));
   if (!list.length) return res.status(400).json({ error: 'templates array required' });
   await kvSet('reminders:templates', list);
   res.json({ ok: true, count: list.length });
@@ -5725,8 +5790,7 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     const contacts = await lapsedContactsFor(ev, past, db);
     if (!contacts.length) return res.status(400).json({ error: 'no lapsed contacts for this event' });
     const { base, auth: mcAuth, list } = mcApi(s);
-    const { subject, body } = renderReminderTemplate(tpl, ev, d);
-    const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#222;max-width:600px;margin:0 auto;padding:16px">${body.replace(/\n/g, '<br>')}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0"><p style="font-size:11px;color:#888">You're receiving this because your family took part in a Midwest 3 on 3 event. <a href="*|UNSUB|*">Unsubscribe</a></p></div>`;
+    const { subject, html } = buildReminderHtml(tpl, ev, d);
     // ensure the per-person merge field exists (FNAME is built in)
     await axios.post(`${base}/lists/${list}/merge-fields`, { tag: 'PASTLG', name: 'Past League', type: 'text' }, mcAuth).catch(() => {});
     const short = ev.name.replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim();
@@ -5754,8 +5818,10 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     }, mcAuth);
     await axios.put(`${base}/campaigns/${camp.data.id}/content`, { html }, mcAuth);
     if (testEmail) {
-      await axios.post(`${base}/campaigns/${camp.data.id}/actions/test`, { test_emails: [String(testEmail)], send_type: 'html' }, mcAuth);
-      return res.json({ ok: true, test: true, to: testEmail, recipients: contacts.length, campaignId: camp.data.id });
+      const addrs = String(testEmail).split(/[,;\s]+/).map(x => x.trim()).filter(x => EMAIL_RE.test(x)).slice(0, 10);
+      if (!addrs.length) return res.status(400).json({ error: 'no valid test email addresses' });
+      await axios.post(`${base}/campaigns/${camp.data.id}/actions/test`, { test_emails: addrs, send_type: 'html' }, mcAuth);
+      return res.json({ ok: true, test: true, to: addrs.join(', '), recipients: contacts.length, campaignId: camp.data.id });
     }
     await axios.post(`${base}/campaigns/${camp.data.id}/actions/send`, {}, mcAuth);
     await appendCapped('reminders:campaigns', {
@@ -5764,6 +5830,29 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     }, 200);
     res.json({ ok: true, sent: batch.length, campaignId: camp.data.id });
   } catch (err) { res.status(500).json({ error: err.response?.data?.detail || err.message }); }
+});
+
+// Rendered preview of a template in its chosen design, using a real event's
+// live data and a sample recipient — shown in an iframe on the Reminders page.
+app.post('/api/admin/reminders/preview', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const { templateId, eventId, design, template } = req.body || {};
+    // inline template = live preview of unsaved edits from the editor
+    const tpl = template?.subject && template?.body
+      ? { id: 'inline', ...template }
+      : { ...((await reminderTemplates()).find(t => t.id === templateId) || {}) };
+    if (!tpl.id) return res.status(404).json({ error: 'template not found' });
+    if (design) tpl.design = design;
+    const db = await store.load();
+    const dl = (await kvGet('deadlines:all')) || {};
+    const ev = db.events[String(eventId)] || Object.values(db.events).find(e => e.status === 1 && dl[String(e.id)]) || Object.values(db.events)[0];
+    const { subject, html } = buildReminderHtml(tpl, ev, dl[String(ev.id)] || null);
+    res.json({
+      subject: subject.replaceAll('*|FNAME|*', 'Jamie'),
+      html: html.replaceAll('*|FNAME|*', 'Jamie').replaceAll('*|PASTLG|*', ev.name.replace(/\b20\d\d\b/, (y) => String(Number(y) - 1))).replaceAll('*|UNSUB|*', '#'),
+      designs: Object.entries(REMINDER_DESIGNS).map(([id, dsn]) => ({ id, name: dsn.name })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Sent history + open/click stats pulled from Mailchimp Reports

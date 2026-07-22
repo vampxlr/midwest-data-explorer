@@ -17,6 +17,17 @@ export default function Reminders() {
   const [busy, setBusy] = useState({});        // eventId -> 'test'|'send'
   const [editing, setEditing] = useState(null); // template being edited
   const [loadingStats, setLoadingStats] = useState(false);
+  const [preview, setPreview] = useState(null); // {subject, html, name}
+
+  async function showPreview(t, inline) {
+    try {
+      const r = await api.previewReminder({
+        templateId: t.id, eventId: audiences?.[0]?.eventId,
+        ...(inline ? { template: { subject: t.subject, body: t.body, design: t.design || 'classic' } } : {}),
+      });
+      setPreview({ ...r.data, name: t.name });
+    } catch (err) { toast.error(err.response?.data?.error || 'Preview failed'); }
+  }
 
   useEffect(() => {
     api.reminderTemplates().then(r => setTemplates(r.data.templates)).catch(() => {});
@@ -30,7 +41,7 @@ export default function Reminders() {
     if (!templateId) return toast.error('Pick a template first');
     let testEmail = null;
     if (test) {
-      testEmail = window.prompt('Send a test of this email to which address?');
+      testEmail = window.prompt('Send a test to which address(es)? Separate multiple with commas — only these addresses receive it, never real contacts.');
       if (!testEmail) return;
     } else if (!window.confirm(`Send "${templates.find(t => t.id === templateId)?.name}" to ${a.lapsed} lapsed contacts for ${a.name}?\n\nThis is a REAL send through Mailchimp.`)) return;
     setBusy(b => ({ ...b, [a.eventId]: test ? 'test' : 'send' }));
@@ -138,6 +149,8 @@ export default function Reminders() {
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>Subject: {t.subject}</div>
                 </div>
                 <div style={{ whiteSpace: 'nowrap' }}>
+                  <span className="badge badge-purple" style={{ marginRight: 8, fontSize: 9 }}>{t.design || 'classic'}</span>
+                  <button className="btn-chart" style={{ marginRight: 4 }} onClick={() => showPreview(t)}>👁 Preview</button>
                   <button className="btn-chart" style={{ marginRight: 4 }} onClick={() => setEditing({ ...t })}>Edit</button>
                   <button className="btn-chart" onClick={() => { if (window.confirm(`Delete template "${t.name}"?`)) saveTemplates(templates.filter(x => x.id !== t.id)); }}>🗑</button>
                 </div>
@@ -151,10 +164,16 @@ export default function Reminders() {
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
               <input className="field-input" style={{ flex: 1, minWidth: 180 }} placeholder="Template name" value={editing.name} onChange={e => setEditing(x => ({ ...x, name: e.target.value }))} />
               <input className="field-input" style={{ flex: 2, minWidth: 240 }} placeholder="Email subject" value={editing.subject} onChange={e => setEditing(x => ({ ...x, subject: e.target.value }))} />
+              <select className="field-input" style={{ minWidth: 200 }} value={editing.design || 'classic'} onChange={e => setEditing(x => ({ ...x, design: e.target.value }))}>
+                <option value="classic">🎨 Classic — white card, orange header</option>
+                <option value="bold">🎨 Bold — dark header, big energy</option>
+                <option value="minimal">🎨 Minimal — personal, hand-written feel</option>
+              </select>
             </div>
             <textarea className="field-input" style={{ width: '100%', minHeight: 180, boxSizing: 'border-box', fontFamily: 'inherit', fontSize: 13 }}
               placeholder={'Hi {{FIRST_NAME}},\n\n…'} value={editing.body} onChange={e => setEditing(x => ({ ...x, body: e.target.value }))} />
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} onClick={() => showPreview(editing, true)}>👁 Preview (with current edits)</button>
               <button className="btn-primary" style={{ width: 'auto' }} onClick={() => {
                 if (!editing.name || !editing.subject || !editing.body) return toast.error('Name, subject and body are all required');
                 const others = templates.filter(x => x.id !== editing.id);
@@ -166,6 +185,22 @@ export default function Reminders() {
           </div>
         )}
       </div>
+
+      {/* Email preview modal — real design, real league data, sample recipient */}
+      {preview && (
+        <div onClick={() => setPreview(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface-1)', borderRadius: 12, width: 'min(680px, 96vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border-sub)' }}>
+            <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-sub)' }}>
+              <div style={{ minWidth: 0 }}>
+                <b style={{ color: 'var(--text-1)' }}>{preview.name}</b>
+                <div style={{ fontSize: 12, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Subject: {preview.subject}</div>
+              </div>
+              <button className="btn-chart" onClick={() => setPreview(null)}>✕ Close</button>
+            </div>
+            <iframe title="email preview" srcDoc={preview.html} style={{ border: 'none', width: '100%', flex: 1, minHeight: 480, background: '#fff' }} />
+          </div>
+        </div>
+      )}
 
       {/* History + stats */}
       <div className="card">

@@ -203,6 +203,7 @@ export const api = {
   saveReminderTemplates:(t)   => axios.put(`${BASE}/admin/reminders/templates`, { templates: t }),
   reminderAudiences:   (refresh) => axios.get(`${BASE}/admin/reminders/audiences${refresh ? '?refresh=1' : ''}`),
   sendReminder:        (body) => axios.post(`${BASE}/admin/reminders/send`, body),
+  previewReminder:     (body) => axios.post(`${BASE}/admin/reminders/preview`, body),
   reminderHistory:     (stats)=> axios.get(`${BASE}/admin/reminders/history${stats ? '?stats=1' : ''}`),
   getUsage:            ()     => axios.get(`${BASE}/admin/usage`),
   getAssistantConvos:  ()     => axios.get(`${BASE}/admin/assistant/convos`),
