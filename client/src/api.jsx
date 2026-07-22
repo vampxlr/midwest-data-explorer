@@ -204,6 +204,7 @@ export const api = {
   reminderAudiences:   (refresh) => axios.get(`${BASE}/admin/reminders/audiences${refresh ? '?refresh=1' : ''}`),
   sendReminder:        (body) => axios.post(`${BASE}/admin/reminders/send`, body),
   reminderHistory:     (stats)=> axios.get(`${BASE}/admin/reminders/history${stats ? '?stats=1' : ''}`),
+  getUsage:            ()     => axios.get(`${BASE}/admin/usage`),
   getAssistantConvos:  ()     => axios.get(`${BASE}/admin/assistant/convos`),
   assistantChat:       (body) => axios.post(`${BASE}/assistant/chat`, body),
   getForwardedPage: (offset) => axios.get(`${BASE}/webhooks/forwarded?offset=${offset}`),

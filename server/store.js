@@ -20,38 +20,34 @@ const CDT_OFFSET_MS = -5 * 60 * 60 * 1000; // UTC-5 (CDT)
 
 // ── Convex HTTP helpers ────────────────────────────────────────────────────────
 
-async function convexQuery(fnPath, args = {}) {
-  const r = await fetch(`${CONVEX_URL}/api/query`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
+// Usage metering: every Convex round-trip is measured (request + response
+// bytes, per function) so the app can estimate its own database bandwidth.
+// index.js flushes this into daily KV buckets at most once a minute.
+const usage = { bytes: 0, calls: 0, byFn: {} };
+function meterUsage(fnPath, reqBytes, resBytes) {
+  usage.calls++;
+  usage.bytes += reqBytes + resBytes;
+  const f = usage.byFn[fnPath] = usage.byFn[fnPath] || { calls: 0, bytes: 0 };
+  f.calls++; f.bytes += reqBytes + resBytes;
+}
+function resetUsage() { usage.bytes = 0; usage.calls = 0; usage.byFn = {}; }
+
+async function convexCall(endpoint, fnPath, args) {
+  const body = JSON.stringify({ path: fnPath, args, format: 'json' });
+  const r = await fetch(`${CONVEX_URL}/api/${endpoint}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
   });
-  const data = await r.json();
-  if (!r.ok) throw new Error(`Convex query ${fnPath} failed: ${JSON.stringify(data)}`);
+  const text = await r.text();
+  meterUsage(fnPath, Buffer.byteLength(body), Buffer.byteLength(text));
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error(`Convex ${endpoint} ${fnPath} failed: unparseable response`); }
+  if (!r.ok) throw new Error(`Convex ${endpoint} ${fnPath} failed: ${JSON.stringify(data)}`);
   return data.value;
 }
 
-async function convexMutation(fnPath, args = {}) {
-  const r = await fetch(`${CONVEX_URL}/api/mutation`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(`Convex mutation ${fnPath} failed: ${JSON.stringify(data)}`);
-  return data.value;
-}
-
-async function convexAction(fnPath, args = {}) {
-  const r = await fetch(`${CONVEX_URL}/api/action`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(`Convex action ${fnPath} failed: ${JSON.stringify(data)}`);
-  return data.value;
-}
+const convexQuery    = (fnPath, args = {}) => convexCall('query', fnPath, args);
+const convexMutation = (fnPath, args = {}) => convexCall('mutation', fnPath, args);
+const convexAction   = (fnPath, args = {}) => convexCall('action', fnPath, args);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -292,4 +288,5 @@ module.exports = {
   pendingEvents, upsertEventMeta, upsertResults, purgeEvent,
   dailyStats, gradYearStats,
   toCDTDate, todayCDT,
+  usage, resetUsage,
 };

@@ -30,6 +30,9 @@ const cache = new NodeCache({ stdTTL: 300 });
 
 app.set('trust proxy', 1); // Vercel / reverse-proxy environments set X-Forwarded-For
 app.use(cors());
+// Flush the Convex usage meter into a daily KV bucket at most once a minute
+// (kvGet/kvSet and maybeFlushUsage are declared later — hoisted functions).
+app.use((req, res, next) => { res.on('finish', () => { try { maybeFlushUsage(); } catch {} }); next(); });
 // Stripe webhooks are signature-verified over the RAW body — keep it unparsed
 const jsonParser = express.json({ limit: '10mb' });
 const rawParser = express.raw({ type: '*/*', limit: '1mb' });
@@ -3682,6 +3685,61 @@ async function kvGetCached(key, ttlMs = 300000) {
   kvMemo.set(key, { v, at: Date.now() });
   return v;
 }
+
+// ── Convex usage estimation ─────────────────────────────────────────────────
+// store.js meters every Convex round-trip; this flushes the counters into a
+// per-day KV bucket (usage:convex:YYYY-MM-DD) at most once a minute. The
+// flush itself is tiny (~1-5KB) and self-metered, so numbers stay honest.
+let lastUsageFlush = 0;
+let usageFlushing = false;
+async function maybeFlushUsage() {
+  if (!store.IS_CONVEX || usageFlushing) return;
+  const now = Date.now();
+  if (now - lastUsageFlush < 60000 || !store.usage.calls) return;
+  usageFlushing = true; lastUsageFlush = now;
+  try {
+    const snap = { bytes: store.usage.bytes, calls: store.usage.calls, byFn: { ...store.usage.byFn } };
+    store.resetUsage();
+    const key = `usage:convex:${store.todayCDT()}`;
+    const cur = (await kvGet(key)) || { bytes: 0, calls: 0, byFn: {} };
+    cur.bytes += snap.bytes; cur.calls += snap.calls;
+    for (const [f, v] of Object.entries(snap.byFn)) {
+      const c = cur.byFn[f] = cur.byFn[f] || { calls: 0, bytes: 0 };
+      c.calls += v.calls; c.bytes += v.bytes;
+    }
+    await kvSet(key, cur);
+  } catch {} finally { usageFlushing = false; }
+}
+
+app.get('/api/admin/usage', auth.requireRole('admin'), async (req, res) => {
+  try {
+    await (async () => { lastUsageFlush = 0; await maybeFlushUsage(); })(); // include the freshest numbers
+    const today = store.todayCDT();
+    const days = [];
+    for (let i = 0; i < 31; i++) {
+      const d = new Date(Date.now() - i * 86400000 + -5 * 3600000).toISOString().slice(0, 10);
+      if (d.slice(0, 7) === today.slice(0, 7) || i < 7) days.push(d);
+    }
+    const buckets = await Promise.all([...new Set(days)].map(async d => ({ day: d, data: await kvGet(`usage:convex:${d}`) })));
+    const sum = (list) => list.reduce((a, b) => ({ bytes: a.bytes + (b.data?.bytes || 0), calls: a.calls + (b.data?.calls || 0) }), { bytes: 0, calls: 0 });
+    const week = buckets.filter(b => b.day > new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
+    const month = buckets.filter(b => b.day.slice(0, 7) === today.slice(0, 7));
+    // top functions this month
+    const byFn = {};
+    for (const b of month) for (const [f, v] of Object.entries(b.data?.byFn || {})) {
+      const c = byFn[f] = byFn[f] || { calls: 0, bytes: 0 };
+      c.calls += v.calls; c.bytes += v.bytes;
+    }
+    res.json({
+      today: sum(buckets.filter(b => b.day === today)),
+      week: sum(week),
+      month: sum(month),
+      topFunctions: Object.entries(byFn).map(([fn, v]) => ({ fn, ...v })).sort((a, b) => b.bytes - a.bytes).slice(0, 10),
+      daily: buckets.filter(b => b.data).map(b => ({ day: b.day, bytes: b.data.bytes, calls: b.data.calls })).sort((a, b) => a.day.localeCompare(b.day)),
+      note: 'App-measured estimate (request+response JSON bytes over Convex HTTP). Convex bills stricter internally — treat as a trend indicator, not an invoice.',
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // Sends via Resend when RESEND_API_KEY is configured; returns false otherwise.
 async function sendEmail(to, subject, text) {

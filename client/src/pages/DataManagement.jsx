@@ -220,6 +220,53 @@ function EventTerminal({ eventId, orgId, eventName, eventStatus, resultsComplete
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 // ── Registration deadlines (scraped from midwest3on3.com) ─────────────────────
+// Estimated Convex database bandwidth, measured by the server itself —
+// today / last 7 days / this month, plus the hungriest functions.
+function UsageCard() {
+  const [u, setU] = useState(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => { api.getUsage().then(r => setU(r.data)).catch(() => setU(false)); }, []);
+  if (u === false) return null; // endpoint unavailable (local mode) — hide
+  const fmt = (b) => b == null ? '—' : b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.round((b || 0) / 1e3) + ' KB';
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ margin: 0 }}>Database usage (estimated)</h2>
+        {u && <button className="btn-chart" onClick={() => setOpen(o => !o)}>{open ? 'Hide detail' : 'Top functions'}</button>}
+      </div>
+      {!u ? <div className="no-data" style={{ padding: 10 }}>Measuring…</div> : (
+        <>
+          <div className="grid-4" style={{ marginTop: 10 }}>
+            {[['Today', u.today], ['Last 7 days', u.week], ['This month', u.month]].map(([label, v]) => (
+              <div key={label} className="stat-card">
+                <div style={{ fontSize: 11, color: 'var(--text-4)' }}>{label}</div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--accent-light)' }}>{fmt(v?.bytes)}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{(v?.calls || 0).toLocaleString()} calls</div>
+              </div>
+            ))}
+            <div className="stat-card">
+              <div style={{ fontSize: 11, color: 'var(--text-4)' }}>What counts</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-3)', lineHeight: 1.4, marginTop: 4 }}>
+                App-measured Convex traffic (tracking started {u.daily?.[0]?.day || 'today'}). Convex's own billing meter runs higher — use this for trends.
+              </div>
+            </div>
+          </div>
+          {open && (
+            <table className="data-table" style={{ marginTop: 12 }}>
+              <thead><tr><th>Function</th><th>Calls (month)</th><th>Data</th></tr></thead>
+              <tbody>
+                {(u.topFunctions || []).map(f => (
+                  <tr key={f.fn}><td style={{ color: 'var(--text-1)' }}>{f.fn}</td><td>{f.calls.toLocaleString()}</td><td>{fmt(f.bytes)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function DataManagement({ ctx }) {
   const { orgId } = ctx;
   const { isAdmin } = useAuth();
@@ -310,6 +357,8 @@ export default function DataManagement({ ctx }) {
         <h1>Data Management</h1>
         <p>Purge and reload individual leagues — watch the live terminal as data is re-fetched</p>
       </div>
+
+      <UsageCard />
 
       {/* Stats */}
       <div className="grid-4" style={{ marginBottom:20 }}>
