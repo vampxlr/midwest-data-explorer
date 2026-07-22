@@ -39,43 +39,52 @@ export default function Messenger() {
               (pages_messaging) to open Sarah to the public.
             </div>
           ) : (
-          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 0, border: '1px solid var(--border-sub)', borderRadius: 12, overflow: 'hidden', minHeight: 420 }}>
             {/* thread list */}
-            <div style={{ flex: '0 0 240px', minWidth: 200, maxHeight: 480, overflowY: 'auto', display: 'grid', gap: 6 }}>
+            <div style={{ borderRight: '1px solid var(--border-sub)', maxHeight: 560, overflowY: 'auto', background: 'var(--surface-1)' }}>
               {threads.map(t => (
                 <button key={t.psid} onClick={() => setOpen(t.psid)}
                   style={{
-                    textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '10px 12px',
-                    border: `1px solid ${open === t.psid ? 'var(--accent)' : 'var(--border-sub)'}`,
-                    background: open === t.psid ? 'rgba(249,115,22,0.08)' : 'var(--surface-1)',
+                    display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
+                    padding: '12px 14px', border: 'none', borderBottom: '1px solid var(--border-sub)',
+                    borderLeft: `3px solid ${open === t.psid ? 'var(--accent)' : 'transparent'}`,
+                    background: open === t.psid ? 'var(--bg-hover)' : 'transparent',
                   }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)' }}>
-                    {t.name || `Visitor …${t.psid.slice(-6)}`}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'baseline' }}>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {t.name || `Visitor …${t.psid.slice(-6)}`}
+                    </span>
+                    <span style={{ fontSize: 10.5, color: 'var(--text-4)', flexShrink: 0 }}>{fmtT(t.last)}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 2 }}>
-                    {t.messages.length} message{t.messages.length > 1 ? 's' : ''} · {fmtT(t.last)}
-                  </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {t.messages[t.messages.length - 1]?.q}
                   </div>
+                  <div style={{ fontSize: 10.5, color: 'var(--text-4)', marginTop: 2 }}>{t.messages.length} message{t.messages.length > 1 ? 's' : ''}</div>
                 </button>
               ))}
             </div>
 
             {/* active thread */}
-            <div style={{ flex: 1, minWidth: 280, maxHeight: 480, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, padding: '4px 2px' }}>
-              {!active ? <div className="no-data">Pick a thread</div> : active.messages.map((m, i) => (
-                <React.Fragment key={i}>
-                  <div style={{ alignSelf: 'flex-start', maxWidth: '78%', background: 'var(--surface-1)', border: '1px solid var(--border-sub)', borderRadius: '12px 12px 12px 4px', padding: '8px 12px' }}>
-                    <div style={{ fontSize: 13, color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>{m.q}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3 }}>{fmtT(m.at)}</div>
+            <div style={{ minWidth: 0, maxHeight: 560, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 18px', background: 'var(--bg-hover)' }}>
+              {!active ? <div className="no-data">Pick a thread</div> : (
+                <>
+                  <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-4)', marginBottom: 2 }}>
+                    Conversation with <b style={{ color: 'var(--text-2)' }}>{active.name || `Visitor …${active.psid.slice(-6)}`}</b> on Facebook Messenger
                   </div>
-                  <div style={{ alignSelf: 'flex-end', maxWidth: '78%', background: 'rgba(249,115,22,0.10)', border: '1px solid rgba(249,115,22,0.3)', borderRadius: '12px 12px 4px 12px', padding: '8px 12px' }}>
-                    <div style={{ fontSize: 13, color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>{m.a}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3 }}>Sarah{m.src && m.src !== 'llm' ? ` · ${m.src}` : ''}</div>
-                  </div>
-                </React.Fragment>
-              ))}
+                  {active.messages.map((m, i) => (
+                    <React.Fragment key={i}>
+                      <div style={{ alignSelf: 'flex-start', maxWidth: '72%' }}>
+                        <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-sub)', borderRadius: '14px 14px 14px 4px', padding: '9px 13px', fontSize: 13.5, lineHeight: 1.5, color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.q}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3, paddingLeft: 4 }}>{fmtT(m.at)}</div>
+                      </div>
+                      <div style={{ alignSelf: 'flex-end', maxWidth: '72%' }}>
+                        <div style={{ background: 'var(--accent)', borderRadius: '14px 14px 4px 14px', padding: '9px 13px', fontSize: 13.5, lineHeight: 1.5, color: '#fff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.a}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3, textAlign: 'right', paddingRight: 4 }}>Sarah{m.src && m.src !== 'llm' ? ` · ${m.src}` : ''}</div>
+                      </div>
+                    </React.Fragment>
+                  ))}
+                </>
+              )}
             </div>
           </div>
         )}
