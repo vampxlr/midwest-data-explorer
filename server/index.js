@@ -5891,7 +5891,8 @@ app.get('/api/messenger/webhook', async (req, res) => {
   res.sendStatus(403);
 });
 app.post('/api/messenger/webhook', async (req, res) => {
-  res.sendStatus(200); // ack immediately — Meta retries slow webhooks
+  // NOTE: the work MUST happen before the ack — Vercel freezes the function
+  // as soon as the response is sent (DEVELOPERS.md §8.1). Meta allows ~20s.
   try {
     const s = await assistantSettings();
     for (const entry of req.body?.entry || []) {
@@ -5923,6 +5924,7 @@ app.post('/api/messenger/webhook', async (req, res) => {
       }
     }
   } catch (e) { console.warn('[messenger] webhook error:', e.message); }
+  res.sendStatus(200);
 });
 
 // The embeddable widget — one <script> tag on the public site renders the
