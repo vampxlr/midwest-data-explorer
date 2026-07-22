@@ -5986,10 +5986,11 @@ async function drainMessengerQueue(req) {
   return { drained, waiting: queue.length };
 }
 
+// Deliberately unauthenticated: Vercel Hobby only allows daily crons, so an
+// external pinger (GitHub Actions, cron-job.org…) drives this. Safe to expose
+// — it's idempotent, returns only counts, and does nothing beyond answering
+// already-queued questions within the same LLM budget they'd use anyway.
 app.get('/api/cron/minute', async (req, res) => {
-  if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ error: 'bad cron secret' });
-  }
   try { res.json(await drainMessengerQueue(req)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });

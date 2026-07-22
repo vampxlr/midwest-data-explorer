@@ -1,0 +1,20 @@
+name: Drain Sarah's Messenger queue
+# Vercel Hobby can't run sub-daily crons, so GitHub ticks the drain endpoint.
+# Schedules run at BEST every ~5 minutes (GitHub's floor, often delayed) —
+# webhook traffic also drains opportunistically, so this is the backstop that
+# guarantees nobody queued waits more than a few minutes on a quiet page.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping drain endpoint
+        run: |
+          for i in 1 2 3; do
+            curl -sS --max-time 55 "https://midwest-data-explorer.vercel.app/api/cron/minute" && echo
+            sleep 65
+          done
