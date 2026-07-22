@@ -5554,8 +5554,14 @@ app.get('/api/admin/reminders/audiences', auth.requireRole('admin'), async (req,
     const dl = (await kvGet('deadlines:all')) || {};
     const all = Object.values(db.events);
     const today = store.todayCDT();
-    // "open" = SE status open AND registration not already closed by deadline
-    const open = all.filter(e => e.status === 1 && !(dl[String(e.id)]?.finalDeadline && dl[String(e.id)].finalDeadline < today));
+    // Registration open/closed is determined by the site's deadline dates —
+    // open while the final deadline (or early-bird, if that's all we know) is
+    // today or later. SE status is only the fallback when no deadlines exist.
+    const open = all.filter(e => {
+      const d = dl[String(e.id)];
+      const last = d?.finalDeadline || d?.earlyBird;
+      return last ? last >= today : e.status === 1;
+    });
     const out = [];
     for (const ev of open) {
       const past = pastEditionsOf(ev, all).filter(p => (db.events[String(p.id)]?.resultCount ?? p.resultCount ?? 0) > 0);
