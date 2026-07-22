@@ -27,13 +27,24 @@ Main capabilities:
 
 ```
 client/  React 18 + Vite SPA. All API calls via client/src/api.jsx (axios).
-server/  ONE Express app: server/index.js (~6k lines) + small modules:
+server/  Express app being modularized (see §9 for progress):
+         index.js     — routes not yet extracted + app assembly (~5.5k lines)
+         assistant.js — SARAH: settings, KB, FAQ bank, intent layer, chat,
+                        widget, Messenger channel, LLM queue (+ .test.mjs)
+         kv.js        — KV blobs, cache, capped lists, chat logs (+ .test.mjs)
          auth.js (JWT), userStore.js (users), store.js (data store + Convex
          HTTP + usage meter), convexSync.js, aggregator.js, blobStorage.js.
 api/     Vercel entry — wraps server/index.js as a serverless function.
 convex/  Convex schema + functions (events, results, prefs KV, users,
          chatLogs, serverSync…). See convex/_generated/ai/guidelines.md.
 ```
+
+Module pattern (established in refactor steps 1-2): each extracted module
+requires node/project modules directly and receives index-local helpers via a
+deps object — `require('./assistant')(app, deps)` — so moved code stays
+verbatim. Pure logic is exposed through a `_test` export for unit tests
+(`npm test` runs `server/*.test.mjs` with node:test). New features go IN the
+module that owns the area, with a test; only wiring goes in index.js.
 
 Deploy pipeline: **push to `main` on GitHub → Vercel auto-builds and deploys**
 (midwest-data-explorer.vercel.app). Convex functions deploy separately with
@@ -190,15 +201,17 @@ Root `.env` holds integration keys used by ops scripts (Mailchimp etc.).
 
 ## 9. Refactor roadmap (do incrementally, one PR each, smoke-test between)
 
-The server monolith works but is 6k+ lines. Safe extraction order (each step:
-create module, move code verbatim, re-export, `node --check`, smoke, deploy):
+The server monolith works but started at 6.3k lines. Safe extraction order
+(each step: branch → move code VERBATIM into a deps-injected factory →
+unit tests → `npm run check` + `npm run smoke` → merge only when green):
 
-1. `server/kv.js` — kvGet/kvSet/kvGetCached/appendCapped/chatLog (+ tests).
-2. `server/assistant.js` — Sarah: settings, KB, FAQ, chat endpoint, widget.
+1. ✅ `server/kv.js` — kvGet/kvSet/kvGetCached/appendCapped/chatLog (+ tests).
+2. ✅ `server/assistant.js` — Sarah: settings, KB, FAQ, chat, widget,
+   Messenger, LLM queue (+ tests). index.js 6,317 → 5,548 lines.
 3. `server/reminders.js` — templates, designs, audiences, send, preview.
-4. `server/deadlines.js` — scrape/match/CRUD.
+4. `server/deadlines.js` — scrape/match/CRUD (+ page-parse tests).
 5. `server/tracking.js` — CAPI, webhooks, Meta ads.
-6. Then: route files per section, `server/app.js` composition root.
+6. Then: `server/app.js` composition root; index.js becomes assembly only.
 
 Rules: never change behavior and move code in the same commit; keep
 `server/index.js` as the single require entry until step 6; run
