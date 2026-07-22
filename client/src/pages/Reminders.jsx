@@ -82,12 +82,18 @@ export default function Reminders() {
           : audiences.length === 0 ? <div className="no-data" style={{ padding: 16 }}>No open events with matchable past editions found.</div> : (
           <div style={{ overflowX: 'auto' }}>
             <table className="data-table">
-              <thead><tr><th>Open event</th><th>Past editions</th><th>Lapsed</th><th>Early bird</th><th>Final</th><th>Template</th><th></th></tr></thead>
+              <thead><tr><th>Open event</th><th>Registered</th><th>Past editions</th><th>Lapsed</th><th>Early bird</th><th>Final</th><th>Template</th><th></th></tr></thead>
               <tbody>
                 {audiences.map(a => (
                   <tr key={a.eventId}>
-                    <td style={{ color: 'var(--text-1)', fontWeight: 500 }}>{a.name}</td>
-                    <td style={{ fontSize: 12 }}>{a.past.map(p => p.name.match(/20\d\d/)?.[0] || p.name).join(', ')}</td>
+                    <td style={{ color: 'var(--text-1)', fontWeight: 500 }}>
+                      {a.name}
+                      {a.registered === 0 && <span className="badge" style={{ marginLeft: 6, fontSize: 9, background: 'rgba(239,68,68,0.12)', color: '#ef4444', padding: '2px 6px', borderRadius: 999 }}>empty</span>}
+                    </td>
+                    <td style={{ fontWeight: 600, color: a.registered ? 'var(--text-1)' : 'var(--text-4)' }}>{a.registered ?? '—'}</td>
+                    <td style={{ fontSize: 12 }} title={a.past.map(p => `${p.name} — ${p.registered} registered`).join('\n')}>
+                      {a.past.map(p => `${p.name.match(/20\d\d/)?.[0] || p.name} (${p.registered})`).join(', ')}
+                    </td>
                     <td style={{ fontWeight: 700, color: a.lapsed > 0 ? 'var(--accent-2)' : 'var(--text-4)' }}>{a.lapsed ?? '—'}</td>
                     <td>{fmtD(a.deadlines?.earlyBird)}</td>
                     <td>{fmtD(a.deadlines?.finalDeadline)}</td>

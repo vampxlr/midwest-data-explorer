@@ -5698,7 +5698,8 @@ app.get('/api/admin/reminders/audiences', auth.requireRole('admin'), async (req,
       const lapsed = req.query.counts === '0' ? null : await lapsedContactsFor(ev, past.slice(0, 3), db);
       out.push({
         eventId: String(ev.id), name: ev.name, deadlines: dl[String(ev.id)] || null,
-        past: past.slice(0, 3).map(p => ({ id: String(p.id), name: p.name })),
+        registered: ev.resultCount || 0,
+        past: past.slice(0, 3).map(p => ({ id: String(p.id), name: p.name, registered: db.events[String(p.id)]?.resultCount ?? p.resultCount ?? 0 })),
         lapsed: lapsed ? lapsed.length : null,
       });
     }
