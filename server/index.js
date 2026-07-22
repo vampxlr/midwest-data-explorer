@@ -5386,14 +5386,14 @@ ${kbText}`;
     // Log the exchange + capture leads (email/phone in the user's message →
     // lead record + Meta CAPI Lead so the driving ad gets credit)
     const userMsg = history[history.length - 1].content;
-    appendCapped('assistant:convos', {
+    await appendCapped('assistant:convos', {
       at: new Date().toISOString(), sessionId: String(sessionId || '').slice(0, 40),
       page: String(page || '').slice(0, 200), q: userMsg.slice(0, 400), a: reply.slice(0, 600), src: answerSrc,
     }, 300).catch(() => {});
     // Every question is kept for analysis (what do people actually ask?), and
     // FAQ misses go to a dedicated list — raw material for the next FAQ bank.
-    appendCapped('assistant:questions', { at: new Date().toISOString(), q: userMsg.slice(0, 300), src: answerSrc }, 1000).catch(() => {});
-    if (answerSrc === 'unanswered') appendCapped('assistant:unanswered', { at: new Date().toISOString(), q: userMsg.slice(0, 300) }, 500).catch(() => {});
+    await appendCapped('assistant:questions', { at: new Date().toISOString(), q: userMsg.slice(0, 300), src: answerSrc }, 1000).catch(() => {});
+    if (answerSrc === 'unanswered') await appendCapped('assistant:unanswered', { at: new Date().toISOString(), q: userMsg.slice(0, 300) }, 500).catch(() => {});
     const email = (userMsg.match(/[^\s@]+@[^\s@]+\.[^\s@]{2,}/) || [])[0] || null;
     const phone = !email ? ((userMsg.match(/\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [])[0] || null) : null;
     if (email || phone) {
@@ -5403,13 +5403,15 @@ ${kbText}`;
       }, 300).catch(() => {});
       const cfg = ((await kvGet('tracking:orgs')) || {})['midwest-3on3'];
       const override = cfg?.metaPixelId && cfg?.capiTokenEnc ? { pixelId: cfg.metaPixelId, token: decryptSecret(cfg.capiTokenEnc) } : {};
-      capiSend('Lead', { email, phone, ip: req.ip, ua: req.headers['user-agent'], sourceUrl: page, ...override }).catch(() => {});
+      // NOTE: these must be awaited — Vercel freezes the function the moment
+      // the response is sent, so fire-and-forget work silently dies in prod.
+      await capiSend('Lead', { email, phone, ip: req.ip, ua: req.headers['user-agent'], sourceUrl: page, ...override }).catch(() => {});
       // Mailchimp: upsert the lead into the audience tagged "Sarah Lead" —
       // a Mailchimp Customer Journey triggered by that tag sends the actual
       // email from the org's verified domain. Datacenter comes from the key
       // suffix (e.g. "...-us21").
       if (email && s.mailchimpKey && s.mailchimpListId) {
-        (async () => {
+        await (async () => {
           const dc = (s.mailchimpKey.match(/-(\w+)$/) || [])[1];
           if (!dc) return;
           const hash = cryptoLib.createHash('md5').update(email.toLowerCase()).digest('hex');
@@ -5423,12 +5425,12 @@ ${kbText}`;
       // Email follow-ups (no-ops until RESEND_API_KEY is configured):
       // the visitor gets the registration link, the owner gets the lead.
       if (email && !(s.mailchimpKey && s.mailchimpListId)) {
-        sendEmail(email, 'Your Midwest 3 on 3 registration link 🏀',
+        await sendEmail(email, 'Your Midwest 3 on 3 registration link 🏀',
           `Hi! Thanks for chatting with ${s.name} at Midwest 3 on 3 Basketball.\n\nHere's the registration page you asked about:\nhttps://www.midwest3on3.com/leagues\n\nSpots and early-bird prices are first come, first served — don't wait too long!\n\nQuestions? Just reply to this email or write to Christy@3on3HoopsHub.com.\n\n— Midwest 3 on 3 Basketball`
         ).catch(() => {});
       }
       if (s.leadNotifyEmail) {
-        sendEmail(s.leadNotifyEmail, `New lead from ${s.name}: ${email || phone}`,
+        await sendEmail(s.leadNotifyEmail, `New lead from ${s.name}: ${email || phone}`,
           `${s.name} captured a new lead on ${page || 'the website'}:\n\n${email ? 'Email: ' + email + '\n' : ''}${phone ? 'Phone: ' + phone + '\n' : ''}\nRecent conversation:\n${history.slice(-4).map(m => `${m.role === 'user' ? 'Visitor' : s.name}: ${m.content.slice(0, 200)}`).join('\n')}`
         ).catch(() => {});
       }
