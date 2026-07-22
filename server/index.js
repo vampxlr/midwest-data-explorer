@@ -56,6 +56,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/auth/google', '/api/auth/google/callback',
   '/api/site-settings',   // landing page content (GET only — PUT re-runs auth below)
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
+  '/api/messenger/webhook', // Meta verifies with hub.verify_token; replies keyed by page token
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
   '/api/assistant/chat',      // site chat widget (gated by per-org widget key)
@@ -5052,6 +5053,9 @@ async function assistantSettings() {
     mailchimpKey: s.mailchimpKeyEnc ? decryptSecret(s.mailchimpKeyEnc) : null,
     hasMailchimp: !!s.mailchimpKeyEnc,
     mailchimpListId: s.mailchimpListId || '',
+    messengerPageToken: s.messengerPageTokenEnc ? decryptSecret(s.messengerPageTokenEnc) : null,
+    hasMessenger: !!s.messengerPageTokenEnc,
+    messengerVerifyToken: s.messengerVerifyToken || 'mw3-sarah-2026',
     widgetKey: s.widgetKey || null,
   };
 }
@@ -5177,6 +5181,7 @@ app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
   if (b.geminiKey && !/^•+$/.test(b.geminiKey)) cur.geminiKeyEnc = encryptSecret(String(b.geminiKey).trim());
   if (b.mailchimpKey && !/^•+$/.test(b.mailchimpKey)) cur.mailchimpKeyEnc = encryptSecret(String(b.mailchimpKey).trim());
+  if (b.messengerPageToken && !/^•+$/.test(b.messengerPageToken)) cur.messengerPageTokenEnc = encryptSecret(String(b.messengerPageToken).trim());
   if (!cur.widgetKey) cur.widgetKey = cryptoLib.randomBytes(12).toString('base64url');
   await kvSet('assistant:settings', cur);
   res.json({ ok: true });
@@ -5871,6 +5876,53 @@ app.get('/api/admin/reminders/history', auth.requireRole('admin'), async (req, r
     }
     res.json({ campaigns: log });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Facebook Messenger channel ───────────────────────────────────────────────
+// Meta POSTs page messages here; Sarah answers through the same chat pipeline
+// (KB, live deadlines, FAQ bank, lead capture, rate limits) and replies via
+// the Graph API. Dormant-safe: without a saved Page token, the webhook still
+// verifies and 200s so Meta setup can complete before the token is pasted.
+app.get('/api/messenger/webhook', async (req, res) => {
+  const s = await assistantSettings();
+  if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === s.messengerVerifyToken) {
+    return res.send(req.query['hub.challenge']);
+  }
+  res.sendStatus(403);
+});
+app.post('/api/messenger/webhook', async (req, res) => {
+  res.sendStatus(200); // ack immediately — Meta retries slow webhooks
+  try {
+    const s = await assistantSettings();
+    for (const entry of req.body?.entry || []) {
+      for (const ev of entry.messaging || []) {
+        const psid = ev.sender?.id;
+        const text = ev.message?.text;
+        if (!psid || !text || ev.message?.is_echo) continue;
+        // short per-sender history so follow-up questions have context
+        const sessKey = `msgr:sess:${psid}`;
+        const hist = ((await kvGet(sessKey)) || []).slice(-10);
+        hist.push({ role: 'user', content: String(text).slice(0, 600) });
+        let reply;
+        try {
+          const cur = (await kvGet('assistant:settings')) || {};
+          const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
+          const r = await axios.post(`${host}/api/assistant/chat`, {
+            key: cur.widgetKey, sessionId: `fb:${psid}`, page: 'facebook-messenger', messages: hist,
+          }, { timeout: 45000 });
+          reply = r.data.reply;
+        } catch { reply = `Sorry, I hit a snag — try again in a moment, or visit https://www.midwest3on3.com`; }
+        hist.push({ role: 'assistant', content: String(reply).slice(0, 600) });
+        await kvSet(sessKey, hist.slice(-12)).catch(() => {});
+        if (s.messengerPageToken) {
+          await axios.post(`https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(s.messengerPageToken)}`,
+            { recipient: { id: psid }, message: { text: String(reply).slice(0, 1900) }, messaging_type: 'RESPONSE' },
+            { timeout: 15000 }
+          ).catch(e => console.warn('[messenger] send failed:', e.response?.data?.error?.message || e.message));
+        }
+      }
+    }
+  } catch (e) { console.warn('[messenger] webhook error:', e.message); }
 });
 
 // The embeddable widget — one <script> tag on the public site renders the
