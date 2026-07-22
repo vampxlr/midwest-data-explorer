@@ -207,6 +207,7 @@ export const api = {
   reminderHistory:     (stats)=> axios.get(`${BASE}/admin/reminders/history${stats ? '?stats=1' : ''}`),
   getUsage:            ()     => axios.get(`${BASE}/admin/usage`),
   getAssistantConvos:  ()     => axios.get(`${BASE}/admin/assistant/convos`),
+  getMessengerThreads: ()     => axios.get(`${BASE}/admin/assistant/messenger`),
   assistantChat:       (body) => axios.post(`${BASE}/assistant/chat`, body),
   getForwardedPage: (offset) => axios.get(`${BASE}/webhooks/forwarded?offset=${offset}`),
   getMissingPage: (offset, days) => axios.get(`${BASE}/webhooks/missing?offset=${offset}&days=${days || 7}`),

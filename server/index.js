@@ -5878,6 +5878,39 @@ app.get('/api/admin/reminders/history', auth.requireRole('admin'), async (req, r
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Admin: Messenger conversations grouped into per-person threads. Names are
+// fetched from the Graph API best-effort (cached — may be unavailable before
+// App Review approves profile access; PSID shown otherwise).
+app.get('/api/admin/assistant/messenger', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const convos = (await chatLogRecent('convo', 500)).filter(c => String(c.sessionId || '').startsWith('fb:'));
+    const s = await assistantSettings();
+    const names = (await kvGet('msgr:names')) || {};
+    const threads = {};
+    for (const c of convos) {
+      const psid = c.sessionId.slice(3);
+      const t = threads[psid] = threads[psid] || { psid, messages: [], last: c.at };
+      t.messages.push({ at: c.at, q: c.q, a: c.a, src: c.src });
+      if (c.at > t.last) t.last = c.at;
+    }
+    // resolve up to 5 unknown names per load (keeps Graph calls bounded)
+    if (s.messengerPageToken) {
+      const unknown = Object.keys(threads).filter(p => !(p in names)).slice(0, 5);
+      await Promise.all(unknown.map(async (p) => {
+        try {
+          const r = await axios.get(`https://graph.facebook.com/v21.0/${p}?fields=first_name,last_name&access_token=${encodeURIComponent(s.messengerPageToken)}`, { timeout: 8000 });
+          names[p] = [r.data.first_name, r.data.last_name].filter(Boolean).join(' ') || null;
+        } catch { names[p] = null; }
+      }));
+      if (unknown.length) await kvSet('msgr:names', names).catch(() => {});
+    }
+    const list = Object.values(threads)
+      .map(t => ({ ...t, name: names[t.psid] || null, messages: t.messages.sort((a, b) => a.at.localeCompare(b.at)) }))
+      .sort((a, b) => b.last.localeCompare(a.last));
+    res.json({ threads: list });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Facebook Messenger channel ───────────────────────────────────────────────
 // Meta POSTs page messages here; Sarah answers through the same chat pipeline
 // (KB, live deadlines, FAQ bank, lead capture, rate limits) and replies via

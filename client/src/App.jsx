@@ -16,6 +16,7 @@ import Deadlines       from './pages/Deadlines.jsx';
 import TrackingSignal  from './pages/TrackingSignal.jsx';
 import Assistant       from './pages/Assistant.jsx';
 import Reminders       from './pages/Reminders.jsx';
+import Messenger       from './pages/Messenger.jsx';
 import Login        from './pages/Login.jsx';
 import Users        from './pages/Users.jsx';
 import Landing      from './pages/Landing.jsx';
@@ -283,6 +284,7 @@ export default function App() {
                       <NavLink to="/tracking"    onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📡</span> Tracking & Signal</NavLink>
                       <NavLink to="/assistant"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🤖</span> Site Assistant</NavLink>
                       <NavLink to="/reminders"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📣</span> Reminders</NavLink>
+                      <NavLink to="/messenger"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>💬</span> Messenger</NavLink>
                     </>
                   )}
                   {(user.role === 'admin' || isSuperAdmin) && (
@@ -371,6 +373,7 @@ export default function App() {
               <Route path="/tracking"      element={<TrackingSignal />} />
               <Route path="/assistant"     element={<Assistant />} />
               <Route path="/reminders"     element={<Reminders />} />
+              <Route path="/messenger"     element={<Messenger />} />
               {(user.role === 'admin' || isSuperAdmin) && <Route path="/users" element={<Users />} />}
               <Route path="/guide"         element={<Guide />} />
             </Routes>
