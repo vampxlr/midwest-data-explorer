@@ -57,6 +57,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/site-settings',   // landing page content (GET only — PUT re-runs auth below)
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
   '/api/messenger/webhook', // Meta verifies with hub.verify_token; replies keyed by page token
+  '/api/cron/minute',       // guarded by CRON_SECRET header check inside
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
   '/api/assistant/chat',      // site chat widget (gated by per-org widget key)
@@ -5479,6 +5480,10 @@ ${kbText}`;
       return (r.data?.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
     };
 
+    // Internal callers (Messenger queue) can ask for zero-token layers only:
+    // if the answer would need the LLM, say so instead of spending budget.
+    if (!cachedReply && req.body.zeroTokenOnly) return res.json({ needsLlm: true });
+
     let reply = cachedReply;
     if (!reply && isGemini) {
       // Gemini Flash "thinks" internally by default and those thoughts eat the
@@ -5923,6 +5928,72 @@ app.get('/api/messenger/webhook', async (req, res) => {
   }
   res.sendStatus(403);
 });
+// LLM rate budget: shared per-minute counter in KV (approximate across
+// serverless instances — 12 of the 15/min free-tier limit leaves headroom).
+const LLM_PER_MINUTE = 12;
+async function llmBudgetTake() {
+  const minute = new Date().toISOString().slice(0, 16);
+  const b = (await kvGet('llm:rpm')) || {};
+  if (b.minute !== minute) { b.minute = minute; b.n = 0; }
+  if (b.n >= LLM_PER_MINUTE) return false;
+  b.n++;
+  await kvSet('llm:rpm', b);
+  return true;
+}
+
+async function sendMessengerText(s, psid, text) {
+  if (!s.messengerPageToken) return;
+  await axios.post(`https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(s.messengerPageToken)}`,
+    { recipient: { id: psid }, message: { text: String(text).slice(0, 1900) }, messaging_type: 'RESPONSE' },
+    { timeout: 15000 }
+  ).catch(e => console.warn('[messenger] send failed:', e.response?.data?.error?.message || e.message));
+}
+
+// Run one Messenger question through the chat pipeline and deliver the reply.
+// With zeroTokenOnly, returns {needsLlm:true} instead of spending LLM budget.
+async function messengerAnswerAndSend(req, s, psid, hist, opts = {}) {
+  let reply, needsLlm = false;
+  try {
+    const cur = (await kvGet('assistant:settings')) || {};
+    const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
+    const r = await axios.post(`${host}/api/assistant/chat`, {
+      key: cur.widgetKey, sessionId: `fb:${psid}`, page: 'facebook-messenger', messages: hist,
+      ...(opts.zeroTokenOnly ? { zeroTokenOnly: true } : {}),
+    }, { timeout: 45000 });
+    if (r.data.needsLlm) return { needsLlm: true };
+    reply = r.data.reply;
+  } catch { reply = `Sorry, I hit a snag — try again in a moment, or visit https://www.midwest3on3.com`; }
+  hist.push({ role: 'assistant', content: String(reply).slice(0, 600) });
+  await kvSet(`msgr:sess:${psid}`, hist.slice(-12)).catch(() => {});
+  await sendMessengerText(s, psid, reply);
+  return { sent: true };
+}
+
+// Drain queued LLM-needing questions, oldest first, within the minute budget.
+// Called by the per-minute cron and opportunistically by webhook traffic.
+async function drainMessengerQueue(req) {
+  const queue = (await kvGet('msgr:queue')) || [];
+  if (!queue.length) return { drained: 0, waiting: 0 };
+  const s = await assistantSettings();
+  let drained = 0;
+  while (queue.length) {
+    if (!(await llmBudgetTake())) break;
+    const job = queue.shift();
+    await messengerAnswerAndSend(req, s, job.psid, job.hist);
+    drained++;
+  }
+  await kvSet('msgr:queue', queue);
+  return { drained, waiting: queue.length };
+}
+
+app.get('/api/cron/minute', async (req, res) => {
+  if (process.env.CRON_SECRET && req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(401).json({ error: 'bad cron secret' });
+  }
+  try { res.json(await drainMessengerQueue(req)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/messenger/webhook', async (req, res) => {
   // NOTE: the work MUST happen before the ack — Vercel freezes the function
   // as soon as the response is sent (DEVELOPERS.md §8.1). Meta allows ~20s.
@@ -5937,25 +6008,27 @@ app.post('/api/messenger/webhook', async (req, res) => {
         const sessKey = `msgr:sess:${psid}`;
         const hist = ((await kvGet(sessKey)) || []).slice(-10);
         hist.push({ role: 'user', content: String(text).slice(0, 600) });
-        let reply;
-        try {
-          const cur = (await kvGet('assistant:settings')) || {};
-          const host = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
-          const r = await axios.post(`${host}/api/assistant/chat`, {
-            key: cur.widgetKey, sessionId: `fb:${psid}`, page: 'facebook-messenger', messages: hist,
-          }, { timeout: 45000 });
-          reply = r.data.reply;
-        } catch { reply = `Sorry, I hit a snag — try again in a moment, or visit https://www.midwest3on3.com`; }
-        hist.push({ role: 'assistant', content: String(reply).slice(0, 600) });
-        await kvSet(sessKey, hist.slice(-12)).catch(() => {});
-        if (s.messengerPageToken) {
-          await axios.post(`https://graph.facebook.com/v21.0/me/messages?access_token=${encodeURIComponent(s.messengerPageToken)}`,
-            { recipient: { id: psid }, message: { text: String(reply).slice(0, 1900) }, messaging_type: 'RESPONSE' },
-            { timeout: 15000 }
-          ).catch(e => console.warn('[messenger] send failed:', e.response?.data?.error?.message || e.message));
+        // 1) zero-token layers (greetings, FAQ bank, league lookups) → instant
+        const r1 = await messengerAnswerAndSend(req, s, psid, hist, { zeroTokenOnly: true });
+        if (!r1.needsLlm) continue;
+        // 2) LLM needed — answer immediately if the minute budget allows…
+        if (await llmBudgetTake()) {
+          await messengerAnswerAndSend(req, s, psid, hist);
+          continue;
         }
+        // 3) …otherwise queue FIFO (a newer message replaces the same
+        // person's pending job) and let them know we're on it
+        const queue = (await kvGet('msgr:queue')) || [];
+        const mine = queue.findIndex(j => j.psid === psid);
+        if (mine >= 0) queue[mine] = { psid, hist, at: new Date().toISOString() };
+        else queue.push({ psid, hist, at: new Date().toISOString() });
+        await kvSet('msgr:queue', queue.slice(0, 200));
+        await kvSet(sessKey, hist.slice(-12)).catch(() => {});
+        if (mine < 0) await sendMessengerText(s, psid, `Great question! I'm pulling that information for you — give me a minute and I'll get right back to you 🏀`);
       }
     }
+    // opportunistic drain: any webhook traffic helps clear the backlog
+    await drainMessengerQueue(req).catch(() => {});
   } catch (e) { console.warn('[messenger] webhook error:', e.message); }
   res.sendStatus(200);
 });
