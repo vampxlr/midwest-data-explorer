@@ -3448,6 +3448,9 @@ app.put('/api/admin/accounts/:accountKey', auth.requireRole('superadmin'), async
 
 app.delete('/api/admin/accounts/:accountKey', auth.requireOwner, async (req, res) => {
   try {
+    if (PROTECTED_ORG_KEYS.has(req.params.accountKey)) {
+      return res.status(403).json({ error: 'This company is permanently protected and can never be deleted' });
+    }
     const acct = (await listAccountsRaw()).find(a => a.accountKey === req.params.accountKey);
     if (!acct) return res.status(404).json({ error: 'Company not found' });
     if (!(await checkDeleteGuards(req, res, 'account', req.params.accountKey, acct.name))) return;
@@ -3651,6 +3654,9 @@ app.post('/api/admin/orgs/:orgKey/verify', auth.requireRole('superadmin'), async
 //    kill-switch. Even the Owner cannot delete until PLATFORM_DELETES_ENABLED=1
 //    is set in the environment (deliberately disabled for safety right now).
 const DELETES_ENABLED = process.env.PLATFORM_DELETES_ENABLED === '1';
+// The founding org can never be deleted, no matter who asks or what flags are
+// set — it holds the live Midwest data, Sarah, tracking, everything.
+const PROTECTED_ORG_KEYS = new Set(['midwest-3on3']);
 
 async function kvSet(key, obj) {
   if (store.IS_CONVEX) await store.convexMutation('prefs:setPref', { userId: '__platform', key, value: JSON.stringify(obj) });
@@ -3722,6 +3728,9 @@ async function checkDeleteGuards(req, res, targetType, targetKey, expectedName) 
 
 app.delete('/api/admin/orgs/:orgKey', auth.requireOwner, async (req, res) => {
   try {
+    if (PROTECTED_ORG_KEYS.has(req.params.orgKey)) {
+      return res.status(403).json({ error: 'This organization is permanently protected and can never be deleted' });
+    }
     const org = await loadOrg(req.params.orgKey);
     if (!org) return res.status(404).json({ error: 'Organization not found' });
     if (!(await checkDeleteGuards(req, res, 'org', req.params.orgKey, org.name))) return;
