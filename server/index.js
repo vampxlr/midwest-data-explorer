@@ -4383,6 +4383,15 @@ app.get('/api/cron/daily', async (req, res) => {
   }
   const out = {};
   try { out.webhookRetry = await drainFailedDeliveries(8); } catch (e) { out.webhookRetry = { error: e.message }; }
+  // chat-log retention: keep the freshest N of each type, trim the tail daily
+  if (store.IS_CONVEX) {
+    try {
+      out.chatLogPrune = {};
+      for (const [type, keep] of [['convo', 2000], ['question', 3000], ['unanswered', 500]]) {
+        out.chatLogPrune[type] = (await store.convexMutation('chatLogs:prune', { type, keep })).deleted;
+      }
+    } catch (e) { out.chatLogPrune = { error: e.message }; }
+  }
   try {
     const host2 = process.env.VERCEL === '1' ? `https://${req.headers['x-forwarded-host'] || req.headers.host}` : 'http://localhost:3001';
     const tok2 = auth.signToken({ id: 'cron', username: 'cron', role: 'admin' });
@@ -5173,8 +5182,8 @@ app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/admin/assistant/convos', auth.requireRole('admin'), async (req, res) => {
-  const [convos, leads, unanswered] = await Promise.all([kvGet('assistant:convos'), kvGet('assistant:leads'), kvGet('assistant:unanswered')]);
-  res.json({ convos: convos || [], leads: leads || [], unanswered: unanswered || [] });
+  const [convos, leads, unanswered] = await Promise.all([chatLogRecent('convo', 150), kvGet('assistant:leads'), chatLogRecent('unanswered', 200)]);
+  res.json({ convos, leads: leads || [], unanswered });
 });
 
 // ── FAQ bank: pre-generated answers with live-data placeholders ──────────────
@@ -5281,7 +5290,7 @@ RULES:
 - Static policies ARE safe to bake in: team sizes, no practices, no standings, free-agent process, escalation email, formats, philosophy, shirt info, weather policy, etc.
 - "alts": 4-8 alternative phrasings of the same question, the varied ways real parents type it (short, misspelled-ish, casual).
 Return ONLY a JSON array, no prose: [{"q":"...","alts":["...",...],"a":"..."}]
-${await kvGet('assistant:unanswered').then(u => (u || []).length ? '\nREAL VISITOR QUESTIONS THAT HAD NO ANSWER — make sure the bank covers each of these (answer from the knowledge base; use the placeholders for anything dynamic):\n' + [...new Set((u || []).slice(0, 40).map(x => '- ' + x.q))].join('\n') + '\n' : '').catch(() => '')}
+${await chatLogRecent('unanswered', 40).then(u => u.length ? '\nREAL VISITOR QUESTIONS THAT HAD NO ANSWER — make sure the bank covers each of these (answer from the knowledge base; use the placeholders for anything dynamic):\n' + [...new Set(u.map(x => '- ' + x.q))].join('\n') + '\n' : '').catch(() => '')}
 === KNOWLEDGE BASE ===
 ${kbText}`;
     let raw;
@@ -5312,6 +5321,28 @@ ${kbText}`;
     res.json({ ok: true, count: items.length });
   } catch (err) { res.status(500).json({ error: err.response?.data?.error?.message || err.message }); }
 });
+
+// High-volume chat logging: insert-only chatLogs table on Convex (~1KB per
+// write); capped KV arrays only in local dev. Reads merge the new table with
+// any legacy KV entries so nothing already logged disappears.
+const CHATLOG_KV_KEY = { convo: 'assistant:convos', question: 'assistant:questions', unanswered: 'assistant:unanswered' };
+const CHATLOG_KV_CAP = { convo: 150, question: 400, unanswered: 200 };
+async function chatLog(type, entry) {
+  if (store.IS_CONVEX) await store.convexMutation('chatLogs:add', { type, at: entry.at, data: JSON.stringify(entry) });
+  else await appendCapped(CHATLOG_KV_KEY[type], entry, CHATLOG_KV_CAP[type]);
+}
+async function chatLogRecent(type, limit) {
+  let rows = [];
+  if (store.IS_CONVEX) {
+    rows = (await store.convexQuery('chatLogs:recent', { type, limit }).catch(() => []))
+      .map(r => { try { return JSON.parse(r.data); } catch { return null; } }).filter(Boolean);
+  }
+  if (rows.length < limit) {
+    const legacy = (await kvGet(CHATLOG_KV_KEY[type])) || [];
+    rows = [...rows, ...legacy].slice(0, limit);
+  }
+  return rows;
+}
 
 // Public chat endpoint the widget calls. Stateless per call — the widget
 // sends its own trimmed history. Keyed + rate limited per IP.
@@ -5477,16 +5508,14 @@ ${kbText}`;
     // Log the exchange + capture leads (email/phone in the user's message →
     // lead record + Meta CAPI Lead so the driving ad gets credit)
     const userMsg = history[history.length - 1].content;
-    await appendCapped('assistant:convos', {
+    await chatLog('convo', {
       at: new Date().toISOString(), sessionId: String(sessionId || '').slice(0, 40),
       page: String(page || '').slice(0, 200), q: userMsg.slice(0, 400), a: reply.slice(0, 600), src: answerSrc,
-    }, 150).catch(() => {});
+    }).catch(() => {});
     // Every question is kept for analysis (what do people actually ask?), and
     // FAQ misses go to a dedicated list — raw material for the next FAQ bank.
-    // Caps kept modest: appendCapped rewrites the whole array each time, so
-    // cap size directly multiplies Convex bandwidth per chat message.
-    await appendCapped('assistant:questions', { at: new Date().toISOString(), q: userMsg.slice(0, 300), src: answerSrc }, 400).catch(() => {});
-    if (answerSrc === 'unanswered') await appendCapped('assistant:unanswered', { at: new Date().toISOString(), q: userMsg.slice(0, 300) }, 200).catch(() => {});
+    await chatLog('question', { at: new Date().toISOString(), q: userMsg.slice(0, 300), src: answerSrc }).catch(() => {});
+    if (answerSrc === 'unanswered') await chatLog('unanswered', { at: new Date().toISOString(), q: userMsg.slice(0, 300) }).catch(() => {});
     const email = (userMsg.match(/[^\s@]+@[^\s@]+\.[^\s@]{2,}/) || [])[0] || null;
     const phone = !email ? ((userMsg.match(/\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [])[0] || null) : null;
     if (email || phone) {

@@ -118,6 +118,15 @@ export default defineSchema({
     accountKey: v.optional(v.string()),  // company this user belongs to
   }).index("by_userId", ["userId"]).index("by_username", ["username"]),
 
+  // Insert-only chat/assistant logs (conversations, questions, unanswered).
+  // Replaces the old rewrite-the-whole-array KV blobs — each log write is a
+  // ~1KB insert instead of a ~100KB read+rewrite, which matters at scale.
+  chatLogs: defineTable({
+    type: v.string(),   // 'convo' | 'question' | 'unanswered'
+    at: v.string(),     // ISO timestamp
+    data: v.string(),   // JSON-encoded entry
+  }).index("by_type", ["type"]),
+
   // Per-user UI preferences (dashboard slot selections etc.) — survives
   // devices/browsers, unlike localStorage.
   preferences: defineTable({
