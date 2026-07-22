@@ -8,15 +8,13 @@
 
 const CONVEX_URL = process.env.CONVEX_URL;
 
+// Shared with store.js so purges go through the usage meter (this module
+// used to have a private unmetered copy). Errors intentionally swallowed to
+// keep the old "best effort" behavior.
+const store = require('./store');
 async function convexMutation(fnPath, args = {}) {
   if (!CONVEX_URL) return null;
-  const r = await fetch(`${CONVEX_URL}/api/mutation`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
-  });
-  const data = await r.json();
-  return data.value;
+  try { return await store.convexMutation(fnPath, args); } catch { return null; }
 }
 
 /** Delete all results for an event from Convex (500 at a time until done). */

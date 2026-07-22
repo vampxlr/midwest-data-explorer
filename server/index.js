@@ -3680,6 +3680,8 @@ async function maybeFlushUsage() {
       const c = cur.byFn[f] = cur.byFn[f] || { calls: 0, bytes: 0 };
       c.calls += v.calls; c.bytes += v.bytes;
     }
+    // the bucket itself is read+rewritten every flush — keep it small
+    cur.byFn = Object.fromEntries(Object.entries(cur.byFn).sort((a, b) => b[1].bytes - a[1].bytes).slice(0, 50));
     await kvSet(key, cur);
   } catch {} finally { usageFlushing = false; }
 }

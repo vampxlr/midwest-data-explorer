@@ -14,28 +14,9 @@ const DATA_DIR   = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 
 // ── Convex HTTP helpers ────────────────────────────────────────────────────────
-
-async function convexQuery(fnPath, args = {}) {
-  const r = await fetch(`${CONVEX_URL}/api/query`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(`Convex query ${fnPath} failed: ${JSON.stringify(data)}`);
-  return data.value;
-}
-
-async function convexMutation(fnPath, args = {}) {
-  const r = await fetch(`${CONVEX_URL}/api/mutation`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ path: fnPath, args, format: 'json' }),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(`Convex mutation ${fnPath} failed: ${JSON.stringify(data)}`);
-  return data.value;
-}
+// Shared with store.js so every round-trip goes through the usage meter
+// (this module used to have private unmetered copies).
+const { convexQuery, convexMutation } = require('./store');
 
 // ── Local filesystem helpers ───────────────────────────────────────────────────
 
