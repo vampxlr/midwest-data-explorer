@@ -208,10 +208,17 @@ unit tests → `npm run check` + `npm run smoke` → merge only when green):
 1. ✅ `server/kv.js` — kvGet/kvSet/kvGetCached/appendCapped/chatLog (+ tests).
 2. ✅ `server/assistant.js` — Sarah: settings, KB, FAQ, chat, widget,
    Messenger, LLM queue (+ tests). index.js 6,317 → 5,548 lines.
-3. `server/reminders.js` — templates, designs, audiences, send, preview.
-4. `server/deadlines.js` — scrape/match/CRUD (+ page-parse tests).
-5. `server/tracking.js` — CAPI, webhooks, Meta ads.
-6. Then: `server/app.js` composition root; index.js becomes assembly only.
+3. ✅ `server/reminders.js` — templates, designs, audiences, send, preview
+   (+ tests). index.js → 5,246 lines.
+4. ✅ `server/deadlines.js` — scrape/parse/match/CRUD (+ page-parser tests);
+   returns the shared site-scrape helpers. index.js → 5,022 lines.
+5. `server/tracking.js` — capiSend, SE webhooks + inspector, Meta ads
+   reporting. NOTE: capiSend is a dep of assistant/reminders — extract it
+   first and thread it through, same pattern as deadlines' scrapeTokens.
+6. Then: platform/orgs, contacts+sync, growth/Stripe route files;
+   `server/app.js` composition root; index.js becomes assembly only.
+
+CI (GitHub Actions) runs unit tests + syntax + client build on every push.
 
 Rules: never change behavior and move code in the same commit; keep
 `server/index.js` as the single require entry until step 6; run
