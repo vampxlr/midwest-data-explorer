@@ -284,7 +284,7 @@ export default function App() {
                       <NavLink to="/tracking"    onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📡</span> Tracking & Signal</NavLink>
                       <NavLink to="/assistant"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>🤖</span> Site Assistant</NavLink>
                       <NavLink to="/reminders"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>📣</span> Reminders</NavLink>
-                      <NavLink to="/messenger"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>💬</span> Messenger</NavLink>
+                      <NavLink to="/messenger"   onClick={()=>setNavOpen(false)} className={({isActive})=>isActive?'nav-item active':'nav-item'}><span>💬</span> Conversations</NavLink>
                     </>
                   )}
                   {(user.role === 'admin' || isSuperAdmin) && (

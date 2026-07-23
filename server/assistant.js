@@ -562,13 +562,24 @@ ${kbText}`;
 // App Review approves profile access; PSID shown otherwise).
 app.get('/api/admin/assistant/messenger', auth.requireRole('admin'), async (req, res) => {
   try {
-    const convos = (await chatLogRecent('convo', 500)).filter(c => String(c.sessionId || '').startsWith('fb:'));
+    const all = await chatLogRecent('convo', 500);
+    const convos = all.filter(c => String(c.sessionId || '').startsWith('fb:'));
     const s = await assistantSettings();
     const names = (await kvGet('msgr:names')) || {};
     const threads = {};
     for (const c of convos) {
       const psid = c.sessionId.slice(3);
-      const t = threads[psid] = threads[psid] || { psid, messages: [], last: c.at };
+      const t = threads[psid] = threads[psid] || { psid, channel: 'facebook', messages: [], last: c.at };
+      t.messages.push({ at: c.at, q: c.q, a: c.a, src: c.src });
+      if (c.at > t.last) t.last = c.at;
+    }
+    // Website widget threads: one per widget session (browser sessionStorage
+    // id). No names available — labeled by visit page + short session id.
+    const webThreads = {};
+    for (const c of all) {
+      const sid = String(c.sessionId || '');
+      if (sid.startsWith('fb:') || !sid) continue;
+      const t = webThreads[sid] = webThreads[sid] || { psid: sid, channel: 'website', page: c.page || null, messages: [], last: c.at };
       t.messages.push({ at: c.at, q: c.q, a: c.a, src: c.src });
       if (c.at > t.last) t.last = c.at;
     }
@@ -583,8 +594,10 @@ app.get('/api/admin/assistant/messenger', auth.requireRole('admin'), async (req,
       }));
       if (unknown.length) await kvSet('msgr:names', names).catch(() => {});
     }
-    const list = Object.values(threads)
-      .map(t => ({ ...t, name: names[t.psid] || null, messages: t.messages.sort((a, b) => a.at.localeCompare(b.at)) }))
+    const list = [
+      ...Object.values(threads).map(t => ({ ...t, name: names[t.psid] || null })),
+      ...Object.values(webThreads),
+    ].map(t => ({ ...t, messages: t.messages.sort((a, b) => a.at.localeCompare(b.at)) }))
       .sort((a, b) => b.last.localeCompare(a.last));
     res.json({ threads: list });
   } catch (err) { res.status(500).json({ error: err.message }); }

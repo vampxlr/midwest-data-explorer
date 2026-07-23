@@ -9,6 +9,7 @@ import { api } from '../api.jsx';
 export default function Messenger() {
   const [threads, setThreads] = useState(null);
   const [open, setOpen] = useState(null); // psid
+  const [channel, setChannel] = useState('all'); // all | website | facebook
 
   const load = () => api.getMessengerThreads()
     .then(r => { setThreads(r.data.threads); if (r.data.threads.length && !open) setOpen(r.data.threads[0].psid); })
@@ -16,18 +17,30 @@ export default function Messenger() {
   useEffect(() => { load(); }, []);
 
   const fmtT = (at) => String(at).replace('T', ' ').slice(5, 16);
+  const visible = threads?.filter(t => channel === 'all' || t.channel === channel);
   const active = threads?.find(t => t.psid === open);
+  const label = (t) => t.name || (t.channel === 'website'
+    ? `🌐 ${String(t.page || 'Website visitor').replace(/^https?:\/\/(www\.)?/, '').split('?')[0].slice(0, 26)} …${t.psid.slice(-4)}`
+    : `Visitor …${t.psid.slice(-6)}`);
 
   return (
     <div>
       <div className="page-header">
-        <h1>💬 Messenger</h1>
-        <p>Conversations Sarah has on the Facebook page — same brain as the website widget (live deadlines, FAQ bank, lead capture), delivered through Meta's Messenger</p>
+        <h1>💬 Conversations</h1>
+        <p>Every conversation the assistant has — the website widget on midwest3on3.com and the Facebook page via Messenger — grouped into per-person threads</p>
       </div>
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-          <h2 style={{ margin: 0 }}>Threads {threads ? `(${threads.length})` : ''}</h2>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <h2 style={{ margin: 0, marginRight: 6 }}>Threads {visible ? `(${visible.length})` : ''}</h2>
+            {[['all', 'All'], ['website', '🌐 Website'], ['facebook', '📘 Facebook']].map(([v, l]) => (
+              <button key={v} onClick={() => setChannel(v)} className={channel === v ? 'btn-primary' : 'btn-secondary'}
+                style={{ width: 'auto', margin: 0, padding: '3px 12px', fontSize: 12 }}>
+                {l} {threads ? `(${v === 'all' ? threads.length : threads.filter(t => t.channel === v).length})` : ''}
+              </button>
+            ))}
+          </div>
           <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} onClick={load}>↻ Refresh</button>
         </div>
 
@@ -42,7 +55,7 @@ export default function Messenger() {
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 0, border: '1px solid var(--border-sub)', borderRadius: 12, overflow: 'hidden', minHeight: 420 }}>
             {/* thread list */}
             <div style={{ borderRight: '1px solid var(--border-sub)', maxHeight: 560, overflowY: 'auto', background: 'var(--surface-1)' }}>
-              {threads.map(t => (
+              {visible.map(t => (
                 <button key={t.psid} onClick={() => setOpen(t.psid)}
                   style={{
                     display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
@@ -52,7 +65,7 @@ export default function Messenger() {
                   }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'baseline' }}>
                     <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {t.name || `Visitor …${t.psid.slice(-6)}`}
+                      {label(t)}
                     </span>
                     <span style={{ fontSize: 10.5, color: 'var(--text-4)', flexShrink: 0 }}>{fmtT(t.last)}</span>
                   </div>
@@ -69,7 +82,7 @@ export default function Messenger() {
               {!active ? <div className="no-data">Pick a thread</div> : (
                 <>
                   <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-4)', marginBottom: 2 }}>
-                    Conversation with <b style={{ color: 'var(--text-2)' }}>{active.name || `Visitor …${active.psid.slice(-6)}`}</b> on Facebook Messenger
+                    Conversation with <b style={{ color: 'var(--text-2)' }}>{label(active)}</b> {active.channel === 'website' ? 'on the website widget' : 'on Facebook Messenger'}
                   </div>
                   {active.messages.map((m, i) => (
                     <React.Fragment key={i}>
@@ -79,7 +92,7 @@ export default function Messenger() {
                       </div>
                       <div style={{ alignSelf: 'flex-end', maxWidth: '72%' }}>
                         <div style={{ background: 'var(--accent)', borderRadius: '14px 14px 4px 14px', padding: '9px 13px', fontSize: 13.5, lineHeight: 1.5, color: '#fff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.a}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3, textAlign: 'right', paddingRight: 4 }}>Sarah{m.src && m.src !== 'llm' ? ` · ${m.src}` : ''}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3, textAlign: 'right', paddingRight: 4 }}>Courtney{m.src && m.src !== 'llm' ? ` · ${m.src}` : ''}</div>
                       </div>
                     </React.Fragment>
                   ))}
