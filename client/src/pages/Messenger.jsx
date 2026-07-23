@@ -16,12 +16,45 @@ export default function Messenger() {
     .catch(() => setThreads([]));
   useEffect(() => { load(); }, []);
 
-  const fmtT = (at) => String(at).replace('T', ' ').slice(5, 16);
+  // Relative time in the viewer's local timezone: "just now", "35m ago",
+  // "3h ago", "yesterday 4:12 PM", "Tue 4:12 PM", then "Jul 12".
+  const localTime = (at) => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const localFull = (at) => new Date(at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const dayDiff = (at) => {
+    const d = new Date(at), now = new Date();
+    return Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000);
+  };
+  const ago = (at) => {
+    const mins = (Date.now() - new Date(at).getTime()) / 60000;
+    if (mins < 2) return 'just now';
+    if (mins < 60) return `${Math.round(mins)}m ago`;
+    if (mins < 12 * 60 && dayDiff(at) === 0) return `${Math.round(mins / 60)}h ago`;
+    const dd = dayDiff(at);
+    if (dd === 0) return `today ${localTime(at)}`;
+    if (dd === 1) return `yesterday ${localTime(at)}`;
+    if (dd < 7) return `${new Date(at).toLocaleDateString([], { weekday: 'short' })} ${localTime(at)}`;
+    return new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+  // Age color: today orange, yesterday blue, this week purple, older gray
+  const AGE_COLORS = { 0: ['rgba(249,115,22,0.15)', '#f97316'], 1: ['rgba(59,130,246,0.15)', '#3b82f6'], week: ['rgba(168,85,247,0.15)', '#a855f7'], older: ['rgba(120,130,145,0.15)', 'var(--text-4)'] };
+  const ageColor = (at) => { const d = dayDiff(at); return AGE_COLORS[d] || (d < 7 ? AGE_COLORS.week : AGE_COLORS.older); };
+  const TimePill = ({ at }) => {
+    const [bg, fg] = ageColor(at);
+    return <span title={localFull(at)} style={{ fontSize: 10, fontWeight: 700, color: fg, background: bg, padding: '2px 8px', borderRadius: 999, flexShrink: 0, whiteSpace: 'nowrap' }}>{ago(at)}</span>;
+  };
+  // Website threads: badge for the page they chatted from, full URL on hover
+  const pageBadge = (page) => {
+    const u = String(page || '');
+    let text = 'main site';
+    try {
+      const path = u.startsWith('http') ? new URL(u).pathname : u;
+      if (path && path !== '/') text = path.replace(/^\//, '').split('/').slice(0, 2).join('/').slice(0, 22);
+    } catch {}
+    return { text, full: u || 'unknown page' };
+  };
   const visible = threads?.filter(t => channel === 'all' || t.channel === channel);
   const active = threads?.find(t => t.psid === open);
-  const label = (t) => t.name || (t.channel === 'website'
-    ? `🌐 ${String(t.page || 'Website visitor').replace(/^https?:\/\/(www\.)?/, '').split('?')[0].slice(0, 26)} …${t.psid.slice(-4)}`
-    : `Visitor …${t.psid.slice(-6)}`);
+  const label = (t) => t.name || (t.channel === 'website' ? `Visitor …${t.psid.slice(-4)}` : `Visitor …${t.psid.slice(-6)}`);
 
   return (
     <div>
@@ -63,11 +96,16 @@ export default function Messenger() {
                     borderLeft: `3px solid ${open === t.psid ? 'var(--accent)' : 'transparent'}`,
                     background: open === t.psid ? 'var(--bg-hover)' : 'transparent',
                   }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'baseline' }}>
-                    <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {label(t)}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.channel === 'website' ? '🌐' : '📘'} {label(t)}</span>
+                      {t.channel === 'website' && (
+                        <span title={pageBadge(t.page).full} style={{ fontSize: 9.5, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-hover)', border: '1px solid var(--border-sub)', padding: '1px 7px', borderRadius: 999, flexShrink: 0, cursor: 'help' }}>
+                          {pageBadge(t.page).text}
+                        </span>
+                      )}
                     </span>
-                    <span style={{ fontSize: 10.5, color: 'var(--text-4)', flexShrink: 0 }}>{fmtT(t.last)}</span>
+                    <TimePill at={t.last} />
                   </div>
                   <div style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {t.messages[t.messages.length - 1]?.q}
@@ -88,7 +126,7 @@ export default function Messenger() {
                     <React.Fragment key={i}>
                       <div style={{ alignSelf: 'flex-start', maxWidth: '72%' }}>
                         <div style={{ background: 'var(--surface-1)', border: '1px solid var(--border-sub)', borderRadius: '14px 14px 14px 4px', padding: '9px 13px', fontSize: 13.5, lineHeight: 1.5, color: 'var(--text-1)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.q}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3, paddingLeft: 4 }}>{fmtT(m.at)}</div>
+                        <div title={localFull(m.at)} style={{ fontSize: 10, color: 'var(--text-4)', marginTop: 3, paddingLeft: 4 }}>{ago(m.at)}</div>
                       </div>
                       <div style={{ alignSelf: 'flex-end', maxWidth: '72%' }}>
                         <div style={{ background: 'var(--accent)', borderRadius: '14px 14px 4px 14px', padding: '9px 13px', fontSize: 13.5, lineHeight: 1.5, color: '#fff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.a}</div>
