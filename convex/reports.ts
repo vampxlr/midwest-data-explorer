@@ -116,6 +116,27 @@ export const resultsByEvent = query({
   },
 });
 
+// Contact-projection variant: only the fields the audience/export/reminders
+// math uses. Cuts function egress + server transfer ~4x on bulk contact
+// operations (Convex still reads full docs internally — this trims the wire).
+export const contactsByEvent = query({
+  args: { eventId: v.string() },
+  handler: async (ctx, { eventId }) => {
+    const rows = await ctx.db
+      .query("results")
+      .withIndex("by_eventId", (q) => q.eq("eventId", eventId))
+      .collect();
+    return rows.map((r: any) => ({
+      eventId: r.eventId, eventName: r.eventName,
+      email: r.email ?? null, emails: r.emails ?? [],
+      phone: r.phone ?? null, phones: r.phones ?? [],
+      firstName: r.firstName ?? null, lastName: r.lastName ?? null,
+      gender: r.gender ?? null, gradYears: r.gradYears ?? [],
+      zip: r.zip ?? null, city: r.city ?? null, state: r.state ?? null,
+    }));
+  },
+});
+
 // ── Lapsed individuals (scans per-event, uses index) ───────────────────────
 
 export const lapsedIndividuals = query({

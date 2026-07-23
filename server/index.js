@@ -641,32 +641,43 @@ app.get('/api/boot/stream', async (req, res) => {
     log(`  Last aggregation run    : ${db.meta.lastRunAt ? new Date(db.meta.lastRunAt).toLocaleString() : 'never'}`, 'info');
     log(`  ✓ Store loaded`, 'ok');
 
-    // Step 3: Fetch all events (all pages), sort newest first
+    // Step 3: Fetch all events, sort newest first. Closed events never change,
+    // so the full SE page-walk is cached (15 min) — boot serves the cached
+    // list instantly instead of re-asking SportsEngine for 700+ events it
+    // already knows about. `?fresh=1` (or an expired cache) does a real fetch.
     log(`────────────────────────────────────────`, 'info');
     log(`Step 3/4 — Loading all registrations from SportsEngine…`, 'info');
 
-    const firstPage = await graphql(`query($orgId: Int!, $page: Int, $perPage: Int!) {
-      registrations(organizationId: $orgId, page: $page, perPage: $perPage) {
-        pageInformation { pages count }
-      }
-    }`, { orgId: parseInt(orgId), page: 1, perPage: 100 });
-    const totalPages = firstPage?.data?.registrations?.pageInformation?.pages || 1;
-    const totalCount = firstPage?.data?.registrations?.pageInformation?.count || 0;
-    log(`  Total in SportsEngine: ${totalCount} registrations across ${totalPages} pages`, 'info');
-
     let allEvents = [];
-    for (let pg = 1; pg <= totalPages; pg++) {
-      log(`  → GraphQL: registrations(page:${pg}/${totalPages})`, 'call');
-      const tP = Date.now();
-      const d = await graphql(`query($orgId: Int!, $page: Int, $perPage: Int!) {
+    const listCache = req.query.fresh === '1' ? null : await kvGet('se:eventlist');
+    if (listCache && Date.now() - listCache.at < 15 * 60 * 1000 && listCache.events?.length) {
+      allEvents = listCache.events;
+      log(`  ✓ ${allEvents.length} events from cache (${Math.round((Date.now() - listCache.at) / 60000)} min old) — zero SportsEngine calls`, 'ok');
+      log(`  (use Refresh All on Data Mgmt for a live re-fetch)`, 'skip');
+    } else {
+      const firstPage = await graphql(`query($orgId: Int!, $page: Int, $perPage: Int!) {
         registrations(organizationId: $orgId, page: $page, perPage: $perPage) {
-          results { id name open close status sport resultsCompleted }
+          pageInformation { pages count }
         }
-      }`, { orgId: parseInt(orgId), page: pg, perPage: 100 });
-      const results = d?.data?.registrations?.results || [];
-      allEvents = allEvents.concat(results);
-      log(`  ← page ${pg}/${totalPages}: ${results.length} events (${Date.now()-tP}ms) — ${allEvents.length} total so far`, 'response');
-      if (pg < totalPages) await new Promise(r => setTimeout(r, 200));
+      }`, { orgId: parseInt(orgId), page: 1, perPage: 100 });
+      const totalPages = firstPage?.data?.registrations?.pageInformation?.pages || 1;
+      const totalCount = firstPage?.data?.registrations?.pageInformation?.count || 0;
+      log(`  Total in SportsEngine: ${totalCount} registrations across ${totalPages} pages`, 'info');
+
+      for (let pg = 1; pg <= totalPages; pg++) {
+        log(`  → GraphQL: registrations(page:${pg}/${totalPages})`, 'call');
+        const tP = Date.now();
+        const d = await graphql(`query($orgId: Int!, $page: Int, $perPage: Int!) {
+          registrations(organizationId: $orgId, page: $page, perPage: $perPage) {
+            results { id name open close status sport resultsCompleted monetary }
+          }
+        }`, { orgId: parseInt(orgId), page: pg, perPage: 100 });
+        const results = d?.data?.registrations?.results || [];
+        allEvents = allEvents.concat(results);
+        log(`  ← page ${pg}/${totalPages}: ${results.length} events (${Date.now()-tP}ms) — ${allEvents.length} total so far`, 'response');
+        if (pg < totalPages) await new Promise(r => setTimeout(r, 200));
+      }
+      await kvSet('se:eventlist', { at: Date.now(), events: allEvents }).catch(() => {});
     }
 
     // Sort newest first (by close date, fallback to open)
@@ -805,6 +816,14 @@ app.get('/api/registrations/recent', async (req, res) => {
   const cached = cache.get(cacheKey);
   if (cached) return res.json(cached);
   try {
+    // Shared KV cache with boot: on Vercel the in-memory cache misses across
+    // instances, so without this every instance re-walked SE's 8 pages.
+    const kvCached = await kvGet('se:eventlist').catch(() => null);
+    if (kvCached && Date.now() - kvCached.at < 15 * 60 * 1000 && kvCached.events?.length && kvCached.events[0].monetary !== undefined) {
+      const result = { total: kvCached.events.length, registrations: kvCached.events };
+      cache.set(cacheKey, result, 600);
+      return res.json(result);
+    }
     let allRegs = [], page = 1, totalPages = 1;
     do {
       const data = await graphql(`query($orgId: Int!, $page: Int, $perPage: Int!) {
@@ -826,6 +845,7 @@ app.get('/api/registrations/recent', async (req, res) => {
 
     const result = { total: allRegs.length, registrations: allRegs };
     cache.set(cacheKey, result, 600);
+    await kvSet('se:eventlist', { at: Date.now(), events: allRegs }).catch(() => {});
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message, detail: err.response?.data });
@@ -3042,7 +3062,7 @@ async function loadContactResults(db, eventIds) {
   const CONCURRENCY = 8;
   for (let i = 0; i < ids.length; i += CONCURRENCY) {
     const batches = await Promise.all(
-      ids.slice(i, i + CONCURRENCY).map(eid => store.convexQuery('reports:resultsByEvent', { eventId: eid }).catch(() => []))
+      ids.slice(i, i + CONCURRENCY).map(eid => store.convexQuery('reports:contactsByEvent', { eventId: eid }).catch(() => []))
     );
     for (const rows of batches) all.push(...rows);
   }
@@ -3190,6 +3210,8 @@ app.get('/api/contacts/export', async (req, res) => {
 app.post('/api/cache/clear', auth.requireRole('admin', 'editor'), async (req, res) => {
   cache.flushAll();
   tokenCache = { token: null, expiresAt: 0 };
+  // bust the shared SE event-list cache too, so Refresh All is a real refresh
+  await kvSet('se:eventlist', { at: 0, events: [] }).catch(() => {});
   res.json({ message: 'Cache cleared' });
 });
 
