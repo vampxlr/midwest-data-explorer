@@ -100,7 +100,7 @@ export default function Messenger() {
                     <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.channel === 'website' ? '🌐' : '📘'} {label(t)}</span>
                       {t.channel === 'website' && (
-                        <span title={pageBadge(t.page).full} style={{ fontSize: 9.5, fontWeight: 600, color: 'var(--text-3)', background: 'var(--bg-hover)', border: '1px solid var(--border-sub)', padding: '1px 7px', borderRadius: 999, flexShrink: 0, cursor: 'help' }}>
+                        <span title={pageBadge(t.page).full} style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--accent-light)', background: 'var(--chip-bg-soft)', border: '1px solid var(--chip-border)', padding: '1px 8px', borderRadius: 999, flexShrink: 0, cursor: 'help' }}>
                           {pageBadge(t.page).text}
                         </span>
                       )}

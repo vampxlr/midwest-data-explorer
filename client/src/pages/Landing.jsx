@@ -79,6 +79,16 @@ export default function Landing({ onSignIn, onSignup }) {
   const mockRef = useRef(null);
   const signup = onSignup || onSignIn;
 
+  // Theme toggle for logged-out visitors — same storage/attribute the app
+  // shell uses, so the choice carries through after sign-in.
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') || localStorage.getItem('theme') || 'dark');
+  const flipTheme = () => setTheme(t => {
+    const next = t === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+    return next;
+  });
+
   useEffect(() => {
     api.getSiteSettings().then(r => setS(r.data)).catch(() => setS({}));
     api.signupAvailability().then(r => setTrial(r.data)).catch(() => setTrial(null));
@@ -250,7 +260,13 @@ export default function Landing({ onSignIn, onSignup }) {
 
       <header className="lp-header">
         <div className="lp-logo"><span className="ball">🏀</span>{s.appName}</div>
-        <button className="btn-primary" onClick={onSignIn}>Sign in</button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button onClick={flipTheme} title="Switch theme" aria-label="Switch theme"
+            style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 999, padding: '6px 12px', cursor: 'pointer', color: 'var(--text-2)', fontSize: 15, lineHeight: 1 }}>
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+          <button className="btn-primary" onClick={onSignIn}>Sign in</button>
+        </div>
       </header>
 
       {/* Hero */}
