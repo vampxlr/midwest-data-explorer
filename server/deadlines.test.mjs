@@ -53,6 +53,13 @@ test('parsePage: extracts game dates and times (Brainerd-style wording)', () => 
   assert.match(p.eventTimes || '', /2:00 - 9:00PM/, `eventTimes: ${p.eventTimes}`);
 });
 
+test('parsePage: extracts venue location, stripping "Nth Annual" prefix', () => {
+  const html = `<html><body><p>Back to Leagues 10th Annual Brainerd High School 702 S 5th St. Brainerd, MN 56401</p>
+    <h1>2026 Brainerd 3 on 3 Basketball League</h1></body></html>`;
+  const p = parsePage(html);
+  assert.equal(p.eventLocation, 'Brainerd High School 702 S 5th St. Brainerd, MN 56401', `got: ${p.eventLocation}`);
+});
+
 test('parsePage: page without deadlines yields no dates', () => {
   const p = parsePage('<html><head><title>About us</title></head><body>We love hoops.</body></html>');
   assert.ok(!p.earlyBird && !p.finalDeadline);

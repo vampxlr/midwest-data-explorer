@@ -75,8 +75,13 @@ function parsePage(html) {
   const cleaned = text.replace(/\s+/g, ' ');
   const eventDates = (cleaned.match(/\bDates?:\s*([^:*]{4,90}?)(?=\s*(?:Approximate|Times?\b|Time\b|Schedule|Who:|Cost|EARLY|\*|$))/i) || [])[1]?.trim() || null;
   const eventTimes = (cleaned.match(/\b(?:Approximate\s+)?Times?:\s*([^*]{2,60}?)(?=\s*(?:Schedule|Who:|Cost|EARLY|Dates?:|\*|$))/i) || [])[1]?.trim() || null;
+  // Venue + street address, e.g. "Brainerd High School 702 S 5th St. Brainerd,
+  // MN 56401" — venue keyword through the 5-digit zip; leading ordinals
+  // ("10th Annual") stripped.
+  let eventLocation = (cleaned.match(/([A-Z][A-Za-z'.&\- ]{2,60}(?:High School|Middle School|Elementary|School|Activity Center|Community Center|Center|Centre|Gym|Gymnasium|Arena|Academy|College|University|Fieldhouse)[A-Za-z0-9'.,&\- ]{0,80}?\d{5})/) || [])[1] || null;
+  if (eventLocation) eventLocation = eventLocation.replace(/^(\d+(?:st|nd|rd|th)\s+)?Annual\s+/i, '').trim();
 
-  return { title, year: year || null, earlyBird, finalDeadline, earlyBirdPrice, finalPrice, eventDates, eventTimes };
+  return { title, year: year || null, earlyBird, finalDeadline, earlyBirdPrice, finalPrice, eventDates, eventTimes, eventLocation };
 }
 
 // Scraped page title → SE event (same year, best token overlap)
@@ -166,7 +171,7 @@ app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, r
         eventName: ev.name,
         earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
         earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
-        eventDates: r.eventDates || null, eventTimes: r.eventTimes || null,
+        eventDates: r.eventDates || null, eventTimes: r.eventTimes || null, eventLocation: r.eventLocation || null,
         source: r.path, scrapedAt: new Date().toISOString(),
       };
       matched++;
