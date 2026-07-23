@@ -84,6 +84,7 @@ async function assistantLiveContext() {
         const parts = [];
         if (d.earlyBird)     parts.push(`early-bird deadline ${d.earlyBird}${d.earlyBirdPrice ? ` ($${d.earlyBirdPrice})` : ''}${d.earlyBird < today ? ' (PASSED)' : ''}`);
         if (d.finalDeadline) parts.push(`final registration deadline ${d.finalDeadline}${d.finalPrice ? ` ($${d.finalPrice})` : ''}${closed ? ' (PASSED)' : ''}`);
+        if (d.eventDates)    parts.push(`game dates: ${d.eventDates}${d.eventTimes ? ` (times ${d.eventTimes})` : ''}`);
         if (parts.length) extra = ` — ${parts.join(', ')}`;
       }
       lines.push(`- ${e.name}: ${closed ? 'registration CLOSED (final deadline has passed — do NOT tell visitors this one is open; suggest a similar open league instead)' : 'OPEN for registration'}${extra}`);
@@ -260,7 +261,14 @@ function builtinAnswer(qRaw, s, open) {
     return `Happy to set that up! Just type your email here and we'll remind you before the ${which} deadline.`;
   }
   if (mentioned.length) {
-    return `Here's the latest on ${[...new Set(mentioned.map(x => faqShortName(x.name)))].join(' and ')}: ${mentioned.map(faqDlLine).join('. ')}. You can register at https://www.midwest3on3.com/leagues — want to leave your email for a reminder before the deadline?`;
+    // Schedule-type question but no scraped schedule data → let the LLM
+    // answer from the knowledge base (league pages include dates/times).
+    const wantsSchedule = has('date', 'dates', 'when', 'day', 'days', 'time', 'times', 'timing', 'schedule', 'start', 'starts', 'location', 'where', 'address', 'venue');
+    if (wantsSchedule && !mentioned.some(x => x.d.eventDates)) return null;
+    const schedLine = (x) => x.d.eventDates
+      ? ` ${faqShortName(x.name)} plays ${x.d.eventDates}${x.d.eventTimes ? `, roughly ${x.d.eventTimes}` : ''}.`
+      : '';
+    return `Here's the latest on ${[...new Set(mentioned.map(x => faqShortName(x.name)))].join(' and ')}: ${mentioned.map(faqDlLine).join('. ')}.${mentioned.map(schedLine).join('')} You can register at https://www.midwest3on3.com/leagues — want to leave your email for a reminder before the deadline?`;
   }
   const leagues = open.filter(x => /league/i.test(x.name));
   if (has('open', 'opening', 'openning', 'openings', 'available', 'active', 'current', 'ongoing') && has('league', 'leagues', 'register', 'registration', 'registrations', 'signup', 'event', 'events', 'spot', 'spots', 'team', 'teams')) {

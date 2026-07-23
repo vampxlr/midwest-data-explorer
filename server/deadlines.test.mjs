@@ -41,6 +41,18 @@ test('parsePage: extracts early-bird and final deadlines with prices (site wordi
   assert.equal(p.finalPrice, 300);
 });
 
+test('parsePage: extracts game dates and times (Brainerd-style wording)', () => {
+  const html = `<html><head><title>Brainerd League</title></head><body>
+    <h1>2026 Brainerd 3 on 3 Basketball League</h1>
+    <p>Dates: Sundays - August 9, 16, 23 &amp; 30</p>
+    <p>Approximate Times: 2:00 - 9:00PM</p>
+    <p>EARLY BIRD Registration ends at midnight on Thursday, July 16</p>
+    <p>Cost: $285/team</p></body></html>`;
+  const p = parsePage(html);
+  assert.match(p.eventDates || '', /Sundays - August 9, 16, 23/, `eventDates: ${p.eventDates}`);
+  assert.match(p.eventTimes || '', /2:00 - 9:00PM/, `eventTimes: ${p.eventTimes}`);
+});
+
 test('parsePage: page without deadlines yields no dates', () => {
   const p = parsePage('<html><head><title>About us</title></head><body>We love hoops.</body></html>');
   assert.ok(!p.earlyBird && !p.finalDeadline);

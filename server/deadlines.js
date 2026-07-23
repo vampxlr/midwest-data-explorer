@@ -70,7 +70,13 @@ function parsePage(html) {
       finalDeadline = date; finalPrice = price;
     }
   }
-  return { title, year: year || null, earlyBird, finalDeadline, earlyBirdPrice, finalPrice };
+  // Game schedule: pages state it as "Dates: Sundays - August 9, 16, 23 & 30"
+  // and "Approximate Times: 2:00 - 9:00PM" (wording varies slightly).
+  const cleaned = text.replace(/\s+/g, ' ');
+  const eventDates = (cleaned.match(/\bDates?:\s*([^:*]{4,90}?)(?=\s*(?:Approximate|Times?\b|Time\b|Schedule|Who:|Cost|EARLY|\*|$))/i) || [])[1]?.trim() || null;
+  const eventTimes = (cleaned.match(/\b(?:Approximate\s+)?Times?:\s*([^*]{2,60}?)(?=\s*(?:Schedule|Who:|Cost|EARLY|Dates?:|\*|$))/i) || [])[1]?.trim() || null;
+
+  return { title, year: year || null, earlyBird, finalDeadline, earlyBirdPrice, finalPrice, eventDates, eventTimes };
 }
 
 // Scraped page title → SE event (same year, best token overlap)
@@ -160,6 +166,7 @@ app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, r
         eventName: ev.name,
         earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
         earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
+        eventDates: r.eventDates || null, eventTimes: r.eventTimes || null,
         source: r.path, scrapedAt: new Date().toISOString(),
       };
       matched++;
