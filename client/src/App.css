@@ -52,10 +52,10 @@
 
 /* Light theme — warm white with orange + blue accents (Midwest brand colors) */
 [data-theme="light"] {
-  --bg-base:    #f5f7fb;
-  --bg-card:    #ffffff;
-  --bg-hover:   #eef4ff;
-  --bg-input:   #ffffff;
+  --bg-base:    #e7eaf0;
+  --bg-card:    #f6f7f9;
+  --bg-hover:   #e2e8f2;
+  --bg-input:   #fbfcfd;
   --border:     #d3dbe9;
   --border-sub: #dee5f0;
   --line:       #ccd6e6;
@@ -66,9 +66,9 @@
   --text-3:     #576784;
   --text-4:     #72819c;
   --text-5:     #9aa9c2;
-  --surface-1:  #edf2fa;
-  --surface-2:  #f4f7fc;
-  --surface-3:  #fdf3ec;
+  --surface-1:  #e6ebf3;
+  --surface-2:  #edf0f6;
+  --surface-3:  #f4ece3;
   --shadow-sm:  0 1px 2px rgba(30,58,95,0.05), 0 1px 5px rgba(30,58,95,0.05);
   --shadow-md:  0 2px 6px rgba(30,58,95,0.06), 0 8px 24px rgba(30,58,95,0.09);
   --shadow-lg:  0 4px 12px rgba(30,58,95,0.08), 0 16px 48px rgba(30,58,95,0.14);
