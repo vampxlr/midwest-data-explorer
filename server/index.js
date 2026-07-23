@@ -642,7 +642,7 @@ app.get('/api/boot/stream', async (req, res) => {
     log(`  ✓ Store loaded`, 'ok');
 
     // Step 3: Fetch all events, sort newest first. Closed events never change,
-    // so the full SE page-walk is cached (15 min) — boot serves the cached
+    // so the full SE page-walk is cached (24h — busted by Refresh All, cache-clear, aggregation completion, or ?fresh=1) — boot serves the cached
     // list instantly instead of re-asking SportsEngine for 700+ events it
     // already knows about. `?fresh=1` (or an expired cache) does a real fetch.
     log(`────────────────────────────────────────`, 'info');
@@ -650,7 +650,7 @@ app.get('/api/boot/stream', async (req, res) => {
 
     let allEvents = [];
     const listCache = req.query.fresh === '1' ? null : await kvGet('se:eventlist');
-    if (listCache && Date.now() - listCache.at < 15 * 60 * 1000 && listCache.events?.length) {
+    if (listCache && Date.now() - listCache.at < 24 * 3600 * 1000 && listCache.events?.length) {
       allEvents = listCache.events;
       log(`  ✓ ${allEvents.length} events from cache (${Math.round((Date.now() - listCache.at) / 60000)} min old) — zero SportsEngine calls`, 'ok');
       log(`  (use Refresh All on Data Mgmt for a live re-fetch)`, 'skip');
@@ -819,7 +819,7 @@ app.get('/api/registrations/recent', async (req, res) => {
     // Shared KV cache with boot: on Vercel the in-memory cache misses across
     // instances, so without this every instance re-walked SE's 8 pages.
     const kvCached = await kvGet('se:eventlist').catch(() => null);
-    if (kvCached && Date.now() - kvCached.at < 15 * 60 * 1000 && kvCached.events?.length && kvCached.events[0].monetary !== undefined) {
+    if (kvCached && Date.now() - kvCached.at < 24 * 3600 * 1000 && kvCached.events?.length && kvCached.events[0].monetary !== undefined) {
       const result = { total: kvCached.events.length, registrations: kvCached.events };
       cache.set(cacheKey, result, 600);
       return res.json(result);
