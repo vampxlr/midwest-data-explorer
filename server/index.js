@@ -58,6 +58,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/site-settings',   // landing page content (GET only — PUT re-runs auth below)
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
   '/api/messenger/webhook', // Meta verifies with hub.verify_token; replies keyed by page token
+  '/api/privacy', '/api/data-deletion', // required public pages for Meta App Review
   '/api/cron/minute',       // guarded by CRON_SECRET header check inside
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
@@ -588,6 +589,48 @@ function aggregateAnswers(results) {
     city:           toArr(cityMap).slice(0, 50),
     zip:            toArr(zipMap).slice(0, 100) };
 }
+
+// ── Public legal pages (required by Meta App Review) ─────────────────────────
+const legalPage = (title, body) => `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} — Midwest 3 on 3</title></head>
+<body style="font-family:Arial,Helvetica,sans-serif;max-width:720px;margin:0 auto;padding:32px 20px;line-height:1.7;color:#1f2937">
+<h1 style="color:#ea580c">${title}</h1>${body}
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:32px 0 16px"><p style="font-size:13px;color:#6b7280">Midwest 3 on 3 Basketball · <a href="https://www.midwest3on3.com">midwest3on3.com</a> · Contact: Christy@3on3HoopsHub.com · Last updated: July 2026</p></body></html>`;
+
+app.get('/api/privacy', (req, res) => {
+  res.type('html').send(legalPage('Privacy Policy', `
+<p>This policy covers the Midwest 3 on 3 Data Explorer application, including our automated
+assistant ("Courtney") available on midwest3on3.com and our Facebook Page via Messenger.</p>
+<h2>What we collect</h2>
+<ul>
+<li><b>Messages you send</b> to our assistant (website chat or Facebook Messenger), so it can answer your questions about our leagues, camps and tournaments.</li>
+<li><b>Contact details you choose to share</b> (email address or phone number), for example when requesting a registration-deadline reminder.</li>
+<li><b>Basic Messenger profile info</b> (name and page-scoped ID) provided by Meta when you message our Facebook Page.</li>
+<li><b>Registration information</b> submitted through our registration provider (SportsEngine) when you sign up for an event.</li>
+</ul>
+<h2>How we use it</h2>
+<ul>
+<li>Answering your questions with current league information (prices, deadlines, schedules).</li>
+<li>Sending registration links and deadline reminders you asked for, via email (Mailchimp).</li>
+<li>Measuring the effectiveness of our advertising (Meta Conversions API). Contact details used for measurement are hashed before transmission.</li>
+</ul>
+<h2>What we don't do</h2>
+<p>We do not sell your personal information. We do not send marketing texts without your consent. Conversations are used only to operate and improve the assistant.</p>
+<h2>Data retention & your rights</h2>
+<p>Conversation logs are retained on a rolling basis and periodically pruned. You may request a copy or deletion of your data at any time — see our <a href="/api/data-deletion">data deletion instructions</a>.</p>`));
+});
+
+app.get('/api/data-deletion', (req, res) => {
+  res.type('html').send(legalPage('Data Deletion Instructions', `
+<p>You can request deletion of any personal data our assistant ("Courtney") holds about you —
+conversation history, email address, or phone number.</p>
+<h2>How to request deletion</h2>
+<ol>
+<li>Email <b>Christy@3on3HoopsHub.com</b> with the subject line <b>"Data deletion request"</b>.</li>
+<li>Include the email address or phone number you shared with the assistant, and — if your request concerns Facebook Messenger — the name on your Facebook profile.</li>
+<li>We will delete the associated conversation logs, lead records and mailing-list entries within 30 days and confirm by reply.</li>
+</ol>
+<p>Unsubscribing from reminder emails is even quicker: every email we send includes an unsubscribe link.</p>`));
+});
 
 // ── Boot SSE — streams step-by-step startup info ──────────────────────────────
 // The client connects here during app load to see a live terminal instead of a spinner.
