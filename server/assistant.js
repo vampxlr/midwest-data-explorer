@@ -108,7 +108,7 @@ app.post('/api/admin/assistant/rebuild-kb', auth.requireRole('admin'), async (re
           if (!path.startsWith('/')) path = '/' + path;
           path = path.split(/[#?]/)[0].replace(/\/$/, '');
           if (!path) continue;
-          if (/league|tournament|camp|clinic|faq|about|contact|rules|philosoph|waiver|start-a-new/i.test(path)) subpages.add(path);
+          if (/league|tournament|camp|clinic|faq|about|contact|rules|philosoph|waiver|start-a-new|employment|concussion|testimonial/i.test(path)) subpages.add(path);
         }
       } catch {}
     }
