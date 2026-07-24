@@ -609,10 +609,16 @@ app.get('/api/admin/assistant/messenger', auth.requireRole('admin'), async (req,
       }));
       if (unknown.length) await kvSet('msgr:names', names).catch(() => {});
     }
+    // Real visitor vs internal test: website threads must originate from the
+    // public site (dev scripts/admin Test Chat send "/" or the vercel URL);
+    // Messenger threads must have a numeric PSID (simulations use fake ids).
+    const isTest = (t) => t.channel === 'website'
+      ? !/^https?:\/\/(www\.)?midwest3on3\.com/i.test(String(t.page || ''))
+      : !/^\d+$/.test(String(t.psid));
     const list = [
       ...Object.values(threads).map(t => ({ ...t, name: names[t.psid] || null })),
       ...Object.values(webThreads),
-    ].map(t => ({ ...t, messages: t.messages.sort((a, b) => a.at.localeCompare(b.at)) }))
+    ].map(t => ({ ...t, isTest: isTest(t), messages: t.messages.sort((a, b) => a.at.localeCompare(b.at)) }))
       .sort((a, b) => b.last.localeCompare(a.last));
     res.json({ threads: list });
   } catch (err) { res.status(500).json({ error: err.message }); }

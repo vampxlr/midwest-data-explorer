@@ -65,7 +65,8 @@ export default function Messenger() {
     } catch {}
     return { text, full: u || 'unknown page' };
   };
-  const visible = threads?.filter(t => channel === 'all' || t.channel === channel);
+  const [showTests, setShowTests] = useState(false);
+  const visible = threads?.filter(t => (channel === 'all' || t.channel === channel) && (showTests || !t.isTest));
   const active = threads?.find(t => t.psid === open);
   const label = (t) => t.name || (t.channel === 'website' ? `Visitor …${t.psid.slice(-4)}` : `Visitor …${t.psid.slice(-6)}`);
 
@@ -87,7 +88,13 @@ export default function Messenger() {
               </button>
             ))}
           </div>
-          <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} onClick={load}>↻ Refresh</button>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <label style={{ fontSize: 12, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showTests} onChange={e => setShowTests(e.target.checked)} />
+              show test chats ({threads?.filter(t => t.isTest).length ?? 0})
+            </label>
+            <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} onClick={load}>↻ Refresh</button>
+          </div>
         </div>
 
         {!threads ? <div className="no-data" style={{ padding: 16 }}>Loading…</div>
@@ -112,6 +119,7 @@ export default function Messenger() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }}>
                     <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.channel === 'website' ? '🌐' : '📘'} {label(t)}</span>
+                      {t.isTest && <span style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--text-3)', border: '1px dashed var(--text-4)', padding: '1px 7px', borderRadius: 999, flexShrink: 0 }}>🧪 test</span>}
                       {t.channel === 'website' && (
                         <span title={pageBadge(t.page).full} style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--accent-light)', background: 'var(--chip-bg-soft)', border: '1px solid var(--chip-border)', padding: '1px 8px', borderRadius: 999, flexShrink: 0, cursor: 'help' }}>
                           {pageBadge(t.page).text}
