@@ -11,8 +11,21 @@ export default function Messenger() {
   const [open, setOpen] = useState(null); // psid
   const [channel, setChannel] = useState('all'); // all | website | facebook
 
+  // Phone layout: list OR transcript, never side-by-side
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 720px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 720px)');
+    const onChange = (e) => setIsMobile(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   const load = () => api.getMessengerThreads()
-    .then(r => { setThreads(r.data.threads); if (r.data.threads.length && !open) setOpen(r.data.threads[0].psid); })
+    .then(r => {
+      setThreads(r.data.threads);
+      // desktop auto-opens the newest thread; mobile stays on the list
+      if (r.data.threads.length && !open && !window.matchMedia('(max-width: 720px)').matches) setOpen(r.data.threads[0].psid);
+    })
     .catch(() => setThreads([]));
   useEffect(() => { load(); }, []);
 
@@ -85,9 +98,9 @@ export default function Messenger() {
               (pages_messaging) to open Sarah to the public.
             </div>
           ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 0, border: '1px solid var(--border-sub)', borderRadius: 12, overflow: 'hidden', minHeight: 420 }}>
-            {/* thread list */}
-            <div style={{ borderRight: '1px solid var(--border-sub)', maxHeight: 560, overflowY: 'auto', background: 'var(--surface-1)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(220px, 280px) 1fr', gap: 0, border: '1px solid var(--border-sub)', borderRadius: 12, overflow: 'hidden', minHeight: isMobile ? 0 : 420 }}>
+            {/* thread list (hidden on mobile while a transcript is open) */}
+            <div style={{ display: isMobile && open ? 'none' : 'block', borderRight: isMobile ? 'none' : '1px solid var(--border-sub)', maxHeight: 560, overflowY: 'auto', background: 'var(--surface-1)' }}>
               {visible.map(t => (
                 <button key={t.psid} onClick={() => setOpen(t.psid)}
                   style={{
@@ -115,10 +128,16 @@ export default function Messenger() {
               ))}
             </div>
 
-            {/* active thread */}
-            <div style={{ minWidth: 0, maxHeight: 560, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 18px', background: 'var(--bg-hover)' }}>
+            {/* active thread (mobile: full-width with a back button) */}
+            <div style={{ display: isMobile && !open ? 'none' : 'flex', minWidth: 0, maxHeight: 560, overflowY: 'auto', flexDirection: 'column', gap: 10, padding: isMobile ? '12px 10px' : '16px 18px', background: 'var(--bg-hover)' }}>
               {!active ? <div className="no-data">Pick a thread</div> : (
                 <>
+                  {isMobile && (
+                    <button onClick={() => setOpen(null)} className="btn-secondary"
+                      style={{ width: 'auto', margin: 0, alignSelf: 'flex-start', padding: '5px 14px', fontSize: 13, position: 'sticky', top: 0, zIndex: 2 }}>
+                      ← All conversations
+                    </button>
+                  )}
                   <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-4)', marginBottom: 2 }}>
                     Conversation with <b style={{ color: 'var(--text-2)' }}>{label(active)}</b> {active.channel === 'website' ? 'on the website widget' : 'on Facebook Messenger'}
                   </div>
