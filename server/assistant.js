@@ -82,8 +82,8 @@ async function assistantLiveContext() {
       const closed = !!(d?.finalDeadline && d.finalDeadline < today);
       if (d) {
         const parts = [];
-        if (d.earlyBird)     parts.push(`early-bird deadline ${d.earlyBird}${d.earlyBirdPrice ? ` ($${d.earlyBirdPrice})` : ''}${d.earlyBird < today ? ' (PASSED)' : ''}`);
-        if (d.finalDeadline) parts.push(`final registration deadline ${d.finalDeadline}${d.finalPrice ? ` ($${d.finalPrice})` : ''}${closed ? ' (PASSED)' : ''}`);
+        if (d.earlyBird)     parts.push(`early-bird deadline ${humanDeadline(d.earlyBird)}${d.earlyBirdPrice ? ` ($${d.earlyBirdPrice})` : ''}${d.earlyBird < today ? ' (PASSED)' : ''}`);
+        if (d.finalDeadline) parts.push(`final registration deadline ${humanDeadline(d.finalDeadline)}${d.finalPrice ? ` ($${d.finalPrice})` : ''}${closed ? ' (PASSED)' : ''}`);
         if (d.eventDates)    parts.push(`game dates: ${d.eventDates}${d.eventTimes ? ` (times ${d.eventTimes})` : ''}`);
         if (d.eventLocation) parts.push(`location: ${d.eventLocation}`);
         if (parts.length) extra = ` — ${parts.join(', ')}`;
@@ -222,10 +222,25 @@ async function assistantOpenDeadlines() {
     .sort((a, b) => String(a.d.finalDeadline || '9999').localeCompare(String(b.d.finalDeadline || '9999')));
 }
 const faqShortName = (n) => String(n).replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim();
+// "2026-07-29" → "July 29 (in 5 days)" / "(tomorrow)" / "(today!)" /
+// "(12 days ago)". Year shown only when it isn't the current year. Both the
+// built-in answers AND the LLM's live context use this — the model mirrors
+// whatever date format it's fed, so this is what makes replies readable.
+function humanDeadline(iso) {
+  if (!iso) return '';
+  const today = store.todayCDT();
+  const days = Math.round((new Date(iso + 'T12:00:00Z') - new Date(today + 'T12:00:00Z')) / 86400000);
+  const name = new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', {
+    month: 'long', day: 'numeric', timeZone: 'UTC', ...(iso.slice(0, 4) === today.slice(0, 4) ? {} : { year: 'numeric' }),
+  });
+  const rel = days === 0 ? 'today!' : days === 1 ? 'tomorrow' : days === -1 ? 'yesterday'
+    : days > 1 && days <= 90 ? `in ${days} days` : days < -1 && days >= -90 ? `${-days} days ago` : '';
+  return rel ? `${name} (${rel})` : name;
+}
 const faqDlLine = (x) => {
   const p = [];
-  if (x.d.earlyBird) p.push(`early-bird deadline ${x.d.earlyBird}${x.d.earlyBirdPrice ? ` ($${x.d.earlyBirdPrice}/team)` : ''}`);
-  if (x.d.finalDeadline) p.push(`final registration deadline ${x.d.finalDeadline}${x.d.finalPrice ? ` ($${x.d.finalPrice}/team)` : ''}`);
+  if (x.d.earlyBird) p.push(`early-bird deadline ${humanDeadline(x.d.earlyBird)}${x.d.earlyBirdPrice ? ` ($${x.d.earlyBirdPrice}/team)` : ''}`);
+  if (x.d.finalDeadline) p.push(`final registration deadline ${humanDeadline(x.d.finalDeadline)}${x.d.finalPrice ? ` ($${x.d.finalPrice}/team)` : ''}`);
   return `${faqShortName(x.name)}: ${p.join(', ') || 'see the league page for deadlines'}`;
 };
 // Words too generic to identify a specific event by name (seasons, event types)
@@ -444,7 +459,7 @@ app.post('/api/assistant/chat', async (req, res) => {
 
 STYLE: Warm, concise, conversational — 1-4 short sentences per reply, like texting a helpful friend. Never invent facts. If you don't know, say so and point to the contact page. When a specific league/camp is discussed, include its page link from the knowledge base so they can register.
 
-FORMAT: Plain conversational text ONLY — never use markdown (no asterisks, no ** bold, no bullet lists, no [text](url) syntax). When sharing a link, write the bare URL like https://www.midwest3on3.com/leagues — the chat window makes bare URLs clickable automatically. Always finish your sentences completely.
+FORMAT: Plain conversational text ONLY — never use markdown (no asterisks, no ** bold, no bullet lists, no [text](url) syntax). When sharing a link, write the bare URL like https://www.midwest3on3.com/leagues — the chat window makes bare URLs clickable automatically. Always finish your sentences completely. Write dates the friendly way they appear in LIVE DATA — like "July 29 (in 5 days)" — never machine formats like 2026-07-29.
 
 GOALS, in order: (1) answer accurately from LIVE DATA and the KNOWLEDGE BASE below — LIVE DATA wins if they conflict (it's real-time); (2) guide interested visitors toward registering, mentioning early-bird pricing when a deadline is coming up; (3) if someone seems interested but not ready, naturally offer: "want to leave your email so we can send you the registration link / remind you before the deadline?" — never pushy, ask at most once.
 ${s.extraInstructions ? '\nOWNER INSTRUCTIONS: ' + s.extraInstructions + '\n' : ''}

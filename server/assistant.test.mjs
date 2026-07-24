@@ -49,10 +49,11 @@ test('builtin: email in message is acknowledged as a lead', () => {
   assert.match(r, /parent@example\.com/);
 });
 
-test('builtin: league mention answers with live deadlines', () => {
+test('builtin: league mention answers with live, human-readable deadlines', () => {
   const r = builtinAnswer('jordan league details?', S, OPEN);
   assert.match(r, /Jordan/);
-  assert.match(r, /2026-09-09/);
+  assert.match(r, /September 9/, `dates must be humanized, got: ${r}`);
+  assert.doesNotMatch(r, /2026-09-09/, 'no ISO dates in visitor-facing answers');
 });
 
 test('builtin: open-leagues intent lists open leagues (typo tolerated)', () => {
