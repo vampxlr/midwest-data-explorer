@@ -538,6 +538,9 @@ app.post('/api/assistant/chat', async (req, res) => {
       else {
         const bank = (await kvGetCached('assistant:faq'))?.items || [];
         let hit = matchFaq(bank, q);
+        // Follow-ups that refer back with a pronoun ("how much is IT?") are
+        // about the thing just discussed — only the LLM has that context.
+        if (hit && history.length > 1 && /\b(it|that|this|those|them|these)\b/i.test(q) && faqEventMention(q, open).length === 0) hit = null;
         // Link-seeking questions deserve an actionable answer: if the matched
         // FAQ entry has no URL/email/inbox pointer, let the LLM handle it
         // (it has the full doc/KB) instead of answering around the point.
