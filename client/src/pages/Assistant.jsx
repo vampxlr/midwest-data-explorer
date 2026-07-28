@@ -12,6 +12,7 @@ export default function Assistant() {
   const [apiKey, setApiKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
   const [mcKey, setMcKey] = useState('');
+  const [tsSecret, setTsSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [genFaq, setGenFaq] = useState(false);
@@ -36,6 +37,8 @@ export default function Assistant() {
         extraInstructions: cfg.extraInstructions, kbDocUrl: cfg.kbDocUrl || '', leadNotifyEmail: cfg.leadNotifyEmail || '',
         answerMode: cfg.answerMode || 'hybrid',
         mailchimpListId: cfg.mailchimpListId || '',
+        turnstileSiteKey: cfg.turnstileSiteKey || '',
+        ...(tsSecret.trim() ? { turnstileSecret: tsSecret.trim() } : {}),
         ...(mcKey.trim() ? { mailchimpKey: mcKey.trim() } : {}),
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(geminiKey.trim() ? { geminiKey: geminiKey.trim() } : {}),
@@ -150,6 +153,14 @@ export default function Assistant() {
           </Field>
           <Field label="Mailchimp Audience ID (Mailchimp → Audience → Settings)">
             <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} value={cfg.mailchimpListId || ''} onChange={e => upd({ mailchimpListId: e.target.value })} placeholder="e.g. a1b2c3d4e5" />
+          </Field>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+          <Field label={`Turnstile Site Key (optional human check — free at dash.cloudflare.com → Turnstile${cfg.hasTurnstile ? ' · ACTIVE ✓' : ''})`}>
+            <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} value={cfg.turnstileSiteKey || ''} onChange={e => upd({ turnstileSiteKey: e.target.value })} placeholder="0x4AAA…" />
+          </Field>
+          <Field label="Turnstile Secret Key (write-only)">
+            <input className="field-input" style={{ width: '100%', boxSizing: 'border-box' }} type="password" value={tsSecret} onChange={e => setTsSecret(e.target.value)} placeholder={cfg.hasTurnstile ? '••••••••  (unchanged)' : '0x4AAA…'} />
           </Field>
         </div>
         <div style={{ marginTop: 10 }}>

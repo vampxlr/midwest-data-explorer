@@ -51,6 +51,9 @@ async function assistantSettings() {
     messengerPageToken: s.messengerPageTokenEnc ? decryptSecret(s.messengerPageTokenEnc) : null,
     hasMessenger: !!s.messengerPageTokenEnc,
     messengerVerifyToken: s.messengerVerifyToken || 'mw3-sarah-2026',
+    turnstileSiteKey: s.turnstileSiteKey || '',
+    turnstileSecret: s.turnstileSecretEnc ? decryptSecret(s.turnstileSecretEnc) : null,
+    hasTurnstile: !!(s.turnstileSiteKey && s.turnstileSecretEnc),
     widgetKey: s.widgetKey || null,
   };
 }
@@ -162,6 +165,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
     extraInstructions: s.extraInstructions, accent: s.accent, kbDocUrl: s.kbDocUrl,
     leadNotifyEmail: s.leadNotifyEmail, emailConfigured: !!process.env.RESEND_API_KEY,
     hasMailchimp: s.hasMailchimp, mailchimpListId: s.mailchimpListId,
+    turnstileSiteKey: s.turnstileSiteKey, hasTurnstile: s.hasTurnstile,
     abuse: ((await kvGet('assistant:abuse')) || []).slice(0, 20),
     answerMode: s.answerMode,
     faq: await kvGet('assistant:faq').then(f => f ? { builtAt: f.builtAt, count: f.items.length } : null).catch(() => null),
@@ -172,13 +176,14 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
 app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const cur = (await kvGet('assistant:settings')) || {};
-  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail', 'mailchimpListId', 'answerMode']) {
+  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail', 'mailchimpListId', 'answerMode', 'turnstileSiteKey']) {
     if (b[k] !== undefined) cur[k] = String(b[k]);
   }
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
   if (b.geminiKey && !/^•+$/.test(b.geminiKey)) cur.geminiKeyEnc = encryptSecret(String(b.geminiKey).trim());
   if (b.mailchimpKey && !/^•+$/.test(b.mailchimpKey)) cur.mailchimpKeyEnc = encryptSecret(String(b.mailchimpKey).trim());
   if (b.messengerPageToken && !/^•+$/.test(b.messengerPageToken)) cur.messengerPageTokenEnc = encryptSecret(String(b.messengerPageToken).trim());
+  if (b.turnstileSecret && !/^•+$/.test(b.turnstileSecret)) cur.turnstileSecretEnc = encryptSecret(String(b.turnstileSecret).trim());
   if (!cur.widgetKey) cur.widgetKey = cryptoLib.randomBytes(12).toString('base64url');
   await kvSet('assistant:settings', cur);
   res.json({ ok: true });
@@ -386,6 +391,28 @@ app.post('/api/assistant/chat', async (req, res) => {
     const { key, sessionId, messages, page } = req.body || {};
     const cur = (await kvGet('assistant:settings')) || {};
     if (!cur.widgetKey || key !== cur.widgetKey) return res.status(401).json({ error: 'bad key' });
+
+    // Human check (Cloudflare Turnstile, checkbox mode) — enforced once per
+    // widget session when keys are configured. Exempt: Messenger (fb: —
+    // Meta's platform vouches for humans) and logged-in admins (Test Chat).
+    {
+      const sTs = await assistantSettings();
+      const isAdminCall = (() => { try { const t = (req.headers.authorization || '').split(' ')[1]; return !!(t && auth.verifyToken(t)); } catch { return false; } })();
+      if (sTs.turnstileSiteKey && sTs.turnstileSecret && !String(sessionId || '').startsWith('fb:') && !isAdminCall) {
+        const okKey = `ts:${String(sessionId || '').slice(0, 40)}`;
+        if (!(await kvGetCached(okKey, 3600000))) {
+          let human = false;
+          if (req.body.turnstileToken) {
+            const vr = await axios.post('https://challenges.cloudflare.com/turnstile/v0/siteverify',
+              new URLSearchParams({ secret: sTs.turnstileSecret, response: String(req.body.turnstileToken), remoteip: req.ip }),
+              { timeout: 8000 }).catch(() => null);
+            human = !!vr?.data?.success;
+          }
+          if (!human) return res.status(403).json({ captcha: true, reply: 'Quick human check first — please tick the box above, then send your message again. 🏀' });
+          await kvSet(okKey, { at: Date.now() });
+        }
+      }
+    }
 
     const ip = req.ip || 'x';
     const now = Date.now();
@@ -747,7 +774,7 @@ app.post('/api/messenger/webhook', async (req, res) => {
 // inline, no dependencies, safe on any page.
 app.get('/api/widget.js', async (req, res) => {
   const s = await assistantSettings();
-  const cfg = JSON.stringify({ name: s.name, greeting: s.greeting, accent: s.accent, key: String(req.query.key || '') });
+  const cfg = JSON.stringify({ name: s.name, greeting: s.greeting, accent: s.accent, key: String(req.query.key || ''), ts: s.hasTurnstile ? s.turnstileSiteKey : '' });
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Cache-Control', 'public, max-age=300');
   res.send(`(function(){
@@ -777,12 +804,23 @@ b.innerHTML=String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/(ht
 msgs.scrollTop=msgs.scrollHeight;return b}
 function save(){try{sessionStorage.setItem('mw3-chat',JSON.stringify(hist.slice(-20)))}catch(e){}}
 function render(){msgs.innerHTML='';add('assistant',CFG.greeting);hist.forEach(function(m){add(m.role,m.content)})}
-bubble.onclick=function(){open=!open;panel.style.display=open?'flex':'none';bubble.textContent=open?'✕':'🏀';if(open){render();input.focus()}};
-form.onsubmit=function(ev){ev.preventDefault();var q=input.value.trim();if(!q||busy)return;input.value='';
+var tsOK=!CFG.ts||sessionStorage.getItem('mw3-ts')==='1',tsToken=null,tsBox=null;
+function ensureTs(){if(tsOK||tsBox||!CFG.ts)return;
+tsBox=el('div','padding:8px;background:#fff;border-top:1px solid #e5e7eb;display:flex;flex-direction:column;align-items:center;gap:4px');
+panel.insertBefore(tsBox,form);
+var lbl=el('div','font-size:11px;color:#6b7280',tsBox);lbl.textContent='Quick human check to start chatting:';
+var slot=el('div','',tsBox);
+function renderTs(){window.turnstile&&window.turnstile.render(slot,{sitekey:CFG.ts,callback:function(t){tsToken=t}})}
+if(window.turnstile){renderTs()}else{var sc=document.createElement('script');sc.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';sc.async=true;sc.onload=renderTs;document.head.appendChild(sc)}}
+function tsPassed(){tsOK=true;tsToken=null;try{sessionStorage.setItem('mw3-ts','1')}catch(e){}if(tsBox){tsBox.remove();tsBox=null}}
+bubble.onclick=function(){open=!open;panel.style.display=open?'flex':'none';bubble.textContent=open?'✕':'🏀';if(open){render();ensureTs();input.focus()}};
+form.onsubmit=function(ev){ev.preventDefault();var q=input.value.trim();if(!q||busy)return;
+if(!tsOK&&!tsToken){add('assistant','One quick thing — please tick the human-check box above, then hit send again. 🏀');return}
+input.value='';
 hist.push({role:'user',content:q});add('user',q);save();busy=true;
 var t=add('assistant','…');var dots=setInterval(function(){t.textContent=t.textContent.length>=3?'.':t.textContent+'.'},350);
-fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:CFG.key,sessionId:sid,page:location.href,messages:hist.slice(-12)})})
-.then(function(r){return r.json()}).then(function(d){clearInterval(dots);t.remove();var a=d.reply||'Sorry, something went wrong — try again!';hist.push({role:'assistant',content:a});add('assistant',a);save()})
+fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:CFG.key,sessionId:sid,page:location.href,messages:hist.slice(-12),turnstileToken:tsToken||undefined})})
+.then(function(r){return r.json()}).then(function(d){clearInterval(dots);t.remove();if(d.captcha){hist.pop();var a2=d.reply||'Please complete the human check above.';add('assistant',a2);busy=false;return}if(!tsOK)tsPassed();var a=d.reply||'Sorry, something went wrong — try again!';hist.push({role:'assistant',content:a});add('assistant',a);save()})
 .catch(function(){clearInterval(dots);t.remove();add('assistant','Hmm, I could not connect — please try again in a moment.')})
 .finally(function(){busy=false;input.focus()})};
 })();`);
