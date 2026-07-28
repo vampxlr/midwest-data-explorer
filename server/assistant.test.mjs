@@ -62,6 +62,14 @@ test('builtin: open-leagues intent lists open leagues (typo tolerated)', () => {
   assert.match(r, /Jordan/);
 });
 
+test('builtin: portal login/link questions get the actionable email-steps answer', () => {
+  for (const q of ['how do i sign into the portal to see the schedule', "what's the link to the contact portal", 'How do i access the primary contact portal']) {
+    const r = builtinAnswer(q, S, OPEN);
+    assert.ok(r && /emailed to your team/.test(r), `q="${q}" → ${r?.slice(0, 60)}`);
+    assert.match(r, /Christy@3on3HoopsHub\.com/, 'includes the recovery email');
+  }
+});
+
 test('builtin: unknown question returns null (falls through to FAQ/LLM)', () => {
   assert.equal(builtinAnswer('do referees call carrying strictly?', S, OPEN), null);
 });

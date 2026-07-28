@@ -278,6 +278,12 @@ function builtinAnswer(qRaw, s, open) {
   if (email || phone) return `Perfect, got it! We'll follow up at ${email ? email[0] : phone[0]} with registration info and a reminder before the deadline. Anything else I can help with?`;
   if (/^(hi+|hey+|hello+|yo|sup|howdy|good (morning|afternoon|evening))\b/.test(q) && t.size <= 3) return s.greeting;
   if (/\bthank/.test(q)) return `You're welcome! Anything else about our leagues, tournaments or camps?`;
+  // Portal sign-in/link questions: there IS no public URL — credentials are
+  // emailed post-registration (per the owner's doc). Answer with the real
+  // steps instead of letting an adjacent FAQ entry answer around the point.
+  if (has('portal') && has('login', 'log', 'signin', 'sign', 'link', 'url', 'access', 'password', 'credentials', 'username', 'website')) {
+    return `There isn't a public login page — the Primary Contact Portal link and login credentials are emailed to your team's Primary Contact shortly after registration. Search that inbox for "Primary Contact Portal" (keep the email — the username and password can't be changed). If you can't find it or can't log in, email Christy@3on3HoopsHub.com with your team name and league location and we'll get you back in.`;
+  }
   const mentioned = faqEventMention(qRaw, open);
   if (/remind/.test(q)) {
     const which = mentioned.length ? faqShortName(mentioned[0].name) : 'registration';
@@ -517,7 +523,12 @@ app.post('/api/assistant/chat', async (req, res) => {
       if (builtin) { cachedReply = builtin; answerSrc = 'builtin'; }
       else {
         const bank = (await kvGetCached('assistant:faq'))?.items || [];
-        const hit = matchFaq(bank, q);
+        let hit = matchFaq(bank, q);
+        // Link-seeking questions deserve an actionable answer: if the matched
+        // FAQ entry has no URL/email/inbox pointer, let the LLM handle it
+        // (it has the full doc/KB) instead of answering around the point.
+        if (hit && /\b(link|url|login|log in|sign in|signin|website|where do i|how do i (access|get to|open))\b/i.test(q)
+          && !/(https?:\/\/|email|inbox|@)/i.test(hit.a)) hit = null;
         if (hit) { cachedReply = await renderFaqAnswer(hit.a, q); answerSrc = 'faq'; }
         else if (mode === 'faq') {
           cachedReply = `Great question — I don't have that one handy! You'll find everything at https://www.midwest3on3.com, or reach out through https://www.midwest3on3.com/contact-us and the team will get you an answer. Want to leave your email so someone follows up with you?`;
