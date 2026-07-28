@@ -63,6 +63,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
   '/api/assistant/chat',      // site chat widget (gated by per-org widget key)
+  '/api/assistant/contact',   // pre-chat contact card (same widget-key gate)
   '/api/widget.js',           // the embeddable chat widget script itself
   '/api/cron/daily',          // Vercel cron (gated by CRON_SECRET when set)
 ]);

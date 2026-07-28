@@ -38,6 +38,7 @@ export default function Assistant() {
         answerMode: cfg.answerMode || 'hybrid',
         mailchimpListId: cfg.mailchimpListId || '',
         turnstileSiteKey: cfg.turnstileSiteKey || '',
+        contactGate: cfg.contactGate || 'off',
         ...(tsSecret.trim() ? { turnstileSecret: tsSecret.trim() } : {}),
         ...(mcKey.trim() ? { mailchimpKey: mcKey.trim() } : {}),
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
@@ -131,6 +132,13 @@ export default function Assistant() {
               <option value="gemini-flash-lite-latest">Gemini Flash-Lite — best free-tier limits (15/min)</option>
               <option value="gemini-flash-latest">Gemini Flash (latest) — free tier ~20/day</option>
               <option value="gemini-2.5-flash">Gemini 2.5 Flash — older keys only</option>
+            </select>
+          </Field>
+          <Field label="Pre-chat contact form">
+            <select className="field-input" value={cfg.contactGate || 'off'} onChange={e => upd({ contactGate: e.target.value })}>
+              <option value="off">Off — capture contacts naturally mid-chat</option>
+              <option value="optional">Optional — ask name/email/phone, skippable</option>
+              <option value="required">Required — must fill before chatting</option>
             </select>
           </Field>
           <Field label="Answer mode">

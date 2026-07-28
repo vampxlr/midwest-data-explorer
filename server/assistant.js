@@ -51,6 +51,7 @@ async function assistantSettings() {
     messengerPageToken: s.messengerPageTokenEnc ? decryptSecret(s.messengerPageTokenEnc) : null,
     hasMessenger: !!s.messengerPageTokenEnc,
     messengerVerifyToken: s.messengerVerifyToken || 'mw3-sarah-2026',
+    contactGate: ['off', 'optional', 'required'].includes(s.contactGate) ? s.contactGate : 'off',
     turnstileSiteKey: s.turnstileSiteKey || '',
     turnstileSecret: s.turnstileSecretEnc ? decryptSecret(s.turnstileSecretEnc) : null,
     hasTurnstile: !!(s.turnstileSiteKey && s.turnstileSecretEnc),
@@ -166,6 +167,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
     leadNotifyEmail: s.leadNotifyEmail, emailConfigured: !!process.env.RESEND_API_KEY,
     hasMailchimp: s.hasMailchimp, mailchimpListId: s.mailchimpListId,
     turnstileSiteKey: s.turnstileSiteKey, hasTurnstile: s.hasTurnstile,
+    contactGate: s.contactGate,
     abuse: ((await kvGet('assistant:abuse')) || []).slice(0, 20),
     answerMode: s.answerMode,
     faq: await kvGet('assistant:faq').then(f => f ? { builtAt: f.builtAt, count: f.items.length } : null).catch(() => null),
@@ -176,7 +178,7 @@ app.get('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
 app.put('/api/admin/assistant', auth.requireRole('admin'), async (req, res) => {
   const b = req.body || {};
   const cur = (await kvGet('assistant:settings')) || {};
-  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail', 'mailchimpListId', 'answerMode', 'turnstileSiteKey']) {
+  for (const k of ['model', 'name', 'greeting', 'extraInstructions', 'accent', 'kbDocUrl', 'leadNotifyEmail', 'mailchimpListId', 'answerMode', 'turnstileSiteKey', 'contactGate']) {
     if (b[k] !== undefined) cur[k] = String(b[k]);
   }
   if (b.apiKey && !/^•+$/.test(b.apiKey)) cur.apiKeyEnc = encryptSecret(String(b.apiKey).trim());
@@ -351,6 +353,52 @@ ${kbText}`;
   } catch (err) { res.status(500).json({ error: err.response?.data?.error?.message || err.message }); }
 });
 
+// Pre-chat contact capture from the widget's intro card. Stores the lead
+// everywhere a mid-chat capture would go (leads inbox, Mailchimp tag, Meta
+// CAPI) plus a per-session record so Courtney knows the visitor's name and
+// the Conversations page can label the thread.
+app.post('/api/assistant/contact', async (req, res) => {
+  try {
+    const { key, sessionId, name, email, phone, page } = req.body || {};
+    const cur = (await kvGet('assistant:settings')) || {};
+    if (!cur.widgetKey || key !== cur.widgetKey) return res.status(401).json({ error: 'bad key' });
+    const em = String(email || '').trim().toLowerCase();
+    const ph = String(phone || '').trim();
+    const nm = String(name || '').trim().slice(0, 60);
+    if (!nm || (!EMAIL_RE.test(em) && !/\d{7}/.test(ph.replace(/\D/g, '')))) {
+      return res.status(400).json({ error: 'name and a valid email or phone required' });
+    }
+    const s = await assistantSettings();
+    const sid = String(sessionId || '').slice(0, 40);
+    await kvSet(`web:contact:${sid}`, { name: nm, email: em || null, phone: ph || null, at: new Date().toISOString() });
+    const namesMap = (await kvGet('web:names')) || {};
+    namesMap[sid] = nm;
+    const keys = Object.keys(namesMap);
+    if (keys.length > 500) for (const k of keys.slice(0, keys.length - 500)) delete namesMap[k];
+    await kvSet('web:names', namesMap);
+    await appendCapped('assistant:leads', {
+      at: new Date().toISOString(), email: em || null, phone: ph || null, name: nm,
+      page: String(page || '').slice(0, 200), context: 'pre-chat contact form',
+    }, 300).catch(() => {});
+    const trk = ((await kvGetCached('tracking:orgs')) || {})['midwest-3on3'];
+    const override = trk?.metaPixelId && trk?.capiTokenEnc ? { pixelId: trk.metaPixelId, token: decryptSecret(trk.capiTokenEnc) } : {};
+    await capiSend('Lead', { email: em || undefined, phone: ph || undefined, firstName: nm.split(' ')[0], ip: req.ip, ua: req.headers['user-agent'], sourceUrl: page, ...override }).catch(() => {});
+    if (em && s.mailchimpKey && s.mailchimpListId) {
+      await (async () => {
+        const dc = (s.mailchimpKey.match(/-(\w+)$/) || [])[1];
+        if (!dc) return;
+        const hash = cryptoLib.createHash('md5').update(em).digest('hex');
+        const mcAuth = { auth: { username: 'any', password: s.mailchimpKey }, timeout: 15000 };
+        await axios.put(`https://${dc}.api.mailchimp.com/3.0/lists/${s.mailchimpListId}/members/${hash}`,
+          { email_address: em, status_if_new: 'subscribed', merge_fields: { FNAME: nm.split(' ')[0], LNAME: nm.split(' ').slice(1).join(' ') } }, mcAuth);
+        await axios.post(`https://${dc}.api.mailchimp.com/3.0/lists/${s.mailchimpListId}/members/${hash}/tags`,
+          { tags: [{ name: 'Sarah Lead', status: 'active' }] }, mcAuth);
+      })().catch(e => console.warn('[assistant] pre-chat mailchimp failed:', e.response?.data?.detail || e.message));
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // Public chat endpoint the widget calls. Stateless per call — the widget
 // sends its own trimmed history. Keyed + rate limited per IP.
 const chatRate = new Map();
@@ -489,7 +537,7 @@ STYLE: Warm, concise, conversational — 1-4 short sentences per reply, like tex
 FORMAT: Plain conversational text ONLY — never use markdown (no asterisks, no ** bold, no bullet lists, no [text](url) syntax). When sharing a link, write the bare URL like https://www.midwest3on3.com/leagues — the chat window makes bare URLs clickable automatically. Always finish your sentences completely. Write dates the friendly way they appear in LIVE DATA — like "July 29 (in 5 days)" — never machine formats like 2026-07-29.
 
 GOALS, in order: (1) answer accurately from LIVE DATA and the KNOWLEDGE BASE below — LIVE DATA wins if they conflict (it's real-time); (2) guide interested visitors toward registering, mentioning early-bird pricing when a deadline is coming up; (3) if someone seems interested but not ready, naturally offer: "want to leave your email so we can send you the registration link / remind you before the deadline?" — never pushy, ask at most once.
-${s.extraInstructions ? '\nOWNER INSTRUCTIONS: ' + s.extraInstructions + '\n' : ''}
+${s.extraInstructions ? '\nOWNER INSTRUCTIONS: ' + s.extraInstructions + '\n' : ''}${await kvGetCached(`web:contact:${String(sessionId || '').slice(0, 40)}`, 600000).then(c => c ? `\nVISITOR: ${c.name}${c.email ? `, email ${c.email}` : ''}${c.phone ? `, phone ${c.phone}` : ''} (already provided contact info — never ask for it again; use their first name naturally).\n` : '').catch(() => '')}
 === LIVE DATA (real-time from our registration system) ===
 ${live}
 ${kb.doc ? `\n=== OFFICIAL KNOWLEDGE BASE DOCUMENT (written by the league owner — follow its policies, tone guidance and escalation rules; for dates/costs/deadlines LIVE DATA above still wins) ===\n${kb.doc.text}\n` : ''}
@@ -642,9 +690,10 @@ app.get('/api/admin/assistant/messenger', auth.requireRole('admin'), async (req,
     const isTest = (t) => t.channel === 'website'
       ? !/^https?:\/\/(www\.)?midwest3on3\.com/i.test(String(t.page || ''))
       : !/^\d+$/.test(String(t.psid));
+    const webNames = (await kvGet('web:names')) || {};
     const list = [
       ...Object.values(threads).map(t => ({ ...t, name: names[t.psid] || null })),
-      ...Object.values(webThreads),
+      ...Object.values(webThreads).map(t => ({ ...t, name: webNames[t.psid] || null })),
     ].map(t => ({ ...t, isTest: isTest(t), messages: t.messages.sort((a, b) => a.at.localeCompare(b.at)) }))
       .sort((a, b) => b.last.localeCompare(a.last));
     res.json({ threads: list });
@@ -774,7 +823,7 @@ app.post('/api/messenger/webhook', async (req, res) => {
 // inline, no dependencies, safe on any page.
 app.get('/api/widget.js', async (req, res) => {
   const s = await assistantSettings();
-  const cfg = JSON.stringify({ name: s.name, greeting: s.greeting, accent: s.accent, key: String(req.query.key || ''), ts: s.hasTurnstile ? s.turnstileSiteKey : '' });
+  const cfg = JSON.stringify({ name: s.name, greeting: s.greeting, accent: s.accent, key: String(req.query.key || ''), ts: s.hasTurnstile ? s.turnstileSiteKey : '', gate: s.contactGate });
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Cache-Control', 'public, max-age=300');
   res.send(`(function(){
@@ -813,8 +862,26 @@ var slot=el('div','',tsBox);
 function renderTs(){window.turnstile&&window.turnstile.render(slot,{sitekey:CFG.ts,callback:function(t){tsToken=t}})}
 if(window.turnstile){renderTs()}else{var sc=document.createElement('script');sc.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';sc.async=true;sc.onload=renderTs;document.head.appendChild(sc)}}
 function tsPassed(){tsOK=true;tsToken=null;try{sessionStorage.setItem('mw3-ts','1')}catch(e){}if(tsBox){tsBox.remove();tsBox=null}}
-bubble.onclick=function(){open=!open;panel.style.display=open?'flex':'none';bubble.textContent=open?'✕':'🏀';if(open){render();ensureTs();input.focus()}};
+var gateDone=CFG.gate==='off'||sessionStorage.getItem('mw3-ct')==='1',gateBox=null;
+function gatePass(saved){gateDone=true;try{sessionStorage.setItem('mw3-ct','1')}catch(e){}if(gateBox){gateBox.remove();gateBox=null}if(saved)add('assistant','Thanks! What would you like to know? 🏀');input.focus()}
+function ensureGate(){if(gateDone||gateBox)return;
+gateBox=el('div','margin:2px 0;padding:12px;background:#fff;border:1px solid #e5e7eb;border-radius:14px;display:flex;flex-direction:column;gap:7px',msgs);
+var ti=el('div','font-size:13px;font-weight:700;color:#111',gateBox);ti.textContent='So we can follow up if we get disconnected:';
+function inp(ph,type){var i=el('input','border:1px solid #d1d5db;border-radius:10px;padding:8px 12px;font-size:13px;outline:none',gateBox);i.placeholder=ph;i.type=type||'text';i.maxLength=80;return i}
+var gn=inp('Your name *'),ge=inp('Email','email'),gp=inp('Phone (optional)','tel');
+var gerr=el('div','font-size:11px;color:#dc2626;display:none',gateBox);
+var gb=el('button','border:none;background:'+CFG.accent+';color:#fff;border-radius:10px;padding:9px;font-size:13px;font-weight:700;cursor:pointer',gateBox);gb.type='button';gb.textContent='Start chatting';
+gb.onclick=function(){var n=gn.value.trim(),e2=ge.value.trim(),p2=gp.value.trim();
+if(!n||(!e2&&!p2)){gerr.textContent='Please add your name plus an email or phone.';gerr.style.display='block';return}
+gb.disabled=true;gb.textContent='…';
+fetch(API.replace('/chat','/contact'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:CFG.key,sessionId:sid,name:n,email:e2,phone:p2,page:location.href})})
+.then(function(r){return r.json()}).then(function(d){if(d.ok){gatePass(true)}else{gerr.textContent=(d.error||'Please check your details.');gerr.style.display='block';gb.disabled=false;gb.textContent='Start chatting'}})
+.catch(function(){gerr.textContent='Connection hiccup — try again.';gerr.style.display='block';gb.disabled=false;gb.textContent='Start chatting'})};
+if(CFG.gate==='optional'){var sk=el('div','font-size:11px;color:#6b7280;text-align:center;cursor:pointer;text-decoration:underline',gateBox);sk.textContent='skip for now';sk.onclick=function(){gatePass(false)}}
+msgs.scrollTop=msgs.scrollHeight}
+bubble.onclick=function(){open=!open;panel.style.display=open?'flex':'none';bubble.textContent=open?'✕':'🏀';if(open){gateBox=null;render();ensureGate();ensureTs();input.focus()}};
 form.onsubmit=function(ev){ev.preventDefault();var q=input.value.trim();if(!q||busy)return;
+if(!gateDone){if(CFG.gate==='required'){add('assistant','Please fill in the quick form above so we can chat. 🏀');return}gatePass(false)}
 if(!tsOK&&!tsToken){add('assistant','One quick thing — please tick the human-check box above, then hit send again. 🏀');return}
 input.value='';
 hist.push({role:'user',content:q});add('user',q);save();busy=true;
