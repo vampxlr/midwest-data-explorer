@@ -1432,12 +1432,21 @@ app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), asyn
   const isFirstCall = requestedPage == null;
 
   try {
-    const db = await store.load();
+    const isConvex = store.IS_CONVEX;
+    // The full store.load() costs ~150KB of Convex reads — this handler used
+    // to pay it on EVERY page call and every skipped event. Now: Convex mode
+    // does the skip-check with a one-document query and only loads the full
+    // store at final-page commit; local mode loads eagerly (free JSON file).
+    let db = null;
+    const loadDb = async () => db || (db = await store.load());
+
+    let storedEvent;
+    if (isConvex) storedEvent = await store.convexQuery('reports:eventBySeId', { seId: String(eventId) }).catch(() => null);
+    else { await loadDb(); storedEvent = db.events[String(eventId)]; }
 
     // Purge is disabled on Vercel — only allowed in local dev
-    if (isFirstCall && purgeFirst && process.env.VERCEL !== '1') store.purgeEvent(db, String(eventId));
+    if (isFirstCall && purgeFirst && process.env.VERCEL !== '1') { await loadDb(); store.purgeEvent(db, String(eventId)); }
 
-    const storedEvent     = db.events[String(eventId)];
     const storedCompleted = storedEvent?.resultsCompleted ?? null;
     const storedCount     = storedEvent?.resultCount     || 0;
 
@@ -1449,7 +1458,6 @@ app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), asyn
     }
 
     const PER_PAGE = 25;
-    const isConvex = store.IS_CONVEX;
     // In Convex mode the incremental page-offset optimization is UNSAFE: db.results is
     // always [] so we can't recompute an accurate storedCount, and an inflated/stale
     // count makes the fetch start beyond the real data and silently miss rows (this is
@@ -1491,8 +1499,16 @@ app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), asyn
     const allCompact = [...(prevCompact || []), ...thisPage];
 
     if (!hasMore) {
+      await loadDb();
+      // Delta-only commit on Convex: filter out rows already stored so the
+      // upsert payload is the NEW rows, not every row re-shipped for dedup.
+      let commitRows = allCompact;
+      if (isConvex && !backfill && !purgeFirst) {
+        const existing = new Set(await store.convexQuery('reports:resultSeIdsByEvent', { eventId: String(eventId) }).catch(() => []));
+        if (existing.size) commitRows = allCompact.filter(x => !existing.has(String(x.id)));
+      }
       // Final page — commit everything to blob (1 write per event, not per page)
-      const inMemAdded = store.upsertResults(db, String(eventId), evObj.name, allCompact, { merge: backfill });
+      const inMemAdded = store.upsertResults(db, String(eventId), evObj.name, commitRows, { merge: backfill });
 
       // In Convex mode we always fetch from page 1, so allCompact holds EVERY row for
       // this event — its length is the true row count and its completed subset is the
@@ -1513,6 +1529,14 @@ app.post('/api/aggregate/fetch-event', auth.requireRole('admin', 'editor'), asyn
       // over-counts (db.results is empty so every fetched row looks "new"); the real
       // insert count comes from batchUpsertResults' dedup on save.
       const added = isConvex ? (saveRes?.inserted ?? 0) : inMemAdded;
+
+      // Audit log: who ran it, which event, what changed (Data Mgmt visibility)
+      await appendCapped('log:smart-updates', {
+        at: new Date().toISOString(), user: req.user?.username || '?',
+        eventId: String(eventId), eventName: evObj.name,
+        added, fetched: allCompact.length,
+        mode: backfill ? 'backfill' : (purgeFirst ? 'purge+fetch' : 'update'),
+      }, 500).catch(() => {});
 
       return res.json({
         added, fetched: allCompact.length, skipped: false, backfilled: backfill,

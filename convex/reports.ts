@@ -116,6 +116,31 @@ export const resultsByEvent = query({
   },
 });
 
+// Single event metadata by SportsEngine id — the Smart Update skip-check
+// needs one event's counts, not the whole events table.
+export const eventBySeId = query({
+  args: { seId: v.string() },
+  handler: async (ctx, { seId }) => {
+    return await ctx.db
+      .query("events")
+      .withIndex("by_seId", (q) => q.eq("seId", seId))
+      .first();
+  },
+});
+
+// Just the stored seIds for one event — lets Smart Update commit only NEW
+// rows instead of re-shipping every row and relying on server-side dedup.
+export const resultSeIdsByEvent = query({
+  args: { eventId: v.string() },
+  handler: async (ctx, { eventId }) => {
+    const rows = await ctx.db
+      .query("results")
+      .withIndex("by_eventId", (q) => q.eq("eventId", eventId))
+      .collect();
+    return rows.map((r: any) => String(r.seId));
+  },
+});
+
 // Contact-projection variant: only the fields the audience/export/reminders
 // math uses. Cuts function egress + server transfer ~4x on bulk contact
 // operations (Convex still reads full docs internally — this trims the wire).
