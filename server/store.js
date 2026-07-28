@@ -38,7 +38,13 @@ async function convexCall(endpoint, fnPath, args) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
   });
   const text = await r.text();
-  meterUsage(fnPath, Buffer.byteLength(body), Buffer.byteLength(text));
+  // KV traffic is metered per key (session-suffixed keys collapsed) so a
+  // usage spike names the exact blob responsible, not just "prefs".
+  let label = fnPath;
+  if (fnPath.startsWith('prefs:') && args && args.key) {
+    label = `${fnPath}[${String(args.key).replace(/(ts|msgr:sess|web:contact):.+/, '$1:*')}]`;
+  }
+  meterUsage(label, Buffer.byteLength(body), Buffer.byteLength(text));
   let data;
   try { data = JSON.parse(text); } catch { throw new Error(`Convex ${endpoint} ${fnPath} failed: unparseable response`); }
   if (!r.ok) throw new Error(`Convex ${endpoint} ${fnPath} failed: ${JSON.stringify(data)}`);
