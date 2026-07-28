@@ -722,6 +722,7 @@ app.get('/api/boot/stream', async (req, res) => {
         if (pg < totalPages) await new Promise(r => setTimeout(r, 200));
       }
       await kvSet('se:eventlist', { at: Date.now(), events: allEvents }).catch(() => {});
+      await syncEventMetaFromSeList(allEvents);
     }
 
     // Sort newest first (by close date, fallback to open)
@@ -853,6 +854,30 @@ app.get('/api/registrations', async (req, res) => {
 
 // ── All registrations — all pages, sorted newest-first ────────────────────────
 
+// Keep the store's event metadata in sync with SportsEngine's list. New
+// leagues used to be invisible to Courtney/deadline-matching until someone
+// ran an aggregation — now any fresh SE list fetch upserts new events and
+// status/date changes (results are still only fetched by aggregation).
+async function syncEventMetaFromSeList(allRegs) {
+  try {
+    const db = await store.load();
+    let added = 0, updated = 0;
+    for (const e of allRegs || []) {
+      const cur = db.events[String(e.id)];
+      if (!cur) { store.upsertEventMeta(db, e); added++; }
+      else if (cur.status !== e.status || cur.close !== e.close || cur.open !== e.open || cur.name !== e.name) {
+        store.upsertEventMeta(db, e, { fetchedAt: cur.fetchedAt, resultCount: cur.resultCount });
+        updated++;
+      }
+    }
+    if (added || updated) {
+      await store.save(db);
+      console.log(`[se-sync] event metadata: ${added} added, ${updated} updated`);
+    }
+    return { added, updated };
+  } catch (e) { console.warn('[se-sync] failed:', e.message); return { error: e.message }; }
+}
+
 app.get('/api/registrations/recent', async (req, res) => {
   const { orgId } = req.query;
   if (!orgId) return res.status(400).json({ error: 'orgId required' });
@@ -890,6 +915,7 @@ app.get('/api/registrations/recent', async (req, res) => {
     const result = { total: allRegs.length, registrations: allRegs };
     cache.set(cacheKey, result, 600);
     await kvSet('se:eventlist', { at: Date.now(), events: allRegs }).catch(() => {});
+    await syncEventMetaFromSeList(allRegs);
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message, detail: err.response?.data });
