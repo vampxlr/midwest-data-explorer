@@ -70,6 +70,20 @@ test('builtin: portal login/link questions get the actionable email-steps answer
   }
 });
 
+test('builtin: generic cost/open intents do NOT fire mid-conversation', () => {
+  // real transcript bug: "how much is it?" about Alexandria got a generic dump
+  assert.equal(builtinAnswer('how much is it?', S, OPEN, { isFollowUp: true }), null);
+  assert.equal(builtinAnswer('which leagues are open?', S, OPEN, { isFollowUp: true }), null);
+  // but context-free rules still work mid-conversation
+  assert.match(builtinAnswer('jordan league details?', S, OPEN, { isFollowUp: true }) || '', /Jordan/);
+  assert.match(builtinAnswer('my email is p@example.com', S, OPEN, { isFollowUp: true }) || '', /p@example\.com/);
+});
+
+test('builtin: "much" alone in a long sentence does not trigger the cost dump', () => {
+  assert.equal(builtinAnswer('I want to stress test how much u can respond and how fast', S, OPEN), null);
+  assert.match(builtinAnswer('how much?', S, OPEN) || '', /prices and deadlines/);
+});
+
 test('builtin: unknown question returns null (falls through to FAQ/LLM)', () => {
   assert.equal(builtinAnswer('do referees call carrying strictly?', S, OPEN), null);
 });

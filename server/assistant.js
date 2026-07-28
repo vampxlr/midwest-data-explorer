@@ -269,7 +269,7 @@ async function renderFaqAnswer(answer, questionText) {
 // Rule-based answers that need no LLM and no FAQ bank: greetings, contact
 // capture, specific-league lookups, open/cost/reminder intents. All dynamic
 // values come from live registration data.
-function builtinAnswer(qRaw, s, open) {
+function builtinAnswer(qRaw, s, open, opts = {}) {
   const q = normQuestion(qRaw);
   const t = new Set(q.split(' ').filter(Boolean));
   const has = (...ws) => ws.some(w => t.has(w));
@@ -294,19 +294,33 @@ function builtinAnswer(qRaw, s, open) {
     // answer from the knowledge base (league pages include dates/times).
     const wantsSchedule = has('date', 'dates', 'when', 'day', 'days', 'time', 'times', 'timing', 'schedule', 'start', 'starts', 'location', 'where', 'address', 'venue');
     if (wantsSchedule && !mentioned.some(x => x.d.eventDates)) return null;
-    const schedLine = (x) => x.d.eventDates
-      ? ` ${faqShortName(x.name)} plays ${x.d.eventDates}${x.d.eventTimes ? `, roughly ${x.d.eventTimes}` : ''}${x.d.eventLocation ? `, at ${x.d.eventLocation}` : ''}.`
-      : '';
-    return `Here's the latest on ${[...new Set(mentioned.map(x => faqShortName(x.name)))].join(' and ')}: ${mentioned.map(faqDlLine).join('. ')}.${mentioned.map(schedLine).join('')} You can register at https://www.midwest3on3.com/leagues — want to leave your email for a reminder before the deadline?`;
+    // One tidy block per league — scannable lines beat a wall of text
+    const block = (x) => {
+      const L = [`${faqShortName(x.name)}:`];
+      if (x.d.earlyBird) L.push(`• Early-bird: ${humanDeadline(x.d.earlyBird)}${x.d.earlyBirdPrice ? ` — $${x.d.earlyBirdPrice}/team` : ''}`);
+      if (x.d.finalDeadline) L.push(`• Final deadline: ${humanDeadline(x.d.finalDeadline)}${x.d.finalPrice ? ` — $${x.d.finalPrice}/team` : ''}`);
+      if (x.d.eventDates) L.push(`• Game dates: ${x.d.eventDates}${x.d.eventTimes ? `, ${x.d.eventTimes}` : ''}`);
+      if (x.d.eventLocation) L.push(`• Where: ${x.d.eventLocation}`);
+      if (L.length === 1) L.push('• See the league page for dates and pricing');
+      return L.join('\n');
+    };
+    return `Here's the latest:\n\n${mentioned.map(block).join('\n\n')}\n\nRegister at https://www.midwest3on3.com/leagues — want to leave your email for a reminder before the deadline?`;
   }
+  // Generic open-leagues/cost intents only fire on an OPENING message.
+  // Mid-conversation, "how much is it?" refers to whatever was just being
+  // discussed — that context lives with the LLM, not here. (Real transcript:
+  // a visitor asking about Alexandria got a generic Brainerd price dump.)
+  if (opts.isFollowUp) return null;
   const leagues = open.filter(x => /league/i.test(x.name));
   if (has('open', 'opening', 'openning', 'openings', 'available', 'active', 'current', 'ongoing') && has('league', 'leagues', 'register', 'registration', 'registrations', 'signup', 'event', 'events', 'spot', 'spots', 'team', 'teams')) {
     const names = [...new Set(leagues.map(x => faqShortName(x.name)).filter(Boolean))];
-    return `Right now ${names.length} leagues are open for registration: ${names.join(', ')}. See dates, locations and divisions at https://www.midwest3on3.com/leagues`;
+    return `Right now ${names.length} leagues are open for registration:\n\n${names.join(' · ')}\n\nSee dates, locations and divisions at https://www.midwest3on3.com/leagues`;
   }
-  if (has('cost', 'costs', 'price', 'prices', 'pricing', 'fee', 'fees', 'much')) {
-    const lines = leagues.filter(x => x.d.finalDeadline).slice(0, 3).map(faqDlLine).join('. ');
-    return `Here are current prices and deadlines: ${lines || 'see each event page for pricing'}. Registering before the early-bird deadline saves you money! Full details at https://www.midwest3on3.com/leagues`;
+  // "much" alone is too loose ("how much can you respond") — require an
+  // explicit price word, or a tiny bare question like "how much?"
+  if (has('cost', 'costs', 'price', 'prices', 'pricing', 'fee', 'fees') || (has('much') && t.size <= 3)) {
+    const lines = leagues.filter(x => x.d.finalDeadline).slice(0, 3).map(x => `• ${faqDlLine(x)}`).join('\n');
+    return `Here are current prices and deadlines:\n\n${lines || 'See each event page for pricing.'}\n\nRegistering before the early-bird deadline saves you money! Full details at https://www.midwest3on3.com/leagues`;
   }
   return null;
 }
@@ -519,7 +533,7 @@ app.post('/api/assistant/chat', async (req, res) => {
     if (!cachedReply && mode !== 'llm') {
       const q = history[history.length - 1].content;
       const open = await assistantOpenDeadlines().catch(() => []);
-      const builtin = builtinAnswer(q, s, open);
+      const builtin = builtinAnswer(q, s, open, { isFollowUp: history.length > 1 });
       if (builtin) { cachedReply = builtin; answerSrc = 'builtin'; }
       else {
         const bank = (await kvGetCached('assistant:faq'))?.items || [];
@@ -529,6 +543,10 @@ app.post('/api/assistant/chat', async (req, res) => {
         // (it has the full doc/KB) instead of answering around the point.
         if (hit && /\b(link|url|login|log in|sign in|signin|website|where do i|how do i (access|get to|open))\b/i.test(q)
           && !/(https?:\/\/|email|inbox|@)/i.test(hit.a)) hit = null;
+        // Same idea for when/date questions: an answer with no date, day or
+        // number in it is answering around the point — let the LLM handle it.
+        if (hit && /\b(when|what (date|dates|day|days|time|times)|dates?\b)/i.test(q)
+          && !/(\d|january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|posted|schedule)/i.test(hit.a)) hit = null;
         if (hit) { cachedReply = await renderFaqAnswer(hit.a, q); answerSrc = 'faq'; }
         else if (mode === 'faq') {
           cachedReply = `Great question — I don't have that one handy! You'll find everything at https://www.midwest3on3.com, or reach out through https://www.midwest3on3.com/contact-us and the team will get you an answer. Want to leave your email so someone follows up with you?`;
@@ -545,7 +563,7 @@ app.post('/api/assistant/chat', async (req, res) => {
 
 STYLE: Warm, concise, conversational — 1-4 short sentences per reply, like texting a helpful friend. Never invent facts. If you don't know, say so and point to the contact page. When a specific league/camp is discussed, include its page link from the knowledge base so they can register.
 
-FORMAT: Plain conversational text ONLY — never use markdown (no asterisks, no ** bold, no bullet lists, no [text](url) syntax). When sharing a link, write the bare URL like https://www.midwest3on3.com/leagues — the chat window makes bare URLs clickable automatically. Always finish your sentences completely. Write dates the friendly way they appear in LIVE DATA — like "July 29 (in 5 days)" — never machine formats like 2026-07-29.
+FORMAT: Plain conversational text — never markdown (no asterisks, no ** bold, no [text](url) syntax). Keep paragraphs to 1-2 short sentences with a blank line between ideas. When listing 3+ facts (deadlines, prices, dates), put each on its own line starting with "• " — a scannable list beats a dense sentence. When sharing a link, write the bare URL like https://www.midwest3on3.com/leagues — the chat window makes bare URLs clickable automatically. Always finish your sentences completely. Write dates the friendly way they appear in LIVE DATA — like "July 29 (in 5 days)" — never machine formats like 2026-07-29.
 
 GOALS, in order: (1) answer accurately from LIVE DATA and the KNOWLEDGE BASE below — LIVE DATA wins if they conflict (it's real-time); (2) guide interested visitors toward registering, mentioning early-bird pricing when a deadline is coming up; (3) if someone seems interested but not ready, naturally offer: "want to leave your email so we can send you the registration link / remind you before the deadline?" — never pushy, ask at most once.
 
