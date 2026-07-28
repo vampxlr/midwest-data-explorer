@@ -92,7 +92,7 @@ async function assistantLiveContext() {
         if (d.eventLocation) parts.push(`location: ${d.eventLocation}`);
         if (parts.length) extra = ` — ${parts.join(', ')}`;
       }
-      lines.push(`- ${e.name}: ${closed ? 'registration CLOSED (final deadline has passed — do NOT tell visitors this one is open; suggest a similar open league instead)' : 'OPEN for registration'}${extra}`);
+      lines.push(`- ${e.name}: ${closed ? 'registration CLOSED (final deadline has passed — do NOT tell visitors this one is open; suggest a similar open league instead, AND mention they can email Christy@3on3HoopsHub.com or pat@midwest3on3.com to ask whether a late registration is still possible — leagues occasionally have room)' : 'OPEN for registration'}${extra}`);
     }
     return `Today's date: ${today}\nCurrently open for registration (${lines.length} events):\n${lines.join('\n')}`;
   } catch { return ''; }
@@ -537,6 +537,8 @@ STYLE: Warm, concise, conversational — 1-4 short sentences per reply, like tex
 FORMAT: Plain conversational text ONLY — never use markdown (no asterisks, no ** bold, no bullet lists, no [text](url) syntax). When sharing a link, write the bare URL like https://www.midwest3on3.com/leagues — the chat window makes bare URLs clickable automatically. Always finish your sentences completely. Write dates the friendly way they appear in LIVE DATA — like "July 29 (in 5 days)" — never machine formats like 2026-07-29.
 
 GOALS, in order: (1) answer accurately from LIVE DATA and the KNOWLEDGE BASE below — LIVE DATA wins if they conflict (it's real-time); (2) guide interested visitors toward registering, mentioning early-bird pricing when a deadline is coming up; (3) if someone seems interested but not ready, naturally offer: "want to leave your email so we can send you the registration link / remind you before the deadline?" — never pushy, ask at most once.
+
+LATE REGISTRATION: when someone wants to join a league whose deadline just passed, don't leave it at "closed" — also tell them it can't hurt to email Christy@3on3HoopsHub.com or pat@midwest3on3.com to ask if there's still room, since leagues occasionally accommodate late teams. Then offer the open alternatives.
 ${s.extraInstructions ? '\nOWNER INSTRUCTIONS: ' + s.extraInstructions + '\n' : ''}${await kvGetCached(`web:contact:${String(sessionId || '').slice(0, 40)}`, 600000).then(c => c ? `\nVISITOR: ${c.name}${c.email ? `, email ${c.email}` : ''}${c.phone ? `, phone ${c.phone}` : ''} (already provided contact info — never ask for it again; use their first name naturally).\n` : '').catch(() => '')}
 === LIVE DATA (real-time from our registration system) ===
 ${live}
