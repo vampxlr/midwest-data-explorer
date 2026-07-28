@@ -177,8 +177,23 @@ app.post('/api/admin/scrape-deadlines', auth.requireRole('admin'), async (req, r
       matched++;
     }
     await kvSet('deadlines:all', existing);
+    // "Announced" leagues: a page with CURRENT-year deadlines but no matching
+    // SportsEngine event yet (registration not created). The assistant tells
+    // visitors "opening soon" with the site's dates; stale prior-year pages
+    // (e.g. last season's River Falls page) are excluded on purpose.
+    const thisYear = store.todayCDT().slice(0, 4);
+    const announced = results
+      .filter(r => (r.earlyBird || r.finalDeadline) && matchScrapedEvents(r, events).length === 0
+        && String(r.year) >= thisYear)
+      .map(r => ({
+        title: r.title, path: r.path,
+        earlyBird: r.earlyBird, finalDeadline: r.finalDeadline,
+        earlyBirdPrice: r.earlyBirdPrice, finalPrice: r.finalPrice,
+        eventDates: r.eventDates || null, eventLocation: r.eventLocation || null,
+      }));
+    await kvSet('deadlines:announced', { at: new Date().toISOString(), items: announced });
     res.json({
-      pagesScanned: paths.length, matched,
+      pagesScanned: paths.length, matched, announced: announced.map(a => a.title || a.path),
       withDeadlines: results.filter(r => r.earlyBird || r.finalDeadline).length,
       unmatched: results.filter(r => (r.earlyBird || r.finalDeadline) && matchScrapedEvents(r, events).length === 0).map(r => r.title || r.path),
     });

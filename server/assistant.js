@@ -94,7 +94,14 @@ async function assistantLiveContext() {
       }
       lines.push(`- ${e.name}: ${closed ? 'registration CLOSED (final deadline has passed — do NOT tell visitors this one is open; suggest a similar open league instead, AND mention they can email Christy@3on3HoopsHub.com or pat@midwest3on3.com to ask whether a late registration is still possible — leagues occasionally have room)' : 'OPEN for registration'}${extra}`);
     }
-    return `Today's date: ${today}\nCurrently open for registration (${lines.length} events):\n${lines.join('\n')}`;
+    // Leagues announced on the site whose registration hasn't opened yet
+    const ann = (await kvGetCached('deadlines:announced'))?.items || [];
+    const annLines = ann.map(a => `- ${a.title || a.path}: registration NOT open yet (announced on the site) — ${[
+      a.earlyBird ? `early-bird will be ${humanDeadline(a.earlyBird)}${a.earlyBirdPrice ? ` ($${a.earlyBirdPrice})` : ''}` : '',
+      a.finalDeadline ? `final deadline ${humanDeadline(a.finalDeadline)}${a.finalPrice ? ` ($${a.finalPrice})` : ''}` : '',
+      a.eventDates ? `game dates ${a.eventDates}` : '',
+    ].filter(Boolean).join(', ')} — tell visitors to watch https://www.midwest3on3.com${a.path} or leave their email for a heads-up`);
+    return `Today's date: ${today}\nCurrently open for registration (${lines.length} events):\n${lines.join('\n')}${annLines.length ? `\n\nAnnounced but registration not open yet:\n${annLines.join('\n')}` : ''}`;
   } catch { return ''; }
 }
 
