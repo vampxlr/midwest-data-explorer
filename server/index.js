@@ -866,7 +866,10 @@ async function syncEventMetaFromSeList(allRegs) {
       const cur = db.events[String(e.id)];
       if (!cur) { store.upsertEventMeta(db, e); added++; }
       else if (cur.status !== e.status || cur.close !== e.close || cur.open !== e.open || cur.name !== e.name) {
-        store.upsertEventMeta(db, e, { fetchedAt: cur.fetchedAt, resultCount: cur.resultCount });
+        // preserve EVERYTHING aggregation has learned — upsertEventMeta
+        // replaces the record; losing resultsCompleted made Smart Update
+        // think ~100 events needed refetching
+        store.upsertEventMeta(db, e, { fetchedAt: cur.fetchedAt, resultCount: cur.resultCount, resultsCompleted: cur.resultsCompleted });
         updated++;
       }
     }
