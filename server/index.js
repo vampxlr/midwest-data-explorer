@@ -58,7 +58,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/site-settings',   // landing page content (GET only — PUT re-runs auth below)
   '/api/billing/webhook', // Stripe signs its own requests; no app JWT
   '/api/messenger/webhook', // Meta verifies with hub.verify_token; replies keyed by page token
-  '/api/privacy', '/api/data-deletion', // required public pages for Meta App Review
+  '/api/privacy', '/api/data-deletion', '/api/terms', // required public pages for Meta App Review
   '/api/cron/minute',       // guarded by CRON_SECRET header check inside
   '/api/signup',            // public self-serve registration
   '/api/signup/availability', // landing page checks whether trial slots remain
@@ -631,6 +631,27 @@ conversation history, email address, or phone number.</p>
 <li>We will delete the associated conversation logs, lead records and mailing-list entries within 30 days and confirm by reply.</li>
 </ol>
 <p>Unsubscribing from reminder emails is even quicker: every email we send includes an unsubscribe link.</p>`));
+});
+
+app.get('/api/terms', (req, res) => {
+  res.type('html').send(legalPage('Terms of Service', `
+<p>These terms cover the use of our automated assistant ("Courtney") on
+midwest3on3.com and our Facebook Page via Messenger, and the related tools we
+operate for Midwest 3 on 3 Basketball.</p>
+<h2>The assistant</h2>
+<ul>
+<li>Courtney provides information about our leagues, camps and tournaments — prices, deadlines, schedules and policies — drawn from our registration system and website.</li>
+<li>We work hard to keep answers accurate, but the assistant is informational: official registration terms, pricing and policies are those published on <a href="https://www.midwest3on3.com">midwest3on3.com</a> and in your registration confirmation. If an answer ever conflicts with those, the published terms control.</li>
+<li>Please use the assistant respectfully. We may limit or block automated, abusive or excessive use.</li>
+</ul>
+<h2>Registrations & payments</h2>
+<p>League registration and payment happen through our registration provider (SportsEngine), subject to the policies shown at registration — including our refund policy, which is available on our site and from our staff at Christy@3on3HoopsHub.com.</p>
+<h2>Communications</h2>
+<p>If you share your email or phone number with the assistant, we use it as described in our <a href="/api/privacy">Privacy Policy</a> — registration links, deadline reminders you asked for, and league updates. Every email includes an unsubscribe link, and you can request deletion of your data at any time (see our <a href="/api/data-deletion">data deletion instructions</a>).</p>
+<h2>Liability</h2>
+<p>The assistant and related tools are provided "as is." To the extent permitted by law, Midwest 3 on 3 Basketball is not liable for indirect damages arising from use of the assistant; our aggregate liability is limited to the amount you paid for the applicable registration.</p>
+<h2>Changes & contact</h2>
+<p>We may update these terms as our services evolve; the latest version is always at this address. Questions? Email <b>Christy@3on3HoopsHub.com</b>.</p>`));
 });
 
 // ── Boot SSE — streams step-by-step startup info ──────────────────────────────
