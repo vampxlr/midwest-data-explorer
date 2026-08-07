@@ -89,8 +89,9 @@ async function lapsedContactsFor(ev, past, db) {
   return [...out.values()];
 }
 
-function renderReminderTemplate(tpl, ev, d) {
-  const url = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
+function renderReminderTemplate(tpl, ev, d, utmTplId) {
+  const rawUrl = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
+  const url = utmTplId ? utmTag(rawUrl, utmTplId, ev.name) : rawUrl;
   const fmt = (iso) => iso ? new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'soon';
   const fill = (s) => String(s)
     .replaceAll('{{TARGET_LEAGUE}}', ev.name)
@@ -161,9 +162,19 @@ const REMINDER_DESIGNS = {
 </div>`,
   },
 };
+// GA4 attribution: every reminder link carries UTM tags so Google
+// Analytics shows exactly how many sessions each league's reminder drove
+// (source=reminders, campaign=<template>-<league-slug>).
+function utmTag(url, tplId, evName) {
+  const slug = String(evName || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  const sep = url.includes('?') ? '&' : '?';
+  return url + sep + 'utm_source=reminders&utm_medium=email&utm_campaign=' + encodeURIComponent((tplId || 'reminder') + '-' + slug);
+}
+
 function buildReminderHtml(tpl, ev, d) {
-  const { subject, body } = renderReminderTemplate(tpl, ev, d);
-  const url = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
+  const { subject, body } = renderReminderTemplate(tpl, ev, d, tpl.id);
+  const rawUrl = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
+  const url = utmTag(rawUrl, tpl.id, ev.name);
   const design = REMINDER_DESIGNS[tpl.design] || REMINDER_DESIGNS.classic;
   const html = design.render({ bodyHtml: body.replace(/\n/g, '<br>'), title: ev.name.replace(/^20\d\d\s*/, ''), url, unsub: '*|UNSUB|*' });
   return { subject, html };
