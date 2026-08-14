@@ -66,6 +66,8 @@ const PUBLIC_API_PATHS = new Set([
   '/api/assistant/contact',   // pre-chat contact card (same widget-key gate)
   '/api/widget.js',           // the embeddable chat widget script itself
   '/api/cron/daily',          // Vercel cron (gated by CRON_SECRET when set)
+  '/api/r',                   // reminder click tracker → logs, then 302s to an
+                              // allowlisted destination (see reminders.js)
 ]);
 app.use((req, res, next) => {
   // /api/webhooks/* is public by prefix — SE signs nothing (we gate with a key

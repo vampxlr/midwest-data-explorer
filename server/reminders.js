@@ -13,7 +13,7 @@ const axios = require('axios');
 const cryptoLib = require('crypto');
 const auth = require('./auth');
 const store = require('./store');
-const { kvGet, kvSet, appendCapped } = require('./kv');
+const { kvGet, kvSet, appendCapped, chatLog, chatLogRecent } = require('./kv');
 
 module.exports = function registerReminders(app, deps) {
   const { assistantSettings, loadContactResults, scrapeTokens, EMAIL_RE } = deps;
@@ -268,11 +268,26 @@ function utmTag(url, tplId, evName) {
   return url + sep + 'utm_source=reminders&utm_medium=email&utm_campaign=' + encodeURIComponent((tplId || 'reminder') + '-' + slug);
 }
 
+/**
+ * Wrap a destination in the click tracker.
+ *
+ * `*|EMAIL|*` and `*|CAMPAIGN_UID|*` are Mailchimp merge tags: Mailchimp
+ * substitutes each recipient's own address at send time, so the click that
+ * arrives back identifies the family. They are intentionally NOT
+ * url-encoded — Mailchimp only substitutes tags it can still recognise.
+ * A test/preview render (no Mailchimp) just logs a null email.
+ */
+function trackedUrl(dest, { c, ev, t }) {
+  const base = (process.env.PUBLIC_BASE_URL || 'https://midwest-data-explorer.vercel.app').replace(/\/$/, '');
+  const q = new URLSearchParams({ u: dest, ev: String(ev || ''), t: String(t || '') });
+  return `${base}/api/r?${q.toString()}&e=*|EMAIL|*&c=${c}`;
+}
+
 function buildReminderHtml(tpl, ev, d) {
   const design = REMINDER_DESIGNS[tpl.design] || REMINDER_DESIGNS.court;
   const { subject, body, preheader: rawPre, detailRows } = renderReminderTemplate(tpl, ev, d, tpl.id, { ownsDetails: !!design.ownsDetails });
   const rawUrl = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
-  const url = utmTag(rawUrl, tpl.id, ev.name);
+  const url = trackedUrl(utmTag(rawUrl, tpl.id, ev.name), { c: '*|CAMPAIGN_UID|*', ev: ev.id, t: tpl.id });
   const shortDate = (iso) => iso ? new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
   // Preheader = the grey line inboxes show next to the subject. Left empty it
   // leaks the first words of the body, so set it deliberately.
@@ -435,6 +450,96 @@ app.post('/api/admin/reminders/preview', auth.requireRole('admin'), async (req, 
       subject: subject.replaceAll('*|FNAME|*', 'Jamie'),
       html: html.replaceAll('*|FNAME|*', 'Jamie').replaceAll('*|PASTLG|*', ev.name.replace(/\b20\d\d\b/, (y) => String(Number(y) - 1))).replaceAll('*|UNSUB|*', '#'),
       designs: Object.entries(REMINDER_DESIGNS).map(([id, dsn]) => ({ id, name: dsn.name })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Click tracking ───────────────────────────────────────────────────────────
+// Mailchimp reports *how many* people clicked; it does not readily tell us
+// *who*. Every CTA is rewritten to point here with the recipient's address
+// carried in Mailchimp's *|EMAIL|* merge tag, so we record the identity, then
+// 302 on to the real page. That turns "412 clicks" into a named warm list we
+// can cross-reference against who actually registered.
+//
+// Destination is validated against an allowlist: an open redirector on our
+// own domain would be a gift to phishers, who would send "midwest…/api/r?u=
+// <malicious>" links that look like ours.
+const CLICK_ALLOWED_HOSTS = [
+  'midwest3on3.com', 'www.midwest3on3.com',
+  'sportsengine.com', 'www.sportsengine.com',
+  'midwest3on3.sportngin.com', 'sportngin.com',
+];
+function clickDestinationOk(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    const h = u.hostname.toLowerCase();
+    return CLICK_ALLOWED_HOSTS.some(a => h === a || h.endsWith('.' + a));
+  } catch { return false; }
+}
+
+app.get('/api/r', async (req, res) => {
+  const dest = String(req.query.u || '');
+  const fallback = 'https://www.midwest3on3.com/leagues';
+  const target = clickDestinationOk(dest) ? dest : fallback;
+  try {
+    // Serverless kills fire-and-forget work, so the log is awaited before the
+    // redirect goes out (DEVELOPERS.md §8).
+    const email = String(req.query.e || '').toLowerCase().trim();
+    await chatLog('reminder-click', {
+      at: new Date().toISOString(),
+      email: EMAIL_RE.test(email) ? email : null,
+      campaignId: String(req.query.c || '') || null,
+      eventId: String(req.query.ev || '') || null,
+      templateId: String(req.query.t || '') || null,
+      dest: target,
+      blocked: target !== dest && !!dest,     // someone tried an off-allowlist URL
+      ua: String(req.get('user-agent') || '').slice(0, 180),
+    });
+  } catch { /* never let logging break the parent's click-through */ }
+  res.redirect(302, target);
+});
+
+// Who clicked — joined against this year's registrants so the office can see
+// the warm-but-not-registered families, which is the actionable list.
+app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const rows = await chatLogRecent('reminder-click', 500);
+    const db = await store.load();
+    // Who is already registered for the event each click came from. Same
+    // helper the audience math uses, so "registered" means the same thing in
+    // both places.
+    const registeredFor = {};
+    for (const evId of [...new Set(rows.map(r => r.eventId).filter(Boolean))]) {
+      const regRows = (await loadContactResults(db, [String(evId)])).filter(r => String(r.eventId) === String(evId));
+      const set = new Set();
+      for (const r of regRows) {
+        for (const e of (r.emails?.length ? r.emails : (r.email ? [r.email] : []))) set.add(String(e).toLowerCase().trim());
+      }
+      registeredFor[evId] = set;
+    }
+    const byEmail = new Map();
+    for (const r of rows) {
+      if (!r.email) continue;
+      const k = r.email + '|' + (r.campaignId || '');
+      const prev = byEmail.get(k);
+      if (prev) { prev.clicks++; if (r.at > prev.lastAt) prev.lastAt = r.at; continue; }
+      byEmail.set(k, {
+        email: r.email, campaignId: r.campaignId, eventId: r.eventId,
+        templateId: r.templateId, firstAt: r.at, lastAt: r.at, clicks: 1,
+        registered: registeredFor[r.eventId]?.has(r.email) || false,
+      });
+    }
+    const clicks = [...byEmail.values()].sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+    res.json({
+      clicks,
+      totals: {
+        uniqueClickers: clicks.length,
+        totalClicks: rows.filter(r => r.email).length,
+        registeredAfterClick: clicks.filter(c => c.registered).length,
+        warmNotRegistered: clicks.filter(c => !c.registered).length,
+        blockedRedirects: rows.filter(r => r.blocked).length,
+      },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
