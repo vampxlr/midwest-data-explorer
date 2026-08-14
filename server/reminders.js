@@ -30,15 +30,15 @@ module.exports = function registerReminders(app, deps) {
 const REMINDER_DEFAULT_TEMPLATES = [
   {
     id: 'open-announcement', name: '📣 Registration is open', subject: '{{TARGET_LEAGUE}} is open for registration!',
-    body: `Hi {{FIRST_NAME}},\n\nGreat news — {{TARGET_LEAGUE}} is officially open for registration! You were part of {{PAST_LEAGUE}}, and we'd love to have your player back on the court this year.\n\nSame format families love: more touches, more involvement, more fun — no practices, just games.\n\nEarly-bird pricing{{EB_PRICE}} runs until {{EB_DATE}}, and final registration closes {{FR_DATE}}.\n\nRegister here: {{REGISTER_URL}}\n\nSee you on the court!\nMidwest 3 on 3 Basketball`,
+    body: `Hi {{FIRST_NAME}},\n\nGreat news — {{TARGET_LEAGUE}} is officially open for registration! You were part of {{PAST_LEAGUE}}, and we'd love to have your player back on the court this year.\n\nSame format families love: more touches, more involvement, more fun — no practices, just games.\n\nEarly-bird pricing{{EB_PRICE}} runs until {{EB_DATE}}, and final registration closes {{FR_DATE}}.\n\n{{EVENT_DETAILS}}\n\nSee you on the court!\nMidwest 3 on 3 Basketball`,
   },
   {
     id: 'early-bird-week', name: '⏰ Early-bird — 1 week left', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
-    body: `Hi {{FIRST_NAME}},\n\nJust a heads-up — early-bird pricing{{EB_PRICE}} for {{TARGET_LEAGUE}} ends {{EB_DATE}}, one week from now. After that the price goes up{{FR_PRICE}} until final registration closes {{FR_DATE}}.\n\nYour player was part of {{PAST_LEAGUE}} — grab your team's spot before the price changes: {{REGISTER_URL}}\n\nMidwest 3 on 3 Basketball`,
+    body: `Hi {{FIRST_NAME}},\n\nJust a heads-up — early-bird pricing{{EB_PRICE}} for {{TARGET_LEAGUE}} ends {{EB_DATE}}, one week from now. After that the price goes up{{FR_PRICE}} until final registration closes {{FR_DATE}}.\n\nYour player was part of {{PAST_LEAGUE}} — grab your team's spot before the price changes.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
   {
     id: 'deadline-2-days', name: '🚨 Deadline — 2 days left', subject: 'Last chance: {{TARGET_LEAGUE}} registration closes in 2 days',
-    body: `Hi {{FIRST_NAME}},\n\nThis is the final reminder — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, just 2 days away. After that we can't add teams.\n\nYou were with us for {{PAST_LEAGUE}} — don't miss this year: {{REGISTER_URL}}\n\nMidwest 3 on 3 Basketball`,
+    body: `Hi {{FIRST_NAME}},\n\nThis is the final reminder — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, just 2 days away. After that we can't add teams.\n\nYou were with us for {{PAST_LEAGUE}} — don't miss this year.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
 ];
 async function reminderTemplates() {
@@ -93,6 +93,13 @@ function renderReminderTemplate(tpl, ev, d, utmTplId) {
   const rawUrl = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
   const url = utmTplId ? utmTag(rawUrl, utmTplId, ev.name) : rawUrl;
   const fmt = (iso) => iso ? new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'soon';
+  // "When / Where" block, emitted only for the facts we actually scraped —
+  // a half-filled details block reads worse than none.
+  const times = /^[\d:apm\s.-]+$/i.test(String(d?.eventTimes || '')) ? d.eventTimes.trim() : '';
+  const details = [
+    d?.eventDates ? `When: ${d.eventDates}${times ? `, ${times}` : ''}` : '',
+    d?.eventLocation ? `Where: ${d.eventLocation}` : '',
+  ].filter(Boolean).join('\n');
   const fill = (s) => String(s)
     .replaceAll('{{TARGET_LEAGUE}}', ev.name)
     .replaceAll('{{EB_DATE}}', fmt(d?.earlyBird))
@@ -100,8 +107,17 @@ function renderReminderTemplate(tpl, ev, d, utmTplId) {
     .replaceAll('{{EB_PRICE}}', d?.earlyBirdPrice ? ` ($${d.earlyBirdPrice}/team)` : '')
     .replaceAll('{{FR_PRICE}}', d?.finalPrice ? ` ($${d.finalPrice}/team)` : '')
     .replaceAll('{{REGISTER_URL}}', url)
+    // Scraped event facts. The times field is often cut mid-sentence by the
+    // source page ("3:30 - 9:00 PM (we accept"), so only emit it when it looks
+    // like a complete range — a truncated time in a customer email is worse
+    // than no time at all.
+    .replaceAll('{{EVENT_DATES}}', d?.eventDates || '')
+    .replaceAll('{{EVENT_LOCATION}}', d?.eventLocation || '')
+    .replaceAll('{{EVENT_TIMES}}', times)
+    .replaceAll('{{EVENT_DETAILS}}', details)
     .replaceAll('{{FIRST_NAME}}', '*|FNAME|*')
-    .replaceAll('{{PAST_LEAGUE}}', '*|PASTLG|*');
+    .replaceAll('{{PAST_LEAGUE}}', '*|PASTLG|*')
+    .replace(/\n{3,}/g, '\n\n');   // an empty {{EVENT_DETAILS}} must not leave a gap
   return { subject: fill(tpl.subject), body: fill(tpl.body) };
 }
 
