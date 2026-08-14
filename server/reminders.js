@@ -67,7 +67,7 @@ const REMINDER_DEFAULT_TEMPLATES = [
     stage: 'early-bird', id: 'var-c-note', name: 'C · Short personal note', subject: 'Are you playing again this year?',
     design: 'plain', showPrices: false, fromName: 'Christy at Midwest 3 on 3',
     preheader: 'Just checking before early-bird pricing ends.',
-    body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check before the price goes up. If you're in, you can {{REGISTER_LINK}}.\n\nIf you're not playing this year, no problem at all — just ignore this.\n\nChristy\nMidwest 3 on 3 Basketball`,
+    body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check before the price goes up. If you're in, you can {{REGISTER_LINK}}.\n\nIf you're not playing this year, no problem at all — {{WHY_LINK}}.\n\nChristy\nMidwest 3 on 3 Basketball`,
   },
   {
     stage: 'early-bird', id: 'var-d-casual', name: 'D · Least promo — casual check-in', subject: "hey, didn't hear from you this year",
@@ -80,9 +80,9 @@ const REMINDER_DEFAULT_TEMPLATES = [
     // carrying the personal-note voice rather than marketing copy.
     stage: 'early-bird', id: 'var-e-designed-casual', name: 'E · Designed + casual voice',
     subject: 'Are you playing again this year?',
-    design: 'court', fromName: 'Courtney at Midwest 3 on 3',
+    design: 'court', fromName: 'Christy at Midwest 3 on 3',
     preheader: 'Just checking in before early-bird pricing ends {{EB_DATE}}.',
-    body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check in before the price goes up.\n\nSame as always — no practices, just games, and everybody plays.\n\nIf you're not playing this year, no problem at all — just ignore this.\n\nCourtney\nMidwest 3 on 3 Basketball`,
+    body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check in before the price goes up.\n\nSame as always — no practices, just games, and everybody plays.\n\nIf you're not playing this year, no problem at all — {{WHY_LINK}}.\n\nChristy\nMidwest 3 on 3 Basketball`,
   },
 ];
 async function reminderTemplates() {
@@ -155,6 +155,7 @@ function renderReminderTemplate(tpl, ev, d, utmTplId, opts = {}) {
     // email looks like phishing, which is the opposite of the intended effect.
     .replaceAll('{{REGISTER_URL}}', trackedUrl(url, { c: '*|CAMPAIGN_UID|*', ev: ev.id, t: utmTplId }))
     .replaceAll('{{REGISTER_LINK}}', `<a href="${trackedUrl(url, { c: '*|CAMPAIGN_UID|*', ev: ev.id, t: utmTplId })}">sign up here</a>`)
+    .replaceAll('{{WHY_LINK}}', `<a href="${whyUrl(ev.id)}">tell us why in one tap</a>`)
     // Scraped event facts. The times field is often cut mid-sentence by the
     // source page ("3:30 - 9:00 PM (we accept"), so only emit it when it looks
     // like a complete range — a truncated time in a customer email is worse
@@ -333,6 +334,13 @@ function utmTag(url, tplId, evName) {
  * url-encoded — Mailchimp only substitutes tags it can still recognise.
  * A test/preview render (no Mailchimp) just logs a null email.
  */
+// One-tap churn survey link. Carries the recipient (via Mailchimp's merge
+// tag) and the league, so an answer arrives already attributed.
+function whyUrl(ev) {
+  const base = (process.env.PUBLIC_BASE_URL || 'https://midwest-data-explorer.vercel.app').replace(/\/$/, '');
+  return `${base}/api/why?ev=${encodeURIComponent(String(ev || ''))}&e=*|EMAIL|*`;
+}
+
 function clickSecret() {
   return process.env.JWT_SECRET || process.env.ENCRYPTION_KEY || 'dev-click-secret';
 }
@@ -626,6 +634,109 @@ app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async 
       ],
     });
   } catch (err) { res.status(500).json({ error: err.response?.data?.detail || err.message }); }
+});
+
+// ── "Why aren't you coming back?" ────────────────────────────────────────────
+// Replies to a mailbox cannot be counted. A one-click page turns the same
+// question into structured reasons that can be totalled, compared across
+// leagues, and acted on — which is exactly the question Christy is asking
+// about the season being down.
+const CHURN_REASONS = [
+  ['aged-out', 'My player graduated / aged out'],
+  ['cost', 'Too expensive this year'],
+  ['schedule', "The dates or times don't work for us"],
+  ['other-sport', 'Playing a different sport or league'],
+  ['no-team', "Couldn't get a team together"],
+  ['distance', 'Too far / we moved'],
+  ['injury', 'Injury or health reason'],
+  ['bad-experience', 'Something about last year put us off'],
+  ['just-late', "Nothing's wrong — just haven't signed up yet"],
+];
+
+app.get('/api/why', async (req, res) => {
+  const email = String(req.query.e || '');
+  const ev = String(req.query.ev || '');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Quick question — Midwest 3 on 3</title>
+<style>
+ body{margin:0;background:#eef1f6;font:16px/1.6 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#20242b}
+ .w{max-width:560px;margin:0 auto;padding:26px 16px}
+ .c{background:#fff;border-radius:16px;overflow:hidden}
+ .h{background:#ea580c;color:#fff;padding:22px 26px}
+ .h b{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#ffe8d9}
+ .h h1{margin:6px 0 0;font-size:22px;line-height:1.3}
+ .b{padding:22px 26px}
+ button.r{display:block;width:100%;text-align:left;background:#f7f8fa;border:1px solid #e3e7ee;border-radius:10px;
+   padding:13px 16px;margin-bottom:9px;font-size:15px;cursor:pointer;color:#20242b}
+ button.r:hover{border-color:#ea580c;background:#fff7ed}
+ textarea{width:100%;box-sizing:border-box;border:1px solid #e3e7ee;border-radius:10px;padding:11px;font:inherit;font-size:14px;min-height:78px}
+ .s{background:#ea580c;color:#fff;border:0;border-radius:10px;padding:13px 26px;font-size:15px;font-weight:700;cursor:pointer;margin-top:10px}
+ .m{padding:34px 26px;text-align:center}
+ .m h2{margin:0 0 8px;font-size:20px}
+ .f{padding:16px 26px;background:#f7f8fa;font-size:12px;color:#98a0ac;text-align:center}
+</style></head><body><div class="w"><div class="c">
+ <div class="h"><b>Midwest 3 on 3 Basketball</b><h1>Mind telling us why?</h1></div>
+ <div class="b" id="b">
+  <p style="margin-top:0;color:#5b6472">One tap — it genuinely helps us make next season better.</p>
+  ${CHURN_REASONS.map(([id, label]) => `<button class="r" data-r="${id}">${esc(label)}</button>`).join('')}
+  <textarea id="n" placeholder="Anything else you'd like to add? (optional)"></textarea>
+ </div>
+ <div class="f">Midwest 3 on 3 Basketball</div>
+</div></div>
+<script>
+ var E=${JSON.stringify(email)},EV=${JSON.stringify(ev)},S=${JSON.stringify(String(req.query.s || ''))};
+ document.querySelectorAll('button.r').forEach(function(btn){
+  btn.onclick=function(){
+   fetch('/api/why',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({reason:btn.getAttribute('data-r'),note:document.getElementById('n').value,email:E,eventId:EV,s:S})})
+    .catch(function(){}).then(function(){
+     document.getElementById('b').outerHTML='<div class="m"><h2>Thank you</h2>'+
+      '<p style="color:#5b6472">That\\'s all we needed — we really appreciate it.</p></div>';
+    });
+  };
+ });
+</script></body></html>`);
+});
+
+app.post('/api/why', async (req, res) => {
+  try {
+    const { reason, note, email, eventId } = req.body || {};
+    const valid = CHURN_REASONS.some(([id]) => id === reason);
+    if (!valid && !String(note || '').trim()) return res.status(400).json({ error: 'no reason given' });
+    await chatLog('churn-reason', {
+      at: new Date().toISOString(),
+      reason: valid ? reason : 'other',
+      note: String(note || '').slice(0, 800) || null,
+      email: EMAIL_RE.test(String(email || '')) ? String(email).toLowerCase() : null,
+      eventId: String(eventId || '') || null,
+    });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Aggregated churn reasons for the dashboard.
+app.get('/api/admin/reminders/reasons', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const rows = await chatLogRecent('churn-reason', 5000);
+    const db = await store.load();
+    const labels = Object.fromEntries(CHURN_REASONS);
+    const byReason = {};
+    for (const r of rows) byReason[r.reason] = (byReason[r.reason] || 0) + 1;
+    const total = rows.length || 1;
+    res.json({
+      total: rows.length,
+      breakdown: Object.entries(byReason)
+        .map(([id, count]) => ({ id, label: labels[id] || id, count, pct: Math.round((count / total) * 100) }))
+        .sort((a, b) => b.count - a.count),
+      // Free text is where the real insight hides — surface it verbatim.
+      notes: rows.filter(r => r.note).slice(0, 120).map(r => ({
+        at: r.at, note: r.note, email: r.email,
+        reason: labels[r.reason] || r.reason,
+        eventName: db.events?.[String(r.eventId)]?.name || null,
+      })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Click tracking ───────────────────────────────────────────────────────────

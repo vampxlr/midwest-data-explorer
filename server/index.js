@@ -66,6 +66,7 @@ const PUBLIC_API_PATHS = new Set([
   '/api/assistant/contact',   // pre-chat contact card (same widget-key gate)
   '/api/widget.js',           // the embeddable chat widget script itself
   '/api/cron/daily',          // Vercel cron (gated by CRON_SECRET when set)
+  '/api/why',                 // one-tap "why aren't you coming back" survey
   '/api/r',                   // reminder click tracker → logs, then 302s to an
                               // allowlisted destination (see reminders.js)
 ]);

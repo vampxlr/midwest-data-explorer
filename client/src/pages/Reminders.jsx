@@ -47,6 +47,15 @@ export default function Reminders() {
   const [preview, setPreview] = useState(null); // {subject, html, name}
   const [clicks, setClicks] = useState(null);   // {clicks[], totals}
   const [loadingClicks, setLoadingClicks] = useState(false);
+  const [reasons, setReasons] = useState(null);
+  const [loadingReasons, setLoadingReasons] = useState(false);
+
+  async function loadReasons() {
+    setLoadingReasons(true);
+    try { setReasons((await api.reminderReasons()).data); }
+    catch (err) { toast.error(err.response?.data?.error || 'Could not load reasons'); }
+    finally { setLoadingReasons(false); }
+  }
 
   async function loadClicks() {
     setLoadingClicks(true);
@@ -421,6 +430,51 @@ export default function Reminders() {
                 </table>
               </div>
             </details>
+          </>
+        )}
+      </div>
+
+      {/* Why families didn't come back */}
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+          <h2 style={{ margin: 0 }}>💬 Why they didn't come back</h2>
+          <button className="btn-secondary" style={{ width: 'auto', margin: 0 }} disabled={loadingReasons} onClick={loadReasons}>
+            {loadingReasons ? 'Loading…' : '↻ Load reasons'}
+          </button>
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '0 0 10px' }}>
+          Every reminder carries a one-tap "tell us why" link. Answers land here as countable reasons instead of
+          scattered replies — so "we're down this year" becomes a specific, fixable list.
+        </p>
+        {!reasons ? <div className="no-data" style={{ padding: 16 }}>Not loaded yet.</div>
+          : reasons.total === 0 ? <div className="no-data" style={{ padding: 16 }}>No responses yet — they arrive once a campaign goes out.</div> : (
+          <>
+            <div style={{ display: 'grid', gap: 6, marginBottom: 14 }}>
+              {reasons.breakdown.map(b => (
+                <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 230, fontSize: 13, color: 'var(--text-2)' }}>{b.label}</div>
+                  <div style={{ flex: 1, background: 'var(--surface-2)', borderRadius: 999, height: 18, overflow: 'hidden' }}>
+                    <div style={{ width: `${b.pct}%`, background: 'var(--accent-2)', height: '100%' }} />
+                  </div>
+                  <div style={{ width: 70, fontSize: 12, color: 'var(--text-1)', fontWeight: 700 }}>{b.count} ({b.pct}%)</div>
+                </div>
+              ))}
+            </div>
+            {reasons.notes.length > 0 && (
+              <>
+                <h3 style={{ fontSize: 13, margin: '0 0 6px', color: 'var(--text-2)' }}>In their own words</h3>
+                <div style={{ display: 'grid', gap: 6 }}>
+                  {reasons.notes.map((n, i) => (
+                    <div key={i} style={{ border: '1px solid var(--border-sub)', borderRadius: 8, padding: '8px 12px' }}>
+                      <div style={{ fontSize: 14, color: 'var(--text-1)' }}>“{n.note}”</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-4)', marginTop: 3 }}>
+                        {n.reason} · {(n.eventName || '').replace(/ 3 on 3.*/, '')} · {n.email || 'anonymous'} · {String(n.at).replace('T', ' ').slice(0, 16)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </>
         )}
       </div>
