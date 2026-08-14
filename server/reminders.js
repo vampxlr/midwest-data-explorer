@@ -304,7 +304,16 @@ function buildReminderHtml(tpl, ev, d) {
     ebDate: shortDate(d?.earlyBird),
     frDate: shortDate(d?.finalDeadline),
   });
-  return { subject, html };
+  // Explicit plain-text alternative. Mailchimp auto-generates one by
+  // flattening the HTML, which silently drops anything living in a table —
+  // i.e. the price strip and the When/Where card, the two most useful facts in
+  // the email. Rendered again with details inline so nothing is lost.
+  const inline = renderReminderTemplate(tpl, ev, d, tpl.id, { ownsDetails: false });
+  const priceLine = (tpl.showPrices !== false && d?.earlyBirdPrice && d?.finalPrice)
+    ? `Register by ${shortDate(d.earlyBird)}: $${d.earlyBirdPrice}/team (then $${d.finalPrice}/team)` : '';
+  const plainText = [inline.body, priceLine, `Register: ${url}`, 'Unsubscribe: *|UNSUB|*']
+    .filter(Boolean).join('\n\n').replace('*|FNAME|*', '*|FNAME|*');
+  return { subject, html, plainText };
 }
 
 function mcApi(s) {
@@ -389,7 +398,7 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     const contacts = await lapsedContactsFor(ev, past, db);
     if (!contacts.length) return res.status(400).json({ error: 'no lapsed contacts for this event' });
     const { base, auth: mcAuth, list } = mcApi(s);
-    const { subject, html } = buildReminderHtml(tpl, ev, d);
+    const { subject, html, plainText } = buildReminderHtml(tpl, ev, d);
     // ensure the per-person merge field exists (FNAME is built in)
     await axios.post(`${base}/lists/${list}/merge-fields`, { tag: 'PASTLG', name: 'Past League', type: 'text' }, mcAuth).catch(() => {});
     const short = ev.name.replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim();
@@ -431,7 +440,7 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     const contentHtml = testEmail
       ? html.replaceAll('*|EMAIL|*', encodeURIComponent(firstTest)).replaceAll('*|CAMPAIGN_UID|*', 'test') + ''
       : html;
-    await axios.put(`${base}/campaigns/${camp.data.id}/content`, { html: contentHtml }, mcAuth);
+    await axios.put(`${base}/campaigns/${camp.data.id}/content`, { html: contentHtml, plain_text: plainText }, mcAuth);
     if (testEmail) {
       const addrs = String(testEmail).split(/[,;\s]+/).map(x => x.trim()).filter(x => EMAIL_RE.test(x)).slice(0, 10);
       if (!addrs.length) return res.status(400).json({ error: 'no valid test email addresses' });
