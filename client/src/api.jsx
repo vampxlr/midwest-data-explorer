@@ -207,6 +207,7 @@ export const api = {
   reminderHistory:     (stats)=> axios.get(`${BASE}/admin/reminders/history${stats ? '?stats=1' : ''}`),
   reminderClicks:      ()     => axios.get(`${BASE}/admin/reminders/clicks`),
   reminderReasons:     ()     => axios.get(`${BASE}/admin/reminders/reasons`),
+  reminderSafety:      ()     => axios.get(`${BASE}/admin/reminders/safety`),
   getUsage:            ()     => axios.get(`${BASE}/admin/usage`),
   getAssistantConvos:  ()     => axios.get(`${BASE}/admin/assistant/convos`),
   getMessengerThreads: ()     => axios.get(`${BASE}/admin/assistant/messenger`),

@@ -85,6 +85,30 @@ const REMINDER_DEFAULT_TEMPLATES = [
     body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check in before the price goes up.\n\nSame as always — no practices, just games, and everybody plays.\n\nIf you're not playing this year, no problem at all — {{WHY_LINK}}.\n\nChristy\nMidwest 3 on 3 Basketball`,
   },
 ];
+// ── TEST MODE (safety interlock) ─────────────────────────────────────────────
+// While true, NO email can reach anyone outside the allowlist — not through a
+// campaign, a test, or a demo. It is deliberately fail-safe: a missing,
+// unreadable or malformed setting means test mode is ON. Turning it off is an
+// explicit, typed act (see PUT /api/admin/reminders/safety).
+const SAFETY_KEY = 'reminders:safety';
+const SAFETY_DEFAULT_ALLOWLIST = ['notun.id.rocky@gmail.com'];
+const SAFETY_DISABLE_PHRASE = 'SEND TO REAL FAMILIES';
+
+async function reminderSafety() {
+  let s = null;
+  try { s = await kvGet(SAFETY_KEY); } catch { s = null; }
+  const allowlist = (Array.isArray(s?.allowlist) && s.allowlist.length ? s.allowlist : SAFETY_DEFAULT_ALLOWLIST)
+    .map(x => String(x).toLowerCase().trim()).filter(Boolean);
+  // testMode is off ONLY when explicitly stored as false.
+  return { testMode: s?.testMode !== false, allowlist };
+}
+
+/** Recipients outside the allowlist while test mode is on. */
+function blockedBy(safety, emails) {
+  if (!safety.testMode) return [];
+  return emails.filter(e => !safety.allowlist.includes(String(e).toLowerCase().trim()));
+}
+
 async function reminderTemplates() {
   const t = await kvGet('reminders:templates');
   return (t && t.length) ? t : REMINDER_DEFAULT_TEMPLATES;
@@ -523,6 +547,22 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
         ? [{ email: String(demoEmail).toLowerCase().trim(), fn: demoParts[0] || 'there',
              ln: demoParts.slice(1).join(' ') || '', pastLeague: contacts[0].pastLeague }]
         : contacts.slice(0, 2000);
+    // ── THE INTERLOCK ────────────────────────────────────────────────────────
+    // Checked here, before a single Mailchimp write: no contact is upserted,
+    // no segment is built, no campaign is created. Applies to every path —
+    // audience send, test send and demo send alike.
+    const safety = await reminderSafety();
+    const blocked = blockedBy(safety, batch.map(c => c.email));
+    if (blocked.length) {
+      return res.status(423).json({
+        error: `TEST MODE is ON — blocked ${blocked.length} recipient(s). `
+             + `Only ${safety.allowlist.join(', ')} can receive email. `
+             + `Nothing was sent and no contact was written to Mailchimp.`,
+        testMode: true, blocked: blocked.length, allowlist: safety.allowlist,
+        sample: blocked.slice(0, 3),
+      });
+    }
+
     for (let i = 0; i < batch.length; i += 10) {
       await Promise.all(batch.slice(i, i + 10).map(c => {
         const hash = cryptoLib.createHash('md5').update(c.email).digest('hex');
@@ -664,6 +704,37 @@ app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async 
       ],
     });
   } catch (err) { res.status(500).json({ error: err.response?.data?.detail || err.message }); }
+});
+
+// Current safety state — the UI shows this as a banner.
+app.get('/api/admin/reminders/safety', auth.requireRole('admin'), async (req, res) => {
+  const s = await reminderSafety();
+  res.json({ ...s, disablePhrase: SAFETY_DISABLE_PHRASE });
+});
+
+// Toggle it. Turning test mode OFF requires typing the phrase exactly — it
+// cannot happen through a stray request, a default, or an unknown parameter.
+app.put('/api/admin/reminders/safety', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const { testMode, allowlist, confirm } = req.body || {};
+    if (testMode === false && String(confirm) !== SAFETY_DISABLE_PHRASE) {
+      return res.status(400).json({
+        error: `To leave test mode you must send confirm: "${SAFETY_DISABLE_PHRASE}". Test mode remains ON.`,
+      });
+    }
+    const next = {
+      testMode: testMode !== false,
+      allowlist: (Array.isArray(allowlist) && allowlist.length ? allowlist : SAFETY_DEFAULT_ALLOWLIST)
+        .map(x => String(x).toLowerCase().trim()).filter(x => EMAIL_RE.test(x)),
+    };
+    if (!next.allowlist.length) next.allowlist = SAFETY_DEFAULT_ALLOWLIST;
+    await kvSet(SAFETY_KEY, next);
+    await appendCapped('log:reminder-safety', {
+      at: new Date().toISOString(), user: req.user?.username || '?',
+      testMode: next.testMode, allowlist: next.allowlist,
+    }, 100).catch(() => {});
+    res.json({ ok: true, ...next });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Pre-send sanity check on an audience: how many contacts would render badly.

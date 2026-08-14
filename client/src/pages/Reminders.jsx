@@ -47,6 +47,7 @@ export default function Reminders() {
   const [preview, setPreview] = useState(null); // {subject, html, name}
   const [clicks, setClicks] = useState(null);   // {clicks[], totals}
   const [loadingClicks, setLoadingClicks] = useState(false);
+  const [safety, setSafety] = useState(null);
   const [reasons, setReasons] = useState(null);
   const [loadingReasons, setLoadingReasons] = useState(false);
 
@@ -78,6 +79,7 @@ export default function Reminders() {
   }
 
   useEffect(() => {
+    api.reminderSafety().then(r => setSafety(r.data)).catch(() => {});
     api.reminderTemplates().then(r => setTemplates(r.data.templates)).catch(() => {});
     api.reminderHistory(false).then(r => setHistory(r.data.campaigns)).catch(() => {});
     api.reminderAudiences().then(r => setAudiences(r.data.audiences))
@@ -154,6 +156,23 @@ export default function Reminders() {
         <h1>📣 Reminders</h1>
         <p>Win back last year's families: each open event is matched to its past editions, and everyone who played before (and hasn't graduated) but isn't registered this year can get a reminder — sent through Mailchimp into the Midwest Data Explorer audience</p>
       </div>
+
+      {/* Safety interlock — the most important thing on this page right now */}
+      {safety && (
+        <div className="card" style={{
+          borderLeft: `4px solid ${safety.testMode ? '#22c55e' : '#ef4444'}`,
+          background: safety.testMode ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)',
+        }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 16 }}>
+            {safety.testMode ? '🔒 TEST MODE — no email can reach a real family' : '🔴 LIVE — real families will receive email'}
+          </h2>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--text-3)' }}>
+            {safety.testMode
+              ? <>Every send is blocked unless the recipient is <b>{safety.allowlist.join(', ')}</b>. Blocked attempts write nothing to Mailchimp.</>
+              : <>Sends will go to real recipients. Turn test mode back on as soon as you're done.</>}
+          </p>
+        </div>
+      )}
 
       {/* Action banner — what is actually due today */}
       {dueNow.length > 0 && (
