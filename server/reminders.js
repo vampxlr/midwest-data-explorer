@@ -29,19 +29,19 @@ module.exports = function registerReminders(app, deps) {
 
 const REMINDER_DEFAULT_TEMPLATES = [
   {
-    stage: 'open', id: 'open-announcement', name: '📣 Registration is open', subject: '{{TARGET_LEAGUE}} is open!',
+    stage: 'open', id: 'open-announcement', name: '📣 Registration is open', subject: "{{LEAGUE_SHORT}} 3 on 3 is back this fall",
     design: 'court',
     preheader: 'No practices, no long weekends — just games. Early-bird pricing is live.',
     body: `Hi {{FIRST_NAME}},\n\nGood news — {{TARGET_LEAGUE}} just opened up, and we'd love to see your player back on the court.\n\nYou were with us for {{PAST_LEAGUE}}, so you know how it goes: no practices, no long weekends. Just games, way more touches, and every kid actually plays.\n\nEarly-bird pricing is live until {{EB_DATE}}, and registration closes for good on {{FR_DATE}}.\n\n{{EVENT_DETAILS}}\n\nSee you on the court,\nMidwest 3 on 3 Basketball`,
   },
   {
-    stage: 'early-bird', id: 'early-bird-week', name: '⏰ Early-bird — 1 week left', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
+    stage: 'early-bird', id: 'early-bird-week', name: '⏰ Early-bird — 1 week left', subject: 'A week left to sign up for {{LEAGUE_SHORT}}',
     design: 'court',
     preheader: 'Early-bird ends {{EB_DATE}}. After that the price goes up.',
     body: `Hi {{FIRST_NAME}},\n\nQuick heads-up: early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}} — one week from today. After that the price goes up, and registration closes for good on {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}}, so you already know the format: no practices, just games, and everybody plays.\n\nGrabbing your team's spot takes about two minutes.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
   {
-    stage: 'final', id: 'deadline-2-days', name: '🚨 Deadline — 2 days left', subject: 'Last chance: {{TARGET_LEAGUE}} closes in 2 days',
+    stage: 'final', id: 'deadline-2-days', name: '🚨 Deadline — 2 days left', subject: "Last call for {{LEAGUE_SHORT}} 3 on 3",
     design: 'court', showPrices: false,
     preheader: 'Registration closes {{FR_DATE}} — after that we build the schedule.',
     body: `Hi {{FIRST_NAME}},\n\nLast call — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, just two days out. Once it closes we start building the schedule, and we can't squeeze teams in after that.\n\nYou were with us for {{PAST_LEAGUE}}, and we'd hate for your player to sit this season out.\n\nIf you've been meaning to sign up, now's the moment.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
@@ -64,7 +64,7 @@ const REMINDER_DEFAULT_TEMPLATES = [
     body: `Hi {{FIRST_NAME}},\n\nA quick reminder that early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}}, and registration closes {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}} — we'd love to have them back.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
   {
-    stage: 'early-bird', id: 'var-c-note', name: 'C · Short personal note', subject: 'Are you playing again this year?',
+    stage: 'early-bird', id: 'var-c-note', name: 'C · Short personal note', subject: 'Are you playing {{LEAGUE_SHORT}} again this year?',
     design: 'plain', showPrices: false, fromName: 'Christy at Midwest 3 on 3',
     preheader: 'Just checking before early-bird pricing ends.',
     body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check before the price goes up. If you're in, you can {{REGISTER_LINK}}.\n\nIf you're not playing this year, no problem at all — {{WHY_LINK}}.\n\nChristy\nMidwest 3 on 3 Basketball`,
@@ -79,7 +79,7 @@ const REMINDER_DEFAULT_TEMPLATES = [
     // The one to beat: the Court layout (price strip, When/Where, real button)
     // carrying the personal-note voice rather than marketing copy.
     stage: 'early-bird', id: 'var-e-designed-casual', name: 'E · Designed + casual voice',
-    subject: 'Are you playing again this year?',
+    subject: 'Are you playing {{LEAGUE_SHORT}} again this year?',
     design: 'court', fromName: 'Christy at Midwest 3 on 3',
     preheader: 'Just checking in before early-bird pricing ends {{EB_DATE}}.',
     body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check in before the price goes up.\n\nSame as always — no practices, just games, and everybody plays.\n\nIf you're not playing this year, no problem at all — {{WHY_LINK}}.\n\nChristy\nMidwest 3 on 3 Basketball`,
@@ -146,6 +146,10 @@ function renderReminderTemplate(tpl, ev, d, utmTplId, opts = {}) {
   ].filter(Boolean).join('\n');
   const fill = (s) => String(s)
     .replaceAll('{{TARGET_LEAGUE}}', ev.name)
+    // Just the town: "2026 Andover 3 on 3 Basketball League" -> "Andover".
+    // A phone shows ~35 characters of subject, and the boilerplate ate all of
+    // it before the message began.
+    .replaceAll('{{LEAGUE_SHORT}}', String(ev.name).replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim())
     .replaceAll('{{EB_DATE}}', fmt(d?.earlyBird))
     .replaceAll('{{FR_DATE}}', fmt(d?.finalDeadline))
     .replaceAll('{{EB_PRICE}}', d?.earlyBirdPrice ? ` ($${d.earlyBirdPrice}/team)` : '')
