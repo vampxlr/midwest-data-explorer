@@ -46,6 +46,35 @@ const REMINDER_DEFAULT_TEMPLATES = [
     preheader: 'Registration closes {{FR_DATE}} — after that we build the schedule.',
     body: `Hi {{FIRST_NAME}},\n\nLast call — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, just two days out. Once it closes we start building the schedule, and we can't squeeze teams in after that.\n\nYou were with us for {{PAST_LEAGUE}}, and we'd hate for your player to sit this season out.\n\nIf you've been meaning to sign up, now's the moment.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
+
+  // ── A/B/C/D test variants ──────────────────────────────────────────────────
+  // Same offer, four points on the designed→personal spectrum, to find out
+  // which actually gets opened rather than arguing about it. Delete the losers
+  // once the numbers are in.
+  {
+    id: 'var-a-designed', name: 'A · Designed (Court)', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
+    design: 'court',
+    preheader: 'Early-bird ends {{EB_DATE}}. After that the price goes up.',
+    body: `Hi {{FIRST_NAME}},\n\nQuick heads-up: early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}} — one week from today. After that the price goes up, and registration closes for good on {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}}, so you already know the format: no practices, just games, and everybody plays.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
+  },
+  {
+    id: 'var-b-simple', name: 'B · Simple card, no price box', subject: '{{TARGET_LEAGUE}} — early-bird ends {{EB_DATE}}',
+    design: 'classic', showPrices: false,
+    preheader: 'A quick reminder before the price changes.',
+    body: `Hi {{FIRST_NAME}},\n\nA quick reminder that early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}}, and registration closes {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}} — we'd love to have them back.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
+  },
+  {
+    id: 'var-c-note', name: 'C · Short personal note', subject: 'Are you playing again this year?',
+    design: 'plain', showPrices: false, fromName: 'Christy at Midwest 3 on 3',
+    preheader: 'Just checking before early-bird pricing ends.',
+    body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check before the price goes up. If you're in, you can {{REGISTER_LINK}}.\n\nIf you're not playing this year, no problem at all — just ignore this.\n\nChristy\nMidwest 3 on 3 Basketball`,
+  },
+  {
+    id: 'var-d-casual', name: 'D · Least promo — casual check-in', subject: "hey, didn't hear from you this year",
+    design: 'plain', showPrices: false, fromName: 'Sarah at Midwest 3 on 3',
+    preheader: 'Early-bird ends {{EB_DATE}} — thought I would check in.',
+    body: `Hey {{FIRST_NAME}},\n\nYou played with us last year in {{PAST_LEAGUE}}, but I didn't see your name on this year's list — so I thought I'd check in.\n\nEarly-bird pricing runs out {{EB_DATE}} (about a week out), and after that it goes up a bit. Registration shuts {{FR_DATE}}.\n\nSame as always — no practices, just games. If you want back in, you can {{REGISTER_LINK}}. Takes two minutes.\n\nAnd if your player's moved on to other things, totally fine — just let me know and I'll stop bugging you.\n\nSarah\nMidwest 3 on 3`,
+  },
 ];
 async function reminderTemplates() {
   const t = await kvGet('reminders:templates');
@@ -112,7 +141,11 @@ function renderReminderTemplate(tpl, ev, d, utmTplId, opts = {}) {
     .replaceAll('{{FR_DATE}}', fmt(d?.finalDeadline))
     .replaceAll('{{EB_PRICE}}', d?.earlyBirdPrice ? ` ($${d.earlyBirdPrice}/team)` : '')
     .replaceAll('{{FR_PRICE}}', d?.finalPrice ? ` ($${d.finalPrice}/team)` : '')
-    .replaceAll('{{REGISTER_URL}}', url)
+    // Both link forms go through the click tracker. REGISTER_LINK is an
+    // anchor with friendly text — a bare tracked URL in a personal-sounding
+    // email looks like phishing, which is the opposite of the intended effect.
+    .replaceAll('{{REGISTER_URL}}', trackedUrl(url, { c: '*|CAMPAIGN_UID|*', ev: ev.id, t: utmTplId }))
+    .replaceAll('{{REGISTER_LINK}}', `<a href="${trackedUrl(url, { c: '*|CAMPAIGN_UID|*', ev: ev.id, t: utmTplId })}">sign up here</a>`)
     // Scraped event facts. The times field is often cut mid-sentence by the
     // source page ("3:30 - 9:00 PM (we accept"), so only emit it when it looks
     // like a complete range — a truncated time in a customer email is worse
@@ -247,6 +280,20 @@ const REMINDER_DESIGNS = {
  </td></tr>
 </table>`,
   },
+  // No chrome at all: no card, no header, no button. This is what a person
+  // typing in Gmail actually produces, and it is the variant most likely to
+  // land in the Primary tab — because it genuinely isn't a designed promotion.
+  plain: {
+    name: 'Plain — reads like a normal typed email',
+    render: ({ bodyHtml, unsub, preheader }) => `
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${preheader || ''}</div>
+<div style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#222222;max-width:560px;padding:10px 4px">
+${bodyHtml}
+<div style="font-size:11px;color:#999999;margin-top:28px">
+ Midwest 3 on 3 Basketball · <a href="${unsub}" style="color:#999999">unsubscribe</a>
+</div>
+</div>`,
+  },
   minimal: {
     name: 'Minimal — personal, looks hand-written',
     render: ({ bodyHtml, url, unsub }) => `
@@ -311,9 +358,10 @@ function buildReminderHtml(tpl, ev, d) {
   const inline = renderReminderTemplate(tpl, ev, d, tpl.id, { ownsDetails: false });
   const priceLine = (tpl.showPrices !== false && d?.earlyBirdPrice && d?.finalPrice)
     ? `Register by ${shortDate(d.earlyBird)}: $${d.earlyBirdPrice}/team (then $${d.finalPrice}/team)` : '';
-  const plainText = [inline.body, priceLine, `Register: ${url}`, 'Unsubscribe: *|UNSUB|*']
-    .filter(Boolean).join('\n\n').replace('*|FNAME|*', '*|FNAME|*');
-  return { subject, html, plainText };
+  const plainText = [inline.body.replace(/<a [^>]*href="([^"]+)"[^>]*>([^<]*)<\/a>/g, '$2: $1').replace(/<[^>]+>/g, ''),
+    priceLine, `Register: ${url}`, 'Unsubscribe: *|UNSUB|*']
+    .filter(Boolean).join('\n\n');
+  return { subject, html, plainText, fromName: tpl.fromName || null };
 }
 
 function mcApi(s) {
@@ -335,6 +383,7 @@ app.put('/api/admin/reminders/templates', auth.requireRole('admin'), async (req,
       // silently lost the first time an admin saves a template.
       preheader: String(t.preheader || '').slice(0, 200),
       showPrices: t.showPrices !== false,
+      fromName: String(t.fromName || '').slice(0, 80) || undefined,
       design: REMINDER_DESIGNS[t.design] ? t.design : 'court',
     }));
   if (!list.length) return res.status(400).json({ error: 'templates array required' });
@@ -398,7 +447,7 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     const contacts = await lapsedContactsFor(ev, past, db);
     if (!contacts.length) return res.status(400).json({ error: 'no lapsed contacts for this event' });
     const { base, auth: mcAuth, list } = mcApi(s);
-    const { subject, html, plainText } = buildReminderHtml(tpl, ev, d);
+    const { subject, html, plainText, fromName } = buildReminderHtml(tpl, ev, d);
     // ensure the per-person merge field exists (FNAME is built in)
     await axios.post(`${base}/lists/${list}/merge-fields`, { tag: 'PASTLG', name: 'Past League', type: 'text' }, mcAuth).catch(() => {});
     const short = ev.name.replace(/^20\d\d\s*/, '').replace(/\s*3 on 3.*$/i, '').trim();
@@ -429,7 +478,7 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     const camp = await axios.post(`${base}/campaigns`, {
       type: 'regular',
       recipients: { list_id: list, segment_opts: { saved_segment_id: seg.data.id } },
-      settings: { subject_line: subject, title: `${tpl.name} — ${short} ${year}`, from_name: 'Midwest 3 on 3 Basketball', reply_to: (await axios.get(`${base}/lists/${list}`, mcAuth)).data.campaign_defaults.from_email },
+      settings: { subject_line: subject, title: `${tpl.name} — ${short} ${year}`, from_name: fromName || 'Midwest 3 on 3 Basketball', reply_to: (await axios.get(`${base}/lists/${list}`, mcAuth)).data.campaign_defaults.from_email },
     }, mcAuth);
     // Mailchimp does not reliably expand merge tags on *test* sends, so a test
     // click would arrive with a literal "*|EMAIL|*" and be logged anonymously —
