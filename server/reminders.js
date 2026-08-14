@@ -29,19 +29,19 @@ module.exports = function registerReminders(app, deps) {
 
 const REMINDER_DEFAULT_TEMPLATES = [
   {
-    id: 'open-announcement', name: '📣 Registration is open', subject: '{{TARGET_LEAGUE}} is open!',
+    stage: 'open', id: 'open-announcement', name: '📣 Registration is open', subject: '{{TARGET_LEAGUE}} is open!',
     design: 'court',
     preheader: 'No practices, no long weekends — just games. Early-bird pricing is live.',
     body: `Hi {{FIRST_NAME}},\n\nGood news — {{TARGET_LEAGUE}} just opened up, and we'd love to see your player back on the court.\n\nYou were with us for {{PAST_LEAGUE}}, so you know how it goes: no practices, no long weekends. Just games, way more touches, and every kid actually plays.\n\nEarly-bird pricing is live until {{EB_DATE}}, and registration closes for good on {{FR_DATE}}.\n\n{{EVENT_DETAILS}}\n\nSee you on the court,\nMidwest 3 on 3 Basketball`,
   },
   {
-    id: 'early-bird-week', name: '⏰ Early-bird — 1 week left', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
+    stage: 'early-bird', id: 'early-bird-week', name: '⏰ Early-bird — 1 week left', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
     design: 'court',
     preheader: 'Early-bird ends {{EB_DATE}}. After that the price goes up.',
     body: `Hi {{FIRST_NAME}},\n\nQuick heads-up: early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}} — one week from today. After that the price goes up, and registration closes for good on {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}}, so you already know the format: no practices, just games, and everybody plays.\n\nGrabbing your team's spot takes about two minutes.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
   {
-    id: 'deadline-2-days', name: '🚨 Deadline — 2 days left', subject: 'Last chance: {{TARGET_LEAGUE}} closes in 2 days',
+    stage: 'final', id: 'deadline-2-days', name: '🚨 Deadline — 2 days left', subject: 'Last chance: {{TARGET_LEAGUE}} closes in 2 days',
     design: 'court', showPrices: false,
     preheader: 'Registration closes {{FR_DATE}} — after that we build the schedule.',
     body: `Hi {{FIRST_NAME}},\n\nLast call — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, just two days out. Once it closes we start building the schedule, and we can't squeeze teams in after that.\n\nYou were with us for {{PAST_LEAGUE}}, and we'd hate for your player to sit this season out.\n\nIf you've been meaning to sign up, now's the moment.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
@@ -52,25 +52,25 @@ const REMINDER_DEFAULT_TEMPLATES = [
   // which actually gets opened rather than arguing about it. Delete the losers
   // once the numbers are in.
   {
-    id: 'var-a-designed', name: 'A · Designed (Court)', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
+    stage: 'early-bird', id: 'var-a-designed', name: 'A · Designed (Court)', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
     design: 'court',
     preheader: 'Early-bird ends {{EB_DATE}}. After that the price goes up.',
     body: `Hi {{FIRST_NAME}},\n\nQuick heads-up: early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}} — one week from today. After that the price goes up, and registration closes for good on {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}}, so you already know the format: no practices, just games, and everybody plays.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
   {
-    id: 'var-b-simple', name: 'B · Simple card, no price box', subject: '{{TARGET_LEAGUE}} — early-bird ends {{EB_DATE}}',
+    stage: 'early-bird', id: 'var-b-simple', name: 'B · Simple card, no price box', subject: '{{TARGET_LEAGUE}} — early-bird ends {{EB_DATE}}',
     design: 'classic', showPrices: false,
     preheader: 'A quick reminder before the price changes.',
     body: `Hi {{FIRST_NAME}},\n\nA quick reminder that early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}}, and registration closes {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}} — we'd love to have them back.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
   {
-    id: 'var-c-note', name: 'C · Short personal note', subject: 'Are you playing again this year?',
+    stage: 'early-bird', id: 'var-c-note', name: 'C · Short personal note', subject: 'Are you playing again this year?',
     design: 'plain', showPrices: false, fromName: 'Christy at Midwest 3 on 3',
     preheader: 'Just checking before early-bird pricing ends.',
     body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check before the price goes up. If you're in, you can {{REGISTER_LINK}}.\n\nIf you're not playing this year, no problem at all — just ignore this.\n\nChristy\nMidwest 3 on 3 Basketball`,
   },
   {
-    id: 'var-d-casual', name: 'D · Least promo — casual check-in', subject: "hey, didn't hear from you this year",
+    stage: 'early-bird', id: 'var-d-casual', name: 'D · Least promo — casual check-in', subject: "hey, didn't hear from you this year",
     design: 'plain', showPrices: false, fromName: 'Sarah at Midwest 3 on 3',
     preheader: 'Early-bird ends {{EB_DATE}} — thought I would check in.',
     body: `Hey {{FIRST_NAME}},\n\nYou played with us last year in {{PAST_LEAGUE}}, but I didn't see your name on this year's list — so I thought I'd check in.\n\nEarly-bird pricing runs out {{EB_DATE}} (about a week out), and after that it goes up a bit. Registration shuts {{FR_DATE}}.\n\nSame as always — no practices, just games. If you want back in, you can {{REGISTER_LINK}}. Takes two minutes.\n\nAnd if your player's moved on to other things, totally fine — just let me know and I'll stop bugging you.\n\nSarah\nMidwest 3 on 3`,
@@ -397,6 +397,7 @@ app.put('/api/admin/reminders/templates', auth.requireRole('admin'), async (req,
       // silently lost the first time an admin saves a template.
       preheader: String(t.preheader || '').slice(0, 200),
       showPrices: t.showPrices !== false,
+      stage: ['open','early-bird','final'].includes(t.stage) ? t.stage : 'early-bird',
       fromName: String(t.fromName || '').slice(0, 80) || undefined,
       design: REMINDER_DESIGNS[t.design] ? t.design : 'court',
     }));

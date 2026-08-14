@@ -11,6 +11,16 @@ import { api } from '../api.jsx';
  */
 const TEST_EMAIL_KEY = 'reminders-test-email';
 
+// A reminder has two independent axes: WHEN it goes out (the stage below) and
+// what it looks like (the template's design). Templates sharing a stage are
+// alternate styles of the same message — grouping them makes that visible
+// instead of presenting seven unrelated-looking choices.
+const STAGES = [
+  ['open', '① When registration opens'],
+  ['early-bird', '② One week before early-bird ends'],
+  ['final', '③ Two days before registration closes'],
+];
+
 /**
  * Days-remaining line under a deadline. A passed deadline says so explicitly —
  * rendering nothing looks like missing data, and "is this still open?" is the
@@ -195,17 +205,31 @@ export default function Reminders() {
                         </div>); })()}
                       <select className="field-input" style={{ fontSize: 12, maxWidth: 190 }} value={pick[a.eventId] || suggestion(a).id}
                         onChange={e => setPick(p => ({ ...p, [a.eventId]: e.target.value }))}>
-                        {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                        {/* Grouped by WHEN the email is sent. Several templates
+                            can share a stage — those are alternate styles of
+                            the same message, not different messages. */}
+                        {STAGES.map(([stage, label]) => {
+                          const opts = templates.filter(t => (t.stage || 'early-bird') === stage);
+                          return opts.length ? (
+                            <optgroup key={stage} label={label}>
+                              {opts.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </optgroup>
+                          ) : null;
+                        })}
                       </select>
                       {/* Preview each of the three emails with THIS league's
                           own prices, dates and venue. */}
                       <div style={{ display: 'flex', gap: 4, marginTop: 5, alignItems: 'center' }}>
                         <span style={{ fontSize: 10, color: 'var(--text-4)' }}>👁</span>
-                        {[['open-announcement', 'Open'], ['early-bird-week', 'EB'], ['deadline-2-days', 'Final']].map(([id, label]) => {
-                          const t = templates.find(x => x.id === id);
+                        {[['open', 'Open'], ['early-bird', 'EB'], ['final', 'Final']].map(([stage, label]) => {
+                          // the selected template when it belongs to this stage,
+                          // otherwise the first one defined for it
+                          const chosen = templates.find(x => x.id === (pick[a.eventId] || suggestion(a).id));
+                          const t = (chosen && (chosen.stage || 'early-bird') === stage)
+                            ? chosen : templates.find(x => (x.stage || 'early-bird') === stage);
                           return t ? (
-                            <button key={id} className="btn-chart" style={{ fontSize: 10, padding: '2px 7px' }}
-                              title={`Preview the ${label} email with ${a.name} data`}
+                            <button key={stage} className="btn-chart" style={{ fontSize: 10, padding: '2px 7px' }}
+                              title={`Preview "${t.name}" with ${a.name} data`}
                               onClick={() => showPreview(t, false, a)}>{label}</button>
                           ) : null;
                         })}
@@ -232,9 +256,14 @@ export default function Reminders() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <h2 style={{ margin: 0 }}>Email templates</h2>
           <button className="btn-secondary" style={{ width: 'auto', margin: 0 }}
-            onClick={() => setEditing({ id: `custom-${Date.now().toString(36)}`, name: 'New template', subject: '', body: '' })}>+ New template</button>
+            onClick={() => setEditing({ id: `custom-${Date.now().toString(36)}`, name: 'New template', subject: '', body: '', stage: 'early-bird', design: 'court' })}>+ New template</button>
         </div>
-        <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '6px 0 10px' }}>
+        <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '6px 0 4px' }}>
+          Each template is <b>when it's sent</b> (stage) × <b>how it looks</b> (design). Several templates can share a
+          stage — those are alternate <i>styles</i> of the same message, and you send one of them. The A/B/C/D set are
+          four styles of the early-bird email; once you've picked a winner, delete the rest.
+        </p>
+        <p style={{ fontSize: 12, color: 'var(--text-3)', margin: '0 0 10px' }}>
           Placeholders filled automatically at send time: <code>{'{{FIRST_NAME}}'}</code> <code>{'{{PAST_LEAGUE}}'}</code> (per person) · <code>{'{{TARGET_LEAGUE}}'}</code> <code>{'{{EB_DATE}}'}</code> <code>{'{{EB_PRICE}}'}</code> <code>{'{{FR_DATE}}'}</code> <code>{'{{FR_PRICE}}'}</code> <code>{'{{EVENT_DETAILS}}'}</code> <code>{'{{REGISTER_URL}}'}</code> (per league, from live deadline data)
           <br />The <b>Court</b> design draws its own When/Where card and price strip, so with it you can leave <code>{'{{EVENT_DETAILS}}'}</code> out entirely.
           Register buttons are rewritten through our click tracker automatically — you don't need <code>{'{{REGISTER_URL}}'}</code> in the body.
@@ -248,7 +277,7 @@ export default function Reminders() {
                   <div style={{ fontSize: 12, color: 'var(--text-3)' }}>Subject: {t.subject}</div>
                 </div>
                 <div style={{ whiteSpace: 'nowrap' }}>
-                  <span className="badge badge-purple" style={{ marginRight: 8, fontSize: 9 }}>{t.design || 'classic'}</span>
+                  <span className="badge" style={{ marginRight: 6, fontSize: 9, background: 'rgba(99,102,241,0.14)', color: '#818cf8', padding: '2px 7px', borderRadius: 999 }}>{(STAGES.find(s => s[0] === (t.stage || 'early-bird')) || [])[1]}</span><span className="badge badge-purple" style={{ marginRight: 8, fontSize: 9 }}>{t.design || 'court'}</span>
                   <button className="btn-chart" style={{ marginRight: 4 }} onClick={() => showPreview(t)}>👁 Preview</button>
                   <button className="btn-chart" style={{ marginRight: 4 }} onClick={() => setEditing({ ...t })}>Edit</button>
                   <button className="btn-chart" onClick={() => { if (window.confirm(`Delete template "${t.name}"?`)) saveTemplates(templates.filter(x => x.id !== t.id)); }}>🗑</button>
@@ -263,6 +292,9 @@ export default function Reminders() {
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
               <input className="field-input" style={{ flex: 1, minWidth: 180 }} placeholder="Template name" value={editing.name} onChange={e => setEditing(x => ({ ...x, name: e.target.value }))} />
               <input className="field-input" style={{ flex: 2, minWidth: 240 }} placeholder="Email subject" value={editing.subject} onChange={e => setEditing(x => ({ ...x, subject: e.target.value }))} />
+              <select className="field-input" style={{ minWidth: 190 }} value={editing.stage || 'early-bird'} onChange={e => setEditing(x => ({ ...x, stage: e.target.value }))}>
+                {STAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
               <select className="field-input" style={{ minWidth: 200 }} value={editing.design || 'court'} onChange={e => setEditing(x => ({ ...x, design: e.target.value }))}>
                 <option value="court">🎨 Court — designed, price strip (default)</option>
                 <option value="classic">🎨 Classic — white card, orange header</option>
