@@ -434,7 +434,11 @@ app.get('/api/admin/reminders/audiences', auth.requireRole('admin'), async (req,
 // Send (or test-send) one reminder: template × event → Mailchimp campaign
 app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res) => {
   try {
-    const { eventId, templateId, testEmail } = req.body || {};
+    // demoEmail = a REAL send to exactly one address. Needed because Mailchimp
+    // does not expand merge tags on test sends, so a test can never show what
+    // a recipient truly sees, nor exercise per-person click attribution.
+    const { eventId, templateId, testEmail, demoEmail, demoName } = req.body || {};
+    const isDemo = !!demoEmail && !testEmail;
     const s = await assistantSettings();
     if (!s.mailchimpKey || !s.mailchimpListId) return res.status(400).json({ error: 'Mailchimp key/audience not configured on the Site Assistant page' });
     const db = await store.load();
@@ -454,16 +458,20 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     const year = (ev.name.match(/\b20\d\d\b/) || [])[0] || '';
     // Test mode: only the test address is touched — real contacts are NOT
     // pushed to Mailchimp until an actual send.
+    const demoParts = String(demoName || '').trim().split(/\s+/);
     const batch = testEmail
       ? [{ email: String(testEmail).toLowerCase().trim(), fn: 'Test', ln: 'Preview', pastLeague: contacts[0].pastLeague }]
-      : contacts.slice(0, 2000);
+      : isDemo
+        ? [{ email: String(demoEmail).toLowerCase().trim(), fn: demoParts[0] || 'there',
+             ln: demoParts.slice(1).join(' ') || '', pastLeague: contacts[0].pastLeague }]
+        : contacts.slice(0, 2000);
     for (let i = 0; i < batch.length; i += 10) {
       await Promise.all(batch.slice(i, i + 10).map(c => {
         const hash = cryptoLib.createHash('md5').update(c.email).digest('hex');
         return axios.put(`${base}/lists/${list}/members/${hash}`, {
           email_address: c.email, status_if_new: 'subscribed',
           merge_fields: { FNAME: c.fn, LNAME: c.ln, PASTLG: c.pastLeague },
-        }, mcAuth).then(() => testEmail ? null : axios.post(`${base}/lists/${list}/members/${hash}/tags`, { tags: [{ name: `Lapsed: ${short} ${year}`, status: 'active' }] }, mcAuth)).catch(() => null);
+        }, mcAuth).then(() => (testEmail || isDemo) ? null : axios.post(`${base}/lists/${list}/members/${hash}/tags`, { tags: [{ name: `Lapsed: ${short} ${year}`, status: 'active' }] }, mcAuth)).catch(() => null);
       }));
     }
     // static segment → campaign → content → send
@@ -497,7 +505,7 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
       return res.json({ ok: true, test: true, to: addrs.join(', '), recipients: contacts.length, campaignId: camp.data.id });
     }
     await axios.post(`${base}/campaigns/${camp.data.id}/actions/send`, {}, mcAuth);
-    await appendCapped('reminders:campaigns', {
+    if (!isDemo) await appendCapped('reminders:campaigns', {
       at: new Date().toISOString(), campaignId: camp.data.id, eventId: String(eventId), eventName: ev.name,
       templateId: tpl.id, templateName: tpl.name, recipients: batch.length, subject,
     }, 200);
