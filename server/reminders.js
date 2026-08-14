@@ -565,6 +565,14 @@ app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async 
         id: x.id, name: x.name, members: x.stats?.member_count ?? 0,
         avgOpenRate: x.stats?.open_rate ?? null, avgClickRate: x.stats?.click_rate ?? null,
       })),
+      smsProbe: req.query.sms === '1' ? await (async () => {
+        try {
+          const m = await axios.get(base + '/lists/' + list + '/members?count=1', mcAuth);
+          const one = (m.data.members || [])[0] || {};
+          const mf = await axios.get(base + '/lists/' + list + '/merge-fields?count=50', mcAuth);
+          return { hasSmsFields: 'sms_subscription_status' in one || 'sms_phone_number' in one, memberKeys: Object.keys(one).filter(k => /sms|phone/i.test(k)), mergeFields: (mf.data.merge_fields || []).map(f => f.tag + ':' + f.type) };
+        } catch (e) { return { error: e.response?.status || e.message }; }
+      })() : undefined,
       pastCampaigns: (camps.data.campaigns || []).map(c => ({
         title: c.settings?.title || c.settings?.subject_line || '(untitled)',
         subject: c.settings?.subject_line || '',
