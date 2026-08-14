@@ -536,9 +536,15 @@ app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async 
     const s = await assistantSettings();
     if (!s.mailchimpKey || !s.mailchimpListId) return res.status(400).json({ error: 'Mailchimp not configured' });
     const { base, auth: mcAuth, list } = mcApi(s);
-    const [vd, l] = await Promise.all([
+    const [vd, l, acct, lists, camps] = await Promise.all([
       axios.get(`${base}/verified-domains`, mcAuth).catch(() => ({ data: { domains: [] } })),
       axios.get(`${base}/lists/${list}`, mcAuth),
+      axios.get(`${base}/`, mcAuth).catch(() => ({ data: {} })),
+      axios.get(`${base}/lists?count=50`, mcAuth).catch(() => ({ data: { lists: [] } })),
+      // How the org's own past emails actually performed — the only honest
+      // baseline for "are people responding?".
+      axios.get(`${base}/campaigns?count=25&status=sent&sort_field=send_time&sort_dir=DESC`, mcAuth)
+        .catch(() => ({ data: { campaigns: [] } })),
     ]);
     const fromEmail = l.data.campaign_defaults?.from_email || '';
     const fromDomain = (fromEmail.split('@')[1] || '').toLowerCase();
@@ -550,6 +556,23 @@ app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async 
       fromEmail, fromName: l.data.campaign_defaults?.from_name || '',
       members: l.data.stats?.member_count ?? null,
       domains,
+      account: {
+        name: acct.data?.account_name || null,
+        plan: acct.data?.pricing_plan_type || null,   // free | monthly | pay_as_you_go
+        totalSubscribers: acct.data?.total_subscribers ?? null,
+      },
+      audiences: (lists.data.lists || []).map(x => ({
+        id: x.id, name: x.name, members: x.stats?.member_count ?? 0,
+        avgOpenRate: x.stats?.open_rate ?? null, avgClickRate: x.stats?.click_rate ?? null,
+      })),
+      pastCampaigns: (camps.data.campaigns || []).map(c => ({
+        title: c.settings?.title || c.settings?.subject_line || '(untitled)',
+        subject: c.settings?.subject_line || '',
+        sentAt: c.send_time || null,
+        emails: c.emails_sent ?? null,
+        openRate: c.report_summary?.open_rate ?? null,
+        clickRate: c.report_summary?.click_rate ?? null,
+      })),
       dkimAuthenticated: !!match?.authenticated,
       domainVerified: !!match?.verified,
       // Plain-language checklist for the UI.
