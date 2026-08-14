@@ -409,7 +409,14 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
       }));
     }
     // static segment → campaign → content → send
-    const seg = await axios.post(`${base}/lists/${list}/segments`, { name: `${tpl.id} · ${short} ${year} · ${store.todayCDT()}`, static_segment: batch.map(c => c.email) }, mcAuth);
+    // Segment names must be unique in Mailchimp: without the clock suffix a
+    // second send of the same template/league on the same day fails with
+    // "Sorry, that tag already exists." — which is exactly what a retry after
+    // a partial failure looks like. Test segments are labelled so they are
+    // obvious in the Mailchimp UI.
+    const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
+    const segName = `${testEmail ? 'TEST ' : ''}${tpl.id} · ${short} ${year} · ${store.todayCDT()} ${stamp}`;
+    const seg = await axios.post(`${base}/lists/${list}/segments`, { name: segName, static_segment: batch.map(c => c.email) }, mcAuth);
     const camp = await axios.post(`${base}/campaigns`, {
       type: 'regular',
       recipients: { list_id: list, segment_opts: { saved_segment_id: seg.data.id } },
