@@ -9,6 +9,23 @@ import { api } from '../api.jsx';
  * template via Mailchimp. Templates are editable here; open/click stats come
  * back from Mailchimp reports.
  */
+const TEST_EMAIL_KEY = 'reminders-test-email';
+
+/**
+ * Days-remaining line under a deadline. A passed deadline says so explicitly —
+ * rendering nothing looks like missing data, and "is this still open?" is the
+ * exact question this table exists to answer.
+ */
+function Countdown({ days, warnAt }) {
+  if (days == null) return null;
+  const [text, color] =
+    days < 0 ? [`passed ${Math.abs(days)}d ago`, 'var(--text-4)']
+    : days === 0 ? ['today', '#ef4444']
+    : days === 1 ? ['tomorrow', '#ef4444']
+    : [`in ${days} days`, days <= warnAt ? 'var(--accent-2)' : 'var(--text-4)'];
+  return <div style={{ fontSize: 10, color, fontWeight: 700 }}>{text}</div>;
+}
+
 export default function Reminders() {
   const [audiences, setAudiences] = useState(null);
   const [templates, setTemplates] = useState([]);
@@ -28,13 +45,16 @@ export default function Reminders() {
     finally { setLoadingClicks(false); }
   }
 
-  async function showPreview(t, inline) {
+  // `ev` lets a row preview its OWN league. Without it every preview rendered
+  // the first audience's prices and dates, which is misleading the moment two
+  // leagues differ.
+  async function showPreview(t, inline, ev) {
     try {
       const r = await api.previewReminder({
-        templateId: t.id, eventId: audiences?.[0]?.eventId,
+        templateId: t.id, eventId: ev?.eventId || audiences?.[0]?.eventId,
         ...(inline ? { template: { subject: t.subject, body: t.body, design: t.design || 'court', preheader: t.preheader, showPrices: t.showPrices } } : {}),
       });
-      setPreview({ ...r.data, name: t.name });
+      setPreview({ ...r.data, name: t.name, league: ev?.name || null });
     } catch (err) { toast.error(err.response?.data?.error || 'Preview failed'); }
   }
 
@@ -50,8 +70,11 @@ export default function Reminders() {
     if (!templateId) return toast.error('Pick a template first');
     let testEmail = null;
     if (test) {
-      testEmail = window.prompt('Send a test to which address(es)? Separate multiple with commas — only these addresses receive it, never real contacts.');
+      testEmail = window.prompt(
+        'Send a test to which address(es)? Separate multiple with commas — only these addresses receive it, never real contacts.',
+        localStorage.getItem(TEST_EMAIL_KEY) || '');
       if (!testEmail) return;
+      localStorage.setItem(TEST_EMAIL_KEY, testEmail.trim());
     } else if (!window.confirm(`Send "${templates.find(t => t.id === templateId)?.name}" to ${a.lapsed} lapsed contacts for ${a.name}?\n\nThis is a REAL send through Mailchimp.`)) return;
     setBusy(b => ({ ...b, [a.eventId]: test ? 'test' : 'send' }));
     try {
@@ -159,17 +182,11 @@ export default function Reminders() {
                     <td style={{ fontWeight: 700, color: a.lapsed > 0 ? 'var(--accent-2)' : 'var(--text-4)' }}>{a.lapsed ?? '—'}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {fmtD(a.deadlines?.earlyBird)}
-                      {daysTo(a.deadlines?.earlyBird) != null && daysTo(a.deadlines?.earlyBird) >= 0 &&
-                        <div style={{ fontSize: 10, color: daysTo(a.deadlines?.earlyBird) <= 8 ? 'var(--accent-2)' : 'var(--text-4)', fontWeight: 700 }}>
-                          in {daysTo(a.deadlines?.earlyBird)}d
-                        </div>}
+                      <Countdown days={daysTo(a.deadlines?.earlyBird)} warnAt={8} />
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {fmtD(a.deadlines?.finalDeadline)}
-                      {daysTo(a.deadlines?.finalDeadline) != null && daysTo(a.deadlines?.finalDeadline) >= 0 &&
-                        <div style={{ fontSize: 10, color: daysTo(a.deadlines?.finalDeadline) <= 3 ? '#ef4444' : 'var(--text-4)', fontWeight: 700 }}>
-                          in {daysTo(a.deadlines?.finalDeadline)}d
-                        </div>}
+                      <Countdown days={daysTo(a.deadlines?.finalDeadline)} warnAt={3} />
                     </td>
                     <td>
                       {(() => { const s = suggestion(a); const sent = alreadySent(a.eventId, s.id); return (
@@ -180,6 +197,19 @@ export default function Reminders() {
                         onChange={e => setPick(p => ({ ...p, [a.eventId]: e.target.value }))}>
                         {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                       </select>
+                      {/* Preview each of the three emails with THIS league's
+                          own prices, dates and venue. */}
+                      <div style={{ display: 'flex', gap: 4, marginTop: 5, alignItems: 'center' }}>
+                        <span style={{ fontSize: 10, color: 'var(--text-4)' }}>👁</span>
+                        {[['open-announcement', 'Open'], ['early-bird-week', 'EB'], ['deadline-2-days', 'Final']].map(([id, label]) => {
+                          const t = templates.find(x => x.id === id);
+                          return t ? (
+                            <button key={id} className="btn-chart" style={{ fontSize: 10, padding: '2px 7px' }}
+                              title={`Preview the ${label} email with ${a.name} data`}
+                              onClick={() => showPreview(t, false, a)}>{label}</button>
+                          ) : null;
+                        })}
+                      </div>
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button className="btn-chart" style={{ marginRight: 4 }} disabled={!!busy[a.eventId] || !a.lapsed} onClick={() => send(a, true)}>
@@ -270,6 +300,7 @@ export default function Reminders() {
             <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-sub)' }}>
               <div style={{ minWidth: 0 }}>
                 <b style={{ color: 'var(--text-1)' }}>{preview.name}</b>
+                {preview.league && <span style={{ fontSize: 12, color: 'var(--accent-2)', marginLeft: 8 }}>· {preview.league}</span>}
                 <div style={{ fontSize: 12, color: 'var(--text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Subject: {preview.subject}</div>
               </div>
               <button className="btn-chart" onClick={() => setPreview(null)}>✕ Close</button>
@@ -296,7 +327,8 @@ export default function Reminders() {
           <>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
               {[['Unique clickers', clicks.totals.uniqueClickers], ['Total clicks', clicks.totals.totalClicks],
-                ['Registered after clicking', clicks.totals.registeredAfterClick], ['Clicked, not registered', clicks.totals.warmNotRegistered]].map(([k, v]) => (
+                ['Registered after clicking', clicks.totals.registeredAfterClick], ['Clicked, not registered', clicks.totals.warmNotRegistered],
+                ['Unidentified', clicks.totals.unidentifiedClicks], ['Test clicks', clicks.totals.testClicks]].map(([k, v]) => (
                 <div key={k} style={{ background: 'var(--surface-2)', border: '1px solid var(--border-sub)', borderRadius: 10, padding: '10px 16px', minWidth: 130 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{k}</div>
                   <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-1)' }}>{v}</div>

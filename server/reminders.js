@@ -415,7 +415,16 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
       recipients: { list_id: list, segment_opts: { saved_segment_id: seg.data.id } },
       settings: { subject_line: subject, title: `${tpl.name} — ${short} ${year}`, from_name: 'Midwest 3 on 3 Basketball', reply_to: (await axios.get(`${base}/lists/${list}`, mcAuth)).data.campaign_defaults.from_email },
     }, mcAuth);
-    await axios.put(`${base}/campaigns/${camp.data.id}/content`, { html }, mcAuth);
+    // Mailchimp does not reliably expand merge tags on *test* sends, so a test
+    // click would arrive with a literal "*|EMAIL|*" and be logged anonymously —
+    // making click tracking look broken exactly when you're checking it. For a
+    // test we bake the address straight into the tracked link, and mark it so
+    // the dashboard can separate test clicks from real ones.
+    const firstTest = testEmail ? String(testEmail).split(/[,;\s]+/)[0].trim().toLowerCase() : '';
+    const contentHtml = testEmail
+      ? html.replaceAll('*|EMAIL|*', encodeURIComponent(firstTest)).replaceAll('*|CAMPAIGN_UID|*', 'test') + ''
+      : html;
+    await axios.put(`${base}/campaigns/${camp.data.id}/content`, { html: contentHtml }, mcAuth);
     if (testEmail) {
       const addrs = String(testEmail).split(/[,;\s]+/).map(x => x.trim()).filter(x => EMAIL_RE.test(x)).slice(0, 10);
       if (!addrs.length) return res.status(400).json({ error: 'no valid test email addresses' });
@@ -536,6 +545,11 @@ app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, re
       totals: {
         uniqueClickers: clicks.length,
         totalClicks: rows.filter(r => r.email).length,
+        // Clicks we could not attribute (forwarded email, a client that
+        // stripped the tag). Reported rather than dropped — a silent zero
+        // looks identical to "tracking is broken".
+        unidentifiedClicks: rows.filter(r => !r.email).length,
+        testClicks: rows.filter(r => r.campaignId === 'test').length,
         registeredAfterClick: clicks.filter(c => c.registered).length,
         warmNotRegistered: clicks.filter(c => !c.registered).length,
         blockedRedirects: rows.filter(r => r.blocked).length,
