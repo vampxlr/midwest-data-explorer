@@ -126,7 +126,14 @@ async function lapsedContactsFor(ev, past, db) {
       for (const e of emails) {
         const em = String(e || '').toLowerCase().trim();
         if (!em || !EMAIL_RE.test(em) || registered.has(em) || out.has(em)) continue;
-        out.set(em, { email: em, fn: r.firstName || '', ln: r.lastName || '', pastLeague: db.events[String(p.id)]?.name || p.name });
+        // A registration carries several teammates' emails. Greet each person
+        // by THEIR name where the roster gives one; the purchaser's name is
+        // only right for the purchaser.
+        const mine = (r.players || []).find(pl => String(pl?.email || '').toLowerCase().trim() === em);
+        const parts = String(mine?.name || '').trim().split(/\s+/).filter(Boolean);
+        const fn = parts[0] || r.firstName || '';
+        const ln = parts.slice(1).join(' ') || (parts.length ? '' : (r.lastName || ''));
+        out.set(em, { email: em, fn, ln, pastLeague: db.events[String(p.id)]?.name || p.name });
       }
     }
   }

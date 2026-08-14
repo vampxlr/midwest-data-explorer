@@ -521,7 +521,28 @@ function extractAnswers(answers) {
 
   const players = extractPlayers(ans);
 
+  // Purchaser's name. Must skip the "Player N …" family, or "first name"
+  // matches a teammate's field and every contact gets the wrong name.
+  const contactField = (...keys) => {
+    const lower = keys.map(k => k.toLowerCase());
+    const a = ans.find(x => {
+      const n = String(x.name || '').toLowerCase();
+      if (/player|participant|athlete|alternate|parent\s*2|guardian\s*2/.test(n)) return false;
+      return lower.some(k => n.includes(k));
+    });
+    const v = a ? resolveAnswerVal(a) : null;
+    return v ? String(v).trim() || null : null;
+  };
+  const firstName = contactField('primary contact first name', 'contact first name', 'parent first name', 'guardian first name', 'first name', 'fname')
+    // fall back to the first player's given name when the form has no
+    // separate purchaser block
+    || (players[0]?.name ? String(players[0].name).trim().split(/\s+/)[0] : null);
+  const lastName = contactField('primary contact last name', 'contact last name', 'parent last name', 'guardian last name', 'last name', 'lname')
+    || (players[0]?.name ? String(players[0].name).trim().split(/\s+/).slice(1).join(' ') || null : null);
+
   return {
+    firstName,
+    lastName,
     gradYears,
     gender:  pickAnswer(ans, 'gender of team', 'gender') || null,
     city:    city   ? city.trim()  : null,

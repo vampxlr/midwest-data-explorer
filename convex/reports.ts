@@ -156,6 +156,9 @@ export const contactsByEvent = query({
       email: r.email ?? null, emails: r.emails ?? [],
       phone: r.phone ?? null, phones: r.phones ?? [],
       firstName: r.firstName ?? null, lastName: r.lastName ?? null,
+      // name+email only: enough to greet each teammate by their OWN name,
+      // without shipping the whole roster on a hot path.
+      players: (r.players ?? []).map((p: any) => ({ name: p?.name ?? null, email: p?.email ?? null })),
       gender: r.gender ?? null, gradYears: r.gradYears ?? [],
       zip: r.zip ?? null, city: r.city ?? null, state: r.state ?? null,
     }));
