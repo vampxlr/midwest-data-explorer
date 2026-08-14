@@ -131,7 +131,11 @@ async function lapsedContactsFor(ev, past, db) {
         // only right for the purchaser.
         const mine = (r.players || []).find(pl => String(pl?.email || '').toLowerCase().trim() === em);
         const parts = String(mine?.name || '').trim().split(/\s+/).filter(Boolean);
-        const fn = parts[0] || r.firstName || '';
+        // Parents type their names however they like ("payton"). Capitalise
+        // an all-lowercase name, but leave anything with existing capitals
+        // alone so "McDonald" and "O'Brien" survive.
+        const tidy = (s) => (s && s === s.toLowerCase() ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+        const fn = tidy(parts[0] || r.firstName || '');
         const ln = parts.slice(1).join(' ') || (parts.length ? '' : (r.lastName || ''));
         out.set(em, { email: em, fn, ln, pastLeague: db.events[String(p.id)]?.name || p.name });
       }
