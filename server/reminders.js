@@ -324,9 +324,23 @@ function utmTag(url, tplId, evName) {
  * url-encoded — Mailchimp only substitutes tags it can still recognise.
  * A test/preview render (no Mailchimp) just logs a null email.
  */
+function clickSecret() {
+  return process.env.JWT_SECRET || process.env.ENCRYPTION_KEY || 'dev-click-secret';
+}
+// Signs the parts we know at send time. The recipient address cannot be
+// signed — Mailchimp substitutes it per person after we build the URL — so
+// `e` stays a hint, but destination/league/template cannot be tampered with,
+// and unsigned hits are excluded from the stats instead of trusted blindly.
+function clickSig(u, ev, t) {
+  return cryptoLib.createHmac('sha256', clickSecret()).update(`${u}|${ev}|${t}`).digest('hex').slice(0, 16);
+}
+
 function trackedUrl(dest, { c, ev, t }) {
   const base = (process.env.PUBLIC_BASE_URL || 'https://midwest-data-explorer.vercel.app').replace(/\/$/, '');
-  const q = new URLSearchParams({ u: dest, ev: String(ev || ''), t: String(t || '') });
+  const q = new URLSearchParams({
+    u: dest, ev: String(ev || ''), t: String(t || ''),
+    s: clickSig(dest, String(ev || ''), String(t || '')),
+  });
   return `${base}/api/r?${q.toString()}&e=*|EMAIL|*&c=${c}`;
 }
 
@@ -658,6 +672,11 @@ app.get('/api/r', async (req, res) => {
       templateId: String(req.query.t || '') || null,
       dest: target,
       blocked: target !== dest && !!dest,     // someone tried an off-allowlist URL
+      // Anyone can hand-craft a hit on this public URL, so record whether the
+      // parameters actually came from an email we generated. Unsigned hits
+      // still redirect (never break a real parent's click) but are kept out
+      // of the reported numbers.
+      trusted: String(req.query.s || '') === clickSig(dest, String(req.query.ev || ''), String(req.query.t || '')),
       ua: String(req.get('user-agent') || '').slice(0, 180),
     });
   } catch { /* never let logging break the parent's click-through */ }
@@ -682,8 +701,26 @@ app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, re
       }
       registeredFor[evId] = set;
     }
+    // One human click commonly lands here several times within a second or
+    // two: the mail client prefetches the link, a scanner follows it, then the
+    // browser itself requests it — all with a normal browser user-agent, so
+    // agent sniffing alone cannot separate them. Collapse hits from the same
+    // person on the same link inside a short window into ONE click, which is
+    // what "clicks" has to mean for the number to be worth anything.
+    const DEDUPE_MS = 30_000;
+    const lastSeen = new Map();
+    const deduped = [];
+    for (const r of [...rows].sort((a, b) => String(a.at).localeCompare(String(b.at)))) {
+      const k = `${r.email || 'anon'}|${r.templateId || ''}|${r.eventId || ''}`;
+      const t = Date.parse(r.at || '') || 0;
+      const prev = lastSeen.get(k) || 0;
+      if (t - prev < DEDUPE_MS) continue;
+      lastSeen.set(k, t);
+      deduped.push(r);
+    }
+
     const byEmail = new Map();
-    for (const r of rows) {
+    for (const r of deduped) {
       if (!r.email) continue;
       const k = r.email + '|' + (r.campaignId || '');
       const prev = byEmail.get(k);
@@ -709,21 +746,25 @@ app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, re
       at: r.at, email: r.email, campaignId: r.campaignId,
       eventId: r.eventId, eventName: db.events?.[String(r.eventId)]?.name || null,
       templateId: r.templateId, dest: r.dest, blocked: !!r.blocked,
-      ua: r.ua || null, bot: isBotAgent(r.ua),
+      ua: r.ua || null, bot: isBotAgent(r.ua), trusted: r.trusted !== false,
     }));
     res.json({
       events,
       clicks,
       totals: {
         uniqueClickers: clicks.length,
-        totalClicks: rows.filter(r => r.email).length,
+        totalClicks: deduped.filter(r => r.email).length,
         // Clicks we could not attribute (forwarded email, a client that
         // stripped the tag). Reported rather than dropped — a silent zero
         // looks identical to "tracking is broken".
-        unidentifiedClicks: rows.filter(r => !r.email).length,
-        testClicks: rows.filter(r => r.campaignId === 'test').length,
-        botClicks: rows.filter(r => isBotAgent(r.ua)).length,
-        humanClicks: rows.filter(r => !isBotAgent(r.ua)).length,
+        unidentifiedClicks: deduped.filter(r => !r.email).length,
+        testClicks: deduped.filter(r => r.campaignId === 'test').length,
+        rawHits: rows.length,
+        deduplicatedClicks: deduped.length,
+        duplicateHits: rows.length - deduped.length,
+        untrusted: rows.filter(r => r.trusted === false).length,
+        botClicks: deduped.filter(r => isBotAgent(r.ua)).length,
+        humanClicks: deduped.filter(r => !isBotAgent(r.ua)).length,
         // A human clicker is the only one worth calling a lead.
         registeredAfterClick: clicks.filter(c => c.registered && c.humanClicks > 0).length,
         warmNotRegistered: clicks.filter(c => !c.registered && c.humanClicks > 0).length,
