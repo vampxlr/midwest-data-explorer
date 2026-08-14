@@ -75,6 +75,15 @@ const REMINDER_DEFAULT_TEMPLATES = [
     preheader: 'Early-bird ends {{EB_DATE}} — thought I would check in.',
     body: `Hey {{FIRST_NAME}},\n\nYou played with us last year in {{PAST_LEAGUE}}, but I didn't see your name on this year's list — so I thought I'd check in.\n\nEarly-bird pricing runs out {{EB_DATE}} (about a week out), and after that it goes up a bit. Registration shuts {{FR_DATE}}.\n\nSame as always — no practices, just games. If you want back in, you can {{REGISTER_LINK}}. Takes two minutes.\n\nAnd if your player's moved on to other things, totally fine — just let me know and I'll stop bugging you.\n\nSarah\nMidwest 3 on 3`,
   },
+  {
+    // The one to beat: the Court layout (price strip, When/Where, real button)
+    // carrying the personal-note voice rather than marketing copy.
+    stage: 'early-bird', id: 'var-e-designed-casual', name: 'E · Designed + casual voice',
+    subject: 'Are you playing again this year?',
+    design: 'court', fromName: 'Courtney at Midwest 3 on 3',
+    preheader: 'Just checking in before early-bird pricing ends {{EB_DATE}}.',
+    body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} and registration closes {{FR_DATE}}, so I wanted to check in before the price goes up.\n\nSame as always — no practices, just games, and everybody plays.\n\nIf you're not playing this year, no problem at all — just ignore this.\n\nCourtney\nMidwest 3 on 3 Basketball`,
+  },
 ];
 async function reminderTemplates() {
   const t = await kvGet('reminders:templates');
