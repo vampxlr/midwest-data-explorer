@@ -328,6 +328,7 @@ export default function Reminders() {
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
               {[['Unique clickers', clicks.totals.uniqueClickers], ['Total clicks', clicks.totals.totalClicks],
                 ['Registered after clicking', clicks.totals.registeredAfterClick], ['Clicked, not registered', clicks.totals.warmNotRegistered],
+                ['Real (human) clicks', clicks.totals.humanClicks], ['Scanner / bot hits', clicks.totals.botClicks],
                 ['Unidentified', clicks.totals.unidentifiedClicks], ['Test clicks', clicks.totals.testClicks]].map(([k, v]) => (
                 <div key={k} style={{ background: 'var(--surface-2)', border: '1px solid var(--border-sub)', borderRadius: 10, padding: '10px 16px', minWidth: 130 }}>
                   <div style={{ fontSize: 11, color: 'var(--text-3)' }}>{k}</div>
@@ -337,15 +338,21 @@ export default function Reminders() {
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table className="data-table">
-                <thead><tr><th>Email</th><th>Clicks</th><th>First click</th><th>Last click</th><th>Registered?</th></tr></thead>
+                <thead><tr><th>Email</th><th>League</th><th>Email sent</th><th>Clicks</th><th>First</th><th>Last</th><th>Status</th></tr></thead>
                 <tbody>
                   {clicks.clicks.map((c, i) => (
-                    <tr key={i}>
+                    <tr key={i} style={{ opacity: c.humanClicks ? 1 : 0.5 }}>
                       <td style={{ color: 'var(--text-1)' }}>{c.email}</td>
-                      <td>{c.clicks}</td>
+                      <td style={{ fontSize: 12 }}>{(c.eventName || c.eventId || '—').toString().replace(/ 3 on 3.*/, '')}</td>
+                      <td style={{ fontSize: 12 }}>{c.templateId || '—'}</td>
+                      <td title={c.humanClicks !== c.clicks ? `${c.clicks - c.humanClicks} from scanners/bots` : ''}>
+                        <b>{c.humanClicks}</b>{c.humanClicks !== c.clicks && <span style={{ color: 'var(--text-4)', fontSize: 11 }}> (+{c.clicks - c.humanClicks} bot)</span>}
+                      </td>
                       <td style={{ fontSize: 12 }}>{String(c.firstAt).replace('T', ' ').slice(0, 16)}</td>
                       <td style={{ fontSize: 12 }}>{String(c.lastAt).replace('T', ' ').slice(0, 16)}</td>
-                      <td>{c.registered
+                      <td>{!c.humanClicks
+                        ? <span className="badge" style={{ background: 'rgba(148,163,184,0.16)', color: 'var(--text-3)', padding: '2px 8px', borderRadius: 999, fontSize: 10 }}>bot only</span>
+                        : c.registered
                         ? <span className="badge" style={{ background: 'rgba(34,197,94,0.14)', color: '#22c55e', padding: '2px 8px', borderRadius: 999, fontSize: 10 }}>registered</span>
                         : <span className="badge" style={{ background: 'rgba(234,88,12,0.14)', color: 'var(--accent-2)', padding: '2px 8px', borderRadius: 999, fontSize: 10 }}>warm lead</span>}</td>
                     </tr>
@@ -353,6 +360,35 @@ export default function Reminders() {
                 </tbody>
               </table>
             </div>
+
+            {/* Raw event log — every single hit, fully traceable */}
+            <details style={{ marginTop: 14 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-2)' }}>
+                Raw click log ({clicks.events?.length || 0} events) — who, which campaign, which page, what agent
+              </summary>
+              <div style={{ overflowX: 'auto', marginTop: 8 }}>
+                <table className="data-table">
+                  <thead><tr><th>When</th><th>Email</th><th>League</th><th>Template</th><th>Destination page</th><th>Agent</th></tr></thead>
+                  <tbody>
+                    {(clicks.events || []).map((e, i) => (
+                      <tr key={i} style={{ opacity: e.bot ? 0.55 : 1 }}>
+                        <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{String(e.at).replace('T', ' ').slice(0, 19)}</td>
+                        <td style={{ fontSize: 12 }}>{e.email || <i style={{ color: 'var(--text-4)' }}>unidentified</i>}</td>
+                        <td style={{ fontSize: 12 }}>{(e.eventName || e.eventId || '—').toString().replace(/ 3 on 3.*/, '')}</td>
+                        <td style={{ fontSize: 12 }}>{e.templateId || '—'}</td>
+                        <td style={{ fontSize: 11, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.dest}>
+                          {e.blocked && <span style={{ color: '#ef4444', fontWeight: 700 }}>BLOCKED → </span>}
+                          <a href={e.dest} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{String(e.dest || '').replace(/^https?:\/\/(www\.)?/, '')}</a>
+                        </td>
+                        <td style={{ fontSize: 11, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.ua || ''}>
+                          {e.bot ? <span style={{ color: 'var(--text-4)' }}>🤖 {e.ua ? String(e.ua).slice(0, 40) : 'no user-agent'}</span> : <span>👤 {String(e.ua || '').slice(0, 40)}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
           </>
         )}
       </div>

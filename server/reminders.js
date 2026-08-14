@@ -619,6 +619,20 @@ const CLICK_ALLOWED_HOSTS = [
   'sportsengine.com', 'www.sportsengine.com',
   'midwest3on3.sportngin.com', 'sportngin.com',
 ];
+/**
+ * Security scanners and mail-provider link checkers follow every URL in an
+ * email the moment it arrives, which inflates click counts — often several
+ * hits in the same second, before a human has even opened the message.
+ * Mailchimp filters these out of its own reporting; ours has to as well, or
+ * "16 clicks" means nothing.
+ */
+const BOT_UA_RE = /bot|crawl|spider|slurp|preview|scan|fetch|monitor|curl|wget|python|axios|node-fetch|headless|phantom|proofpoint|mimecast|barracuda|symantec|forcepoint|microsoft office|ms-office|outlook|googleimageproxy|yahoomailproxy|linkcheck|validator/i;
+function isBotAgent(ua) {
+  const s = String(ua || '').trim();
+  if (!s) return true;                 // no user-agent at all is not a browser
+  return BOT_UA_RE.test(s);
+}
+
 function clickDestinationOk(raw) {
   try {
     const u = new URL(raw);
@@ -673,15 +687,32 @@ app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, re
       if (!r.email) continue;
       const k = r.email + '|' + (r.campaignId || '');
       const prev = byEmail.get(k);
-      if (prev) { prev.clicks++; if (r.at > prev.lastAt) prev.lastAt = r.at; continue; }
+      if (prev) {
+        prev.clicks++;
+        if (!isBotAgent(r.ua)) prev.humanClicks++;
+        if (r.at > prev.lastAt) prev.lastAt = r.at;
+        if (r.at < prev.firstAt) prev.firstAt = r.at;
+        continue;
+      }
       byEmail.set(k, {
         email: r.email, campaignId: r.campaignId, eventId: r.eventId,
-        templateId: r.templateId, firstAt: r.at, lastAt: r.at, clicks: 1,
+        eventName: db.events?.[String(r.eventId)]?.name || null,
+        templateId: r.templateId, dest: r.dest,
+        firstAt: r.at, lastAt: r.at, clicks: 1, humanClicks: isBotAgent(r.ua) ? 0 : 1,
         registered: registeredFor[r.eventId]?.has(r.email) || false,
       });
     }
     const clicks = [...byEmail.values()].sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+    // Raw events, so every click can be traced: who, which campaign, which
+    // template, which destination page, and what agent made the request.
+    const events = rows.slice(0, 400).map(r => ({
+      at: r.at, email: r.email, campaignId: r.campaignId,
+      eventId: r.eventId, eventName: db.events?.[String(r.eventId)]?.name || null,
+      templateId: r.templateId, dest: r.dest, blocked: !!r.blocked,
+      ua: r.ua || null, bot: isBotAgent(r.ua),
+    }));
     res.json({
+      events,
       clicks,
       totals: {
         uniqueClickers: clicks.length,
@@ -691,8 +722,11 @@ app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, re
         // looks identical to "tracking is broken".
         unidentifiedClicks: rows.filter(r => !r.email).length,
         testClicks: rows.filter(r => r.campaignId === 'test').length,
-        registeredAfterClick: clicks.filter(c => c.registered).length,
-        warmNotRegistered: clicks.filter(c => !c.registered).length,
+        botClicks: rows.filter(r => isBotAgent(r.ua)).length,
+        humanClicks: rows.filter(r => !isBotAgent(r.ua)).length,
+        // A human clicker is the only one worth calling a lead.
+        registeredAfterClick: clicks.filter(c => c.registered && c.humanClicks > 0).length,
+        warmNotRegistered: clicks.filter(c => !c.registered && c.humanClicks > 0).length,
         blockedRedirects: rows.filter(r => r.blocked).length,
       },
     });
