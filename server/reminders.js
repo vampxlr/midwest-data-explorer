@@ -517,7 +517,9 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
         const hash = cryptoLib.createHash('md5').update(c.email).digest('hex');
         return axios.put(`${base}/lists/${list}/members/${hash}`, {
           email_address: c.email, status_if_new: 'subscribed',
-          merge_fields: { FNAME: c.fn, LNAME: c.ln, PASTLG: c.pastLeague },
+          // A blank first name renders "Hi ," — worse than no personalisation
+          // at all. Registrations do not always carry one, so fall back.
+          merge_fields: { FNAME: c.fn || 'there', LNAME: c.ln || '', PASTLG: c.pastLeague },
         }, mcAuth).then(() => (testEmail || isDemo) ? null : axios.post(`${base}/lists/${list}/members/${hash}/tags`, { tags: [{ name: `Lapsed: ${short} ${year}`, status: 'active' }] }, mcAuth)).catch(() => null);
       }));
     }
@@ -651,6 +653,30 @@ app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async 
       ],
     });
   } catch (err) { res.status(500).json({ error: err.response?.data?.detail || err.message }); }
+});
+
+// Pre-send sanity check on an audience: how many contacts would render badly.
+// Worth looking at BEFORE a campaign, not after.
+app.get('/api/admin/reminders/audience-quality', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const db = await store.load();
+    const ev = db.events[String(req.query.eventId || '')];
+    if (!ev) return res.status(404).json({ error: 'event not found' });
+    const past = pastEditionsOf(ev, Object.values(db.events))
+      .filter(p => (db.events[String(p.id)]?.resultCount ?? p.resultCount ?? 0) > 0).slice(0, 3);
+    const contacts = await lapsedContactsFor(ev, past, db);
+    const blankFirst = contacts.filter(c => !String(c.fn || '').trim());
+    const oddFirst = contacts.filter(c => /^[^a-z]*$/i.test(String(c.fn || 'x')) || String(c.fn || '').length === 1);
+    res.json({
+      event: ev.name,
+      total: contacts.length,
+      blankFirstName: blankFirst.length,
+      suspiciousFirstName: oddFirst.length,
+      // "there" keeps the greeting readable when a name is missing
+      sampleBlank: blankFirst.slice(0, 5).map(c => c.email),
+      sampleNames: contacts.slice(0, 8).map(c => ({ fn: c.fn, email: c.email })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── "Why aren't you coming back?" ────────────────────────────────────────────
