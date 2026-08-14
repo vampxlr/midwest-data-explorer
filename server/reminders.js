@@ -29,16 +29,22 @@ module.exports = function registerReminders(app, deps) {
 
 const REMINDER_DEFAULT_TEMPLATES = [
   {
-    id: 'open-announcement', name: '📣 Registration is open', subject: '{{TARGET_LEAGUE}} is open for registration!',
-    body: `Hi {{FIRST_NAME}},\n\nGreat news — {{TARGET_LEAGUE}} is officially open for registration! You were part of {{PAST_LEAGUE}}, and we'd love to have your player back on the court this year.\n\nSame format families love: more touches, more involvement, more fun — no practices, just games.\n\nEarly-bird pricing{{EB_PRICE}} runs until {{EB_DATE}}, and final registration closes {{FR_DATE}}.\n\n{{EVENT_DETAILS}}\n\nSee you on the court!\nMidwest 3 on 3 Basketball`,
+    id: 'open-announcement', name: '📣 Registration is open', subject: '{{TARGET_LEAGUE}} is open!',
+    design: 'court',
+    preheader: 'No practices, no long weekends — just games. Early-bird pricing is live.',
+    body: `Hi {{FIRST_NAME}},\n\nGood news — {{TARGET_LEAGUE}} just opened up, and we'd love to see your player back on the court.\n\nYou were with us for {{PAST_LEAGUE}}, so you know how it goes: no practices, no long weekends. Just games, way more touches, and every kid actually plays.\n\nEarly-bird pricing is live until {{EB_DATE}}, and registration closes for good on {{FR_DATE}}.\n\n{{EVENT_DETAILS}}\n\nSee you on the court,\nMidwest 3 on 3 Basketball`,
   },
   {
     id: 'early-bird-week', name: '⏰ Early-bird — 1 week left', subject: 'One week left for {{TARGET_LEAGUE}} early-bird pricing',
-    body: `Hi {{FIRST_NAME}},\n\nJust a heads-up — early-bird pricing{{EB_PRICE}} for {{TARGET_LEAGUE}} ends {{EB_DATE}}, one week from now. After that the price goes up{{FR_PRICE}} until final registration closes {{FR_DATE}}.\n\nYour player was part of {{PAST_LEAGUE}} — grab your team's spot before the price changes.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
+    design: 'court',
+    preheader: 'Early-bird ends {{EB_DATE}}. After that the price goes up.',
+    body: `Hi {{FIRST_NAME}},\n\nQuick heads-up: early-bird pricing for {{TARGET_LEAGUE}} ends {{EB_DATE}} — one week from today. After that the price goes up, and registration closes for good on {{FR_DATE}}.\n\nYour player was with us for {{PAST_LEAGUE}}, so you already know the format: no practices, just games, and everybody plays.\n\nGrabbing your team's spot takes about two minutes.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
   {
-    id: 'deadline-2-days', name: '🚨 Deadline — 2 days left', subject: 'Last chance: {{TARGET_LEAGUE}} registration closes in 2 days',
-    body: `Hi {{FIRST_NAME}},\n\nThis is the final reminder — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, just 2 days away. After that we can't add teams.\n\nYou were with us for {{PAST_LEAGUE}} — don't miss this year.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
+    id: 'deadline-2-days', name: '🚨 Deadline — 2 days left', subject: 'Last chance: {{TARGET_LEAGUE}} closes in 2 days',
+    design: 'court', showPrices: false,
+    preheader: 'Registration closes {{FR_DATE}} — after that we build the schedule.',
+    body: `Hi {{FIRST_NAME}},\n\nLast call — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, just two days out. Once it closes we start building the schedule, and we can't squeeze teams in after that.\n\nYou were with us for {{PAST_LEAGUE}}, and we'd hate for your player to sit this season out.\n\nIf you've been meaning to sign up, now's the moment.\n\n{{EVENT_DETAILS}}\n\nMidwest 3 on 3 Basketball`,
   },
 ];
 async function reminderTemplates() {
@@ -89,7 +95,7 @@ async function lapsedContactsFor(ev, past, db) {
   return [...out.values()];
 }
 
-function renderReminderTemplate(tpl, ev, d, utmTplId) {
+function renderReminderTemplate(tpl, ev, d, utmTplId, opts = {}) {
   const rawUrl = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
   const url = utmTplId ? utmTag(rawUrl, utmTplId, ev.name) : rawUrl;
   const fmt = (iso) => iso ? new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : 'soon';
@@ -114,11 +120,17 @@ function renderReminderTemplate(tpl, ev, d, utmTplId) {
     .replaceAll('{{EVENT_DATES}}', d?.eventDates || '')
     .replaceAll('{{EVENT_LOCATION}}', d?.eventLocation || '')
     .replaceAll('{{EVENT_TIMES}}', times)
-    .replaceAll('{{EVENT_DETAILS}}', details)
+    // Designs that render their own "When / Where" card suppress the inline
+    // text version, so the facts never appear twice.
+    .replaceAll('{{EVENT_DETAILS}}', opts.ownsDetails ? '' : details)
     .replaceAll('{{FIRST_NAME}}', '*|FNAME|*')
     .replaceAll('{{PAST_LEAGUE}}', '*|PASTLG|*')
     .replace(/\n{3,}/g, '\n\n');   // an empty {{EVENT_DETAILS}} must not leave a gap
-  return { subject: fill(tpl.subject), body: fill(tpl.body) };
+  const detailRows = [
+    d?.eventDates ? { label: 'When', value: d.eventDates + (times ? `, ${times}` : '') } : null,
+    d?.eventLocation ? { label: 'Where', value: d.eventLocation } : null,
+  ].filter(Boolean);
+  return { subject: fill(tpl.subject), body: fill(tpl.body), preheader: fill(tpl.preheader || ''), detailRows, url, fmt };
 }
 
 // ── Email designs: email-safe HTML wrappers (inline CSS, 600px, table-free
@@ -166,6 +178,75 @@ const REMINDER_DESIGNS = {
  </div>
 </div>`,
   },
+  // The default. Table-based and image-free on purpose: most clients block
+  // remote images until the reader clicks "show images", so anything carrying
+  // meaning (price, dates, the button) is built from text and background
+  // colours and always renders. `ownsDetails` means this design draws its own
+  // When/Where card, so the template body must not repeat it.
+  court: {
+    name: 'Court — designed, scannable, casual (default)',
+    ownsDetails: true,
+    render: ({ bodyHtml, title, url, unsub, details = [], ebPrice, frPrice, ebDate, preheader }) => `
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${preheader || ''}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef1f6;margin:0;padding:0">
+ <tr><td align="center" style="padding:26px 12px">
+  <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:100%;background:#ffffff;border-radius:16px;overflow:hidden;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+
+   <tr><td style="background:#ea580c;padding:26px 32px 24px">
+    <div style="color:#ffe8d9;font-size:11px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase">Midwest 3 on 3 Basketball</div>
+    <div style="color:#ffffff;font-size:26px;font-weight:800;line-height:1.25;margin-top:8px">${title}</div>
+   </td></tr>
+
+   <tr><td style="padding:30px 32px 4px;font-size:16px;line-height:1.65;color:#20242b">${bodyHtml}</td></tr>
+
+   ${ebPrice && frPrice ? `<tr><td style="padding:22px 32px 4px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:12px;overflow:hidden;border:1px solid #e3e7ee">
+     <tr>
+      <td width="50%" style="background:#fff7ed;padding:16px 18px;text-align:center;border-right:1px solid #e3e7ee">
+       <div style="font-size:10px;font-weight:800;letter-spacing:1.5px;color:#c2410c;text-transform:uppercase">Register by ${ebDate}</div>
+       <div style="font-size:30px;font-weight:800;color:#ea580c;line-height:1.1;margin-top:6px">$${ebPrice}</div>
+       <div style="font-size:11px;color:#9a6b4f;margin-top:3px">per team</div>
+      </td>
+      <td width="50%" style="background:#f7f8fa;padding:16px 18px;text-align:center">
+       <div style="font-size:10px;font-weight:800;letter-spacing:1.5px;color:#8a919e;text-transform:uppercase">After that</div>
+       <div style="font-size:30px;font-weight:800;color:#aab1bd;line-height:1.1;margin-top:6px;text-decoration:line-through">$${frPrice}</div>
+       <div style="font-size:11px;color:#a8afba;margin-top:3px">per team</div>
+      </td>
+     </tr>
+    </table>
+   </td></tr>` : ''}
+
+   ${details.length ? `<tr><td style="padding:22px 32px 4px">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f8fa;border-left:4px solid #ea580c;border-radius:0 10px 10px 0">
+     <tr><td style="padding:16px 18px">
+      ${details.map((r, i) => `<div style="${i ? 'margin-top:12px;' : ''}">
+       <div style="font-size:10px;font-weight:800;letter-spacing:1.5px;color:#8a919e;text-transform:uppercase">${r.label}</div>
+       <div style="font-size:15px;color:#20242b;margin-top:2px;line-height:1.5">${r.value}</div>
+      </div>`).join('')}
+     </td></tr>
+    </table>
+   </td></tr>` : ''}
+
+   <tr><td align="center" style="padding:28px 32px 8px">
+    <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="${url}" style="height:52px;v-text-anchor:middle;width:280px" arcsize="16%" fillcolor="#ea580c" stroke="f"><w:anchorlock/><center style="color:#ffffff;font-family:Arial,sans-serif;font-size:17px;font-weight:bold">Grab our spot →</center></v:roundrect><![endif]-->
+    <!--[if !mso]><!-- -->
+    <a href="${url}" style="background:#ea580c;color:#ffffff;text-decoration:none;font-weight:800;font-size:17px;padding:16px 44px;border-radius:10px;display:inline-block">Grab our spot →</a>
+    <!--<![endif]-->
+   </td></tr>
+
+   <tr><td style="padding:18px 32px 26px;text-align:center;font-size:13px;color:#8a919e;line-height:1.6">
+    Questions? Just reply to this email — a real person reads it.
+   </td></tr>
+
+   <tr><td style="background:#f7f8fa;padding:18px 32px;text-align:center;font-size:11px;color:#98a0ac;line-height:1.7;border-top:1px solid #e9edf3">
+    You're getting this because your family played in a Midwest 3 on 3 league.<br>
+    <a href="${unsub}" style="color:#98a0ac;text-decoration:underline">Unsubscribe</a>
+   </td></tr>
+
+  </table>
+ </td></tr>
+</table>`,
+  },
   minimal: {
     name: 'Minimal — personal, looks hand-written',
     render: ({ bodyHtml, url, unsub }) => `
@@ -188,11 +269,26 @@ function utmTag(url, tplId, evName) {
 }
 
 function buildReminderHtml(tpl, ev, d) {
-  const { subject, body } = renderReminderTemplate(tpl, ev, d, tpl.id);
+  const design = REMINDER_DESIGNS[tpl.design] || REMINDER_DESIGNS.court;
+  const { subject, body, preheader: rawPre, detailRows } = renderReminderTemplate(tpl, ev, d, tpl.id, { ownsDetails: !!design.ownsDetails });
   const rawUrl = d?.source ? (String(d.source).startsWith('http') ? d.source : `https://www.midwest3on3.com${d.source}`) : 'https://www.midwest3on3.com/leagues';
   const url = utmTag(rawUrl, tpl.id, ev.name);
-  const design = REMINDER_DESIGNS[tpl.design] || REMINDER_DESIGNS.classic;
-  const html = design.render({ bodyHtml: body.replace(/\n/g, '<br>'), title: ev.name.replace(/^20\d\d\s*/, ''), url, unsub: '*|UNSUB|*' });
+  const shortDate = (iso) => iso ? new Date(iso + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  // Preheader = the grey line inboxes show next to the subject. Left empty it
+  // leaks the first words of the body, so set it deliberately.
+  const preheader = String(rawPre || body).replace(/\s+/g, ' ').replace('*|FNAME|*', 'there').trim().slice(0, 110);
+  const html = design.render({
+    bodyHtml: body.replace(/\n/g, '<br>'),
+    title: ev.name.replace(/^20\d\d\s*/, ''),
+    url, unsub: '*|UNSUB|*', preheader,
+    details: detailRows,
+    // The early-bird/full-price strip is meaningless once early-bird has
+    // passed, so the final-deadline template opts out (showPrices: false).
+    ebPrice: tpl.showPrices === false ? null : (d?.earlyBirdPrice || null),
+    frPrice: tpl.showPrices === false ? null : (d?.finalPrice || null),
+    ebDate: shortDate(d?.earlyBird),
+    frDate: shortDate(d?.finalDeadline),
+  });
   return { subject, html };
 }
 
@@ -208,7 +304,15 @@ app.get('/api/admin/reminders/templates', auth.requireRole('admin'), async (req,
 });
 app.put('/api/admin/reminders/templates', auth.requireRole('admin'), async (req, res) => {
   const list = (req.body?.templates || []).filter(t => t && t.id && t.name && t.subject && t.body)
-    .map(t => ({ id: String(t.id).slice(0, 60), name: String(t.name).slice(0, 80), subject: String(t.subject).slice(0, 200), body: String(t.body).slice(0, 8000), design: REMINDER_DESIGNS[t.design] ? t.design : 'classic' }));
+    .map(t => ({
+      id: String(t.id).slice(0, 60), name: String(t.name).slice(0, 80),
+      subject: String(t.subject).slice(0, 200), body: String(t.body).slice(0, 8000),
+      // Keep every field the renderer reads — anything omitted here is
+      // silently lost the first time an admin saves a template.
+      preheader: String(t.preheader || '').slice(0, 200),
+      showPrices: t.showPrices !== false,
+      design: REMINDER_DESIGNS[t.design] ? t.design : 'court',
+    }));
   if (!list.length) return res.status(400).json({ error: 'templates array required' });
   await kvSet('reminders:templates', list);
   res.json({ ok: true, count: list.length });
