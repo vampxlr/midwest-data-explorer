@@ -97,7 +97,9 @@ export default function Reminders() {
     } else if (!window.confirm(`Send "${templates.find(t => t.id === templateId)?.name}" to ${a.lapsed} lapsed contacts for ${a.name}?\n\nThis is a REAL send through Mailchimp.`)) return;
     setBusy(b => ({ ...b, [a.eventId]: test ? 'test' : 'send' }));
     try {
-      const r = await api.sendReminder({ eventId: a.eventId, templateId, testEmail });
+      // confirmAudienceSend is required by the server for any full-audience
+      // send; it is set only here, behind the confirm dialog above.
+      const r = await api.sendReminder({ eventId: a.eventId, templateId, testEmail, confirmAudienceSend: !test });
       toast.success(test ? `Test sent to ${testEmail}` : `Sent to ${r.data.sent} contacts 🎉`);
       if (!test) api.reminderHistory(false).then(x => setHistory(x.data.campaigns)).catch(() => {});
     } catch (err) { toast.error(err.response?.data?.error || 'Send failed'); }

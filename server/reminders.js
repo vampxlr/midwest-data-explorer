@@ -469,8 +469,19 @@ app.post('/api/admin/reminders/send', auth.requireRole('admin'), async (req, res
     // demoEmail = a REAL send to exactly one address. Needed because Mailchimp
     // does not expand merge tags on test sends, so a test can never show what
     // a recipient truly sees, nor exercise per-person click attribution.
-    const { eventId, templateId, testEmail, demoEmail, demoName } = req.body || {};
+    const { eventId, templateId, testEmail, demoEmail, demoName, confirmAudienceSend } = req.body || {};
     const isDemo = !!demoEmail && !testEmail;
+    // A full-audience send must be asked for EXPLICITLY. This endpoint used to
+    // treat "no testEmail" as "mail everybody", so any request that reached a
+    // deployment which did not understand its parameters fell through to a
+    // real blast — which is exactly how 576 Andover families were emailed by
+    // accident on 2026-08-14. The destructive path is never the default now.
+    if (!testEmail && !isDemo && confirmAudienceSend !== true) {
+      return res.status(400).json({
+        error: 'Refusing to send to the full audience without confirmAudienceSend:true. '
+             + 'Use testEmail for a test, demoEmail for a one-person demo.',
+      });
+    }
     const s = await assistantSettings();
     if (!s.mailchimpKey || !s.mailchimpListId) return res.status(400).json({ error: 'Mailchimp key/audience not configured on the Site Assistant page' });
     const db = await store.load();
@@ -614,6 +625,8 @@ app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async 
         } catch (e) { return { error: e.response?.status || e.message }; }
       })() : undefined,
       pastCampaigns: (camps.data.campaigns || []).map(c => ({
+        id: c.id,
+        unsubs: c.report_summary?.unsubscribed ?? null,
         title: c.settings?.title || c.settings?.subject_line || '(untitled)',
         subject: c.settings?.subject_line || '',
         sentAt: c.send_time || null,
