@@ -688,6 +688,9 @@ app.get('/api/r', async (req, res) => {
 app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, res) => {
   try {
     const rows = await chatLogRecent('reminder-click', 5000);
+    // Resolve template IDs to the names shown in the Templates panel — a raw
+    // id like 'var-d-casual' is meaningless to whoever reads this report.
+    const tplName = Object.fromEntries((await reminderTemplates()).map(t => [t.id, t.name]));
     const db = await store.load();
     // Who is already registered for the event each click came from. Same
     // helper the audience math uses, so "registered" means the same thing in
@@ -734,7 +737,7 @@ app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, re
       byEmail.set(k, {
         email: r.email, campaignId: r.campaignId, eventId: r.eventId,
         eventName: db.events?.[String(r.eventId)]?.name || null,
-        templateId: r.templateId, dest: r.dest,
+        templateId: r.templateId, templateName: tplName[r.templateId] || r.templateId || null, dest: r.dest,
         firstAt: r.at, lastAt: r.at, clicks: 1, humanClicks: isBotAgent(r.ua) ? 0 : 1,
         registered: registeredFor[r.eventId]?.has(r.email) || false,
       });
@@ -745,7 +748,7 @@ app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, re
     const events = rows.slice(0, 400).map(r => ({
       at: r.at, email: r.email, campaignId: r.campaignId,
       eventId: r.eventId, eventName: db.events?.[String(r.eventId)]?.name || null,
-      templateId: r.templateId, dest: r.dest, blocked: !!r.blocked,
+      templateId: r.templateId, templateName: tplName[r.templateId] || r.templateId || null, dest: r.dest, blocked: !!r.blocked,
       ua: r.ua || null, bot: isBotAgent(r.ua), trusted: r.trusted !== false,
     }));
     res.json({

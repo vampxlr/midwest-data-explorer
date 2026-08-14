@@ -344,7 +344,7 @@ export default function Reminders() {
                     <tr key={i} style={{ opacity: c.humanClicks ? 1 : 0.5 }}>
                       <td style={{ color: 'var(--text-1)' }}>{c.email}</td>
                       <td style={{ fontSize: 12 }}>{(c.eventName || c.eventId || '—').toString().replace(/ 3 on 3.*/, '')}</td>
-                      <td style={{ fontSize: 12 }}>{c.templateId || '—'}</td>
+                      <td style={{ fontSize: 12 }} title={c.templateId || ''}>{c.templateName || c.templateId || '—'}</td>
                       <td title={c.humanClicks !== c.clicks ? `${c.clicks - c.humanClicks} from scanners/bots` : ''}>
                         <b>{c.humanClicks}</b>{c.humanClicks !== c.clicks && <span style={{ color: 'var(--text-4)', fontSize: 11 }}> (+{c.clicks - c.humanClicks} bot)</span>}
                       </td>
@@ -375,7 +375,7 @@ export default function Reminders() {
                         <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{String(e.at).replace('T', ' ').slice(0, 19)}</td>
                         <td style={{ fontSize: 12 }}>{e.email || <i style={{ color: 'var(--text-4)' }}>unidentified</i>}</td>
                         <td style={{ fontSize: 12 }}>{(e.eventName || e.eventId || '—').toString().replace(/ 3 on 3.*/, '')}</td>
-                        <td style={{ fontSize: 12 }}>{e.templateId || '—'}</td>
+                        <td style={{ fontSize: 12 }} title={e.templateId || ''}>{e.templateName || e.templateId || '—'}</td>
                         <td style={{ fontSize: 11, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.dest}>
                           {e.blocked && <span style={{ color: '#ef4444', fontWeight: 700 }}>BLOCKED → </span>}
                           <a href={e.dest} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{String(e.dest || '').replace(/^https?:\/\/(www\.)?/, '')}</a>
