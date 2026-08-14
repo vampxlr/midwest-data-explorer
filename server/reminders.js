@@ -470,6 +470,43 @@ app.post('/api/admin/reminders/preview', auth.requireRole('admin'), async (req, 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Deliverability posture: the things that actually decide inbox vs Promotions.
+// Domain authentication is the big one and it needs DNS records on the
+// sending domain, so it has to be reported rather than fixed in code.
+app.get('/api/admin/reminders/deliverability', auth.requireRole('admin'), async (req, res) => {
+  try {
+    const s = await assistantSettings();
+    if (!s.mailchimpKey || !s.mailchimpListId) return res.status(400).json({ error: 'Mailchimp not configured' });
+    const { base, auth: mcAuth, list } = mcApi(s);
+    const [vd, l] = await Promise.all([
+      axios.get(`${base}/verified-domains`, mcAuth).catch(() => ({ data: { domains: [] } })),
+      axios.get(`${base}/lists/${list}`, mcAuth),
+    ]);
+    const fromEmail = l.data.campaign_defaults?.from_email || '';
+    const fromDomain = (fromEmail.split('@')[1] || '').toLowerCase();
+    const domains = (vd.data.domains || []).map(d => ({
+      domain: d.domain, verified: !!d.verified, authenticated: !!d.authenticated,
+    }));
+    const match = domains.find(d => d.domain.toLowerCase() === fromDomain);
+    res.json({
+      fromEmail, fromName: l.data.campaign_defaults?.from_name || '',
+      members: l.data.stats?.member_count ?? null,
+      domains,
+      dkimAuthenticated: !!match?.authenticated,
+      domainVerified: !!match?.verified,
+      // Plain-language checklist for the UI.
+      checks: [
+        { id: 'auth', ok: !!match?.authenticated, label: 'Sending domain authenticated (DKIM/SPF)',
+          detail: match?.authenticated
+            ? `${fromDomain} is authenticated — mail is signed as you.`
+            : `${fromDomain || 'the from-address domain'} is NOT authenticated. Mailchimp sends "via mailchimpapp.net", which Gmail treats as bulk marketing. Fix in Mailchimp → Website → Domains → Authenticate (adds DNS records).` },
+        { id: 'reply', ok: /@/.test(fromEmail) && !/no-?reply/i.test(fromEmail), label: 'Replyable from-address',
+          detail: /no-?reply/i.test(fromEmail) ? 'A no-reply address is a promotions signal.' : `Replies go to ${fromEmail}.` },
+      ],
+    });
+  } catch (err) { res.status(500).json({ error: err.response?.data?.detail || err.message }); }
+});
+
 // ── Click tracking ───────────────────────────────────────────────────────────
 // Mailchimp reports *how many* people clicked; it does not readily tell us
 // *who*. Every CTA is rewritten to point here with the recipient's address
