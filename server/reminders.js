@@ -646,7 +646,7 @@ app.get('/api/r', async (req, res) => {
 // the warm-but-not-registered families, which is the actionable list.
 app.get('/api/admin/reminders/clicks', auth.requireRole('admin'), async (req, res) => {
   try {
-    const rows = await chatLogRecent('reminder-click', 500);
+    const rows = await chatLogRecent('reminder-click', 5000);
     const db = await store.load();
     // Who is already registered for the event each click came from. Same
     // helper the audience math uses, so "registered" means the same thing in

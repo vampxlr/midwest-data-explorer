@@ -23,7 +23,11 @@ export const recent = query({
       .query("chatLogs")
       .withIndex("by_type", (q) => q.eq("type", type))
       .order("desc")
-      .take(Math.min(limit, 500));
+      // 500 was fine for chat transcripts, but a single reminder campaign can
+      // produce thousands of click rows — and a silent truncation there
+      // undercounts the "clicked but not registered" list, which is the whole
+      // point of the report.
+      .take(Math.min(limit, 5000));
   },
 });
 

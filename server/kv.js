@@ -60,8 +60,13 @@ async function appendCapped(key, item, cap) {
 }
 
 // ── High-volume chat logging ─────────────────────────────────────────────────
-const CHATLOG_KV_KEY = { convo: 'assistant:convos', question: 'assistant:questions', unanswered: 'assistant:unanswered' };
-const CHATLOG_KV_CAP = { convo: 150, question: 400, unanswered: 200 };
+// Every type used with chatLog() MUST appear here, or local (non-Convex) mode
+// calls appendCapped(undefined, …) and silently writes nowhere.
+const CHATLOG_KV_KEY = {
+  convo: 'assistant:convos', question: 'assistant:questions', unanswered: 'assistant:unanswered',
+  'reminder-click': 'reminders:clicks',
+};
+const CHATLOG_KV_CAP = { convo: 150, question: 400, unanswered: 200, 'reminder-click': 2000 };
 async function chatLog(type, entry) {
   if (store.IS_CONVEX) await store.convexMutation('chatLogs:add', { type, at: entry.at, data: JSON.stringify(entry) });
   else await appendCapped(CHATLOG_KV_KEY[type], entry, CHATLOG_KV_CAP[type]);
