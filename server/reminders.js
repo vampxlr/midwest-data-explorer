@@ -111,7 +111,9 @@ const REMINDER_DEFAULT_TEMPLATES = [
 // unreadable or malformed setting means test mode is ON. Turning it off is an
 // explicit, typed act (see PUT /api/admin/reminders/safety).
 const SAFETY_KEY = 'reminders:safety';
-const SAFETY_DEFAULT_ALLOWLIST = ['notun.id.rocky@gmail.com', 'chilley@comcast.net'];
+// Owner only. Anyone else — including the client — is added deliberately and
+// temporarily via the API, never by living in this default.
+const SAFETY_DEFAULT_ALLOWLIST = ['notun.id.rocky@gmail.com'];
 const SAFETY_DISABLE_PHRASE = 'SEND TO REAL FAMILIES';
 
 async function reminderSafety() {
