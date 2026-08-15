@@ -16,9 +16,9 @@ const TEST_EMAIL_KEY = 'reminders-test-email';
 // alternate styles of the same message — grouping them makes that visible
 // instead of presenting seven unrelated-looking choices.
 const STAGES = [
-  ['open', '① When registration opens'],
-  ['early-bird', '② One week before early-bird ends'],
-  ['final', '③ Two days before registration closes'],
+  ['early-bird', '① 1–2 days before early-bird ends'],
+  ['final', '② 2 days before registration closes'],
+  ['open', '③ When registration opens (not in the approved cadence)'],
 ];
 
 /**
@@ -135,12 +135,17 @@ export default function Reminders() {
   // Which template this event is due for, from its own deadlines. Mirrors the
   // cadence the templates were written for: announce when it opens, nudge a
   // week before early-bird, last call two days before registration closes.
+  // Christy's cadence (approved 2026-08-15): nothing until 1-2 days before
+  // early-bird ends, then nothing until 2 days before registration closes.
+  // Sending earlier only competes with the newsletter blasts these families
+  // already receive.
   function suggestion(a) {
     const eb = daysTo(a.deadlines?.earlyBird), fr = daysTo(a.deadlines?.finalDeadline);
-    if (fr != null && fr >= 0 && fr <= 3) return { id: 'deadline-2-days', why: `closes in ${fr}d`, urgent: true };
-    if (eb != null && eb >= 0 && eb <= 8) return { id: 'early-bird-week', why: `early-bird in ${eb}d`, urgent: true };
-    if (eb != null && eb > 8) return { id: 'open-announcement', why: 'open, plenty of time', urgent: false };
-    return { id: 'open-announcement', why: 'no upcoming deadline', urgent: false };
+    if (fr != null && fr >= 0 && fr <= 2) return { id: 'reg-last-call', why: `closes in ${fr}d`, urgent: true };
+    if (eb != null && eb >= 0 && eb <= 2) return { id: 'eb-last-call', why: `early-bird in ${eb}d`, urgent: true };
+    if (eb != null && eb > 2) return { id: 'eb-last-call', why: `wait — early-bird in ${eb}d`, urgent: false };
+    if (fr != null && fr > 2) return { id: 'reg-last-call', why: `wait — closes in ${fr}d`, urgent: false };
+    return { id: 'eb-last-call', why: 'no upcoming deadline', urgent: false };
   }
 
   // An event already sent this exact template — don't nag the same families twice.

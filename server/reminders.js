@@ -28,6 +28,26 @@ module.exports = function registerReminders(app, deps) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const REMINDER_DEFAULT_TEMPLATES = [
+  // ── The two Christy approved (2026-08-15) ──────────────────────────────────
+  // Her cadence, not ours: one email 1–2 days before early-bird ends, one
+  // 2 days before registration closes. Nothing earlier — a reminder a week out
+  // just competes with the newsletter blasts already going to these families.
+  // Court design, her voice, signed by her, with the one-tap "why not" link.
+  {
+    stage: 'early-bird', id: 'eb-last-call', name: '① Early-bird — 2 days left (approved)',
+    subject: 'Last 2 days for {{LEAGUE_SHORT}} early-bird pricing',
+    design: 'court', fromName: 'Christy at Midwest 3 on 3',
+    preheader: 'Early-bird ends {{EB_DATE}} — after that the price goes up.',
+    body: `Hi {{FIRST_NAME}},\n\nI was going through our {{PAST_LEAGUE}} teams and noticed you haven't signed up for this year yet.\n\nEarly-bird pricing ends {{EB_DATE}} — just two days away — so I wanted to check in before the price goes up. Registration itself stays open until {{FR_DATE}}.\n\nSame as always: no practices, just games, and everybody plays.\n\nIf you're not playing this year, no problem at all — {{WHY_LINK}}.\n\nChristy\nMidwest 3 on 3 Basketball`,
+  },
+  {
+    stage: 'final', id: 'reg-last-call', name: '② Registration closes — 2 days left (approved)',
+    subject: 'Last call for {{LEAGUE_SHORT}} 3 on 3',
+    design: 'court', showPrices: false, fromName: 'Christy at Midwest 3 on 3',
+    preheader: 'Registration closes {{FR_DATE}} — after that we build the schedule.',
+    body: `Hi {{FIRST_NAME}},\n\nOne last note from me — registration for {{TARGET_LEAGUE}} closes {{FR_DATE}}, two days from now. After that we start building the schedule and we can't add teams.\n\nYour player was with us for {{PAST_LEAGUE}}, and we'd love to have them back on the court.\n\nIf you're not playing this year, no problem at all — {{WHY_LINK}}, and I'll leave you be.\n\nChristy\nMidwest 3 on 3 Basketball`,
+  },
+
   {
     stage: 'open', id: 'open-announcement', name: '📣 Registration is open', subject: "{{LEAGUE_SHORT}} 3 on 3 is back this fall",
     design: 'court',
@@ -91,7 +111,7 @@ const REMINDER_DEFAULT_TEMPLATES = [
 // unreadable or malformed setting means test mode is ON. Turning it off is an
 // explicit, typed act (see PUT /api/admin/reminders/safety).
 const SAFETY_KEY = 'reminders:safety';
-const SAFETY_DEFAULT_ALLOWLIST = ['notun.id.rocky@gmail.com'];
+const SAFETY_DEFAULT_ALLOWLIST = ['notun.id.rocky@gmail.com', 'chilley@comcast.net'];
 const SAFETY_DISABLE_PHRASE = 'SEND TO REAL FAMILIES';
 
 async function reminderSafety() {
