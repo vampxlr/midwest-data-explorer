@@ -121,6 +121,7 @@ function shiftDay(dateStr, delta) {
 // AFTER last year's makes the current season look far worse than it is.
 // Deadline alignment counts days to each season's OWN early-bird instead.
 const ALIGN_KEY = 'yoy-align-mode';
+const ANCHOR_KEY = 'yoy-align-anchor';
 function useAlignMode() {
   const [mode, setMode] = useState(() => localStorage.getItem(ALIGN_KEY) || 'deadline');
   const set = (m) => { setMode(m); localStorage.setItem(ALIGN_KEY, m); window.dispatchEvent(new Event('yoy-align')); };
@@ -131,6 +132,32 @@ function useAlignMode() {
   }, []);
   return [mode, set];
 }
+function useAnchor() {
+  const [a, setA] = useState(() => localStorage.getItem(ANCHOR_KEY) || 'eb');
+  const set = (v) => { setA(v); localStorage.setItem(ANCHOR_KEY, v); window.dispatchEvent(new Event('yoy-align')); };
+  useEffect(() => {
+    const h = () => setA(localStorage.getItem(ANCHOR_KEY) || 'eb');
+    window.addEventListener('yoy-align', h);
+    return () => window.removeEventListener('yoy-align', h);
+  }, []);
+  return [a, set];
+}
+function AnchorToggle() {
+  const [mode] = useAlignMode();
+  const [anchor, set] = useAnchor();
+  if (mode !== 'deadline') return null;
+  return (
+    <label style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:'var(--text-4)' }}>
+      Line up on
+      <select value={anchor} onChange={e => set(e.target.value)}
+        style={{ background:'var(--surface-1)', border:'1px solid var(--line)', color:'var(--text-1)', borderRadius:6, padding:'3px 6px', fontSize:11 }}>
+        <option value="eb">Early bird</option>
+        <option value="fr">Final registration</option>
+      </select>
+    </label>
+  );
+}
+
 function AlignToggle() {
   const [mode, set] = useAlignMode();
   return (
@@ -173,9 +200,26 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
   const [loading, setLoading] = useState(true);
   const showDeadlines = useDeadlinesOn();
   const [alignMode] = useAlignMode();
-  const ebA = deadlines?.earlyBird || null;
-  const ebB = priorDeadlines?.earlyBird || null;
+  const [anchor] = useAnchor();
+  const ebA = anchor === 'fr' ? (deadlines?.finalDeadline || null)      : (deadlines?.earlyBird || null);
+  const ebB = anchor === 'fr' ? (priorDeadlines?.finalDeadline || null) : (priorDeadlines?.earlyBird || null);
   const aligned = alignMode === 'deadline' && !!ebA && !!ebB;
+
+  // Auto shift = how far apart the two seasons' anchor dates sit. The nudge is
+  // a manual correction on top, kept per league pair, for when the automatic
+  // answer looks wrong to the person reading the chart.
+  const NUDGE_KEY = `yoy-nudge-${currentEv.id}-${priorEv.id}-${anchor}`;
+  const [nudge, setNudge] = useState(() => Number(localStorage.getItem(NUDGE_KEY) || 0));
+  useEffect(() => { setNudge(Number(localStorage.getItem(NUDGE_KEY) || 0)); }, [NUDGE_KEY]);
+  const bump = (d) => { const v = d === 0 ? 0 : nudge + d; setNudge(v); localStorage.setItem(NUDGE_KEY, String(v)); };
+  const autoShift = (ebA && ebB) ? daysBetween(ebA, ebB) : 0;
+
+  // The failure case worth surfacing: if the two seasons run a different
+  // number of days between early bird and final registration, lining up one
+  // deadline necessarily misaligns the other.
+  const gapA = deadlines?.earlyBird && deadlines?.finalDeadline ? daysBetween(deadlines.finalDeadline, deadlines.earlyBird) : null;
+  const gapB = priorDeadlines?.earlyBird && priorDeadlines?.finalDeadline ? daysBetween(priorDeadlines.finalDeadline, priorDeadlines.earlyBird) : null;
+  const gapMismatch = gapA != null && gapB != null && Math.abs(gapA - gapB) >= 2;
 
   useEffect(() => {
     let cancelled = false;
@@ -202,7 +246,7 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
     if (aligned) {
       const offA = {}, offB = {};
       for (const r of seriesA) { const k = daysBetween(r.date, ebA); offA[k] = (offA[k] || 0) + r.total; }
-      for (const r of seriesB) { const k = daysBetween(r.date, ebB); offB[k] = (offB[k] || 0) + r.total; }
+      for (const r of seriesB) { const k = daysBetween(r.date, ebB) + nudge; offB[k] = (offB[k] || 0) + r.total; }
       const ks = [...Object.keys(offA), ...Object.keys(offB)].map(Number);
       if (!ks.length) return { plotData: [], totalA: 0, totalB: 0 };
       const lo = Math.min(...ks), hi = Math.max(...ks);
@@ -255,7 +299,7 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
       if (r.n > lastBNum) r.cumB = undefined;
     }
     return { plotData: rows, ...totals };
-  }, [seriesA, seriesB, todayMD, aligned, ebA, ebB]);
+  }, [seriesA, seriesB, todayMD, aligned, ebA, ebB, nudge]);
 
   const chartData = plotData;
   const delta = totalA - totalB;
@@ -269,6 +313,33 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
             {currentEv.name}
           </div>
           <div style={{ fontSize:11, color:'var(--text-4)' }}>vs {priorEv.name}</div>
+          {aligned && (
+            <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, flexWrap:'wrap' }}>
+              <span style={{ fontSize:10, color:'var(--text-4)' }}>
+                {priorEv.name.match(/20\d\d/)?.[0] || 'prior'} shifted{' '}
+                <b style={{ color:'var(--text-2)' }}>
+                  {autoShift + nudge >= 0 ? '+' : ''}{autoShift + nudge}d
+                </b>
+                {nudge !== 0 && <span style={{ color:'var(--accent-2)' }}> ({autoShift >= 0 ? '+' : ''}{autoShift} auto {nudge > 0 ? '+' : '−'}{Math.abs(nudge)} manual)</span>}
+              </span>
+              <span style={{ display:'inline-flex', border:'1px solid var(--line)', borderRadius:5, overflow:'hidden' }}>
+                <button onClick={() => bump(-1)} title="Shift last season one day earlier"
+                  style={{ background:'transparent', border:'none', color:'var(--text-3)', padding:'0 6px', fontSize:12, cursor:'pointer', lineHeight:'16px' }}>−</button>
+                <button onClick={() => bump(+1)} title="Shift last season one day later"
+                  style={{ background:'transparent', border:'none', color:'var(--text-3)', padding:'0 6px', fontSize:12, cursor:'pointer', lineHeight:'16px', borderLeft:'1px solid var(--line)' }}>+</button>
+              </span>
+              {nudge !== 0 && (
+                <button onClick={() => bump(0)} title="Back to the automatic alignment"
+                  style={{ background:'transparent', border:'none', color:'var(--accent)', padding:0, fontSize:10, cursor:'pointer' }}>reset</button>
+              )}
+            </div>
+          )}
+          {aligned && gapMismatch && (
+            <div style={{ fontSize:10, color:'var(--accent-2)', marginTop:3, lineHeight:1.4 }}>
+              ⚠ Early bird → final registration runs {gapB}d last season vs {gapA}d this season,
+              so lining up one deadline pulls the other {Math.abs(gapA - gapB)}d out.
+            </div>
+          )}
         </div>
         {!loading && (
           <span style={{
@@ -567,6 +638,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         right={<>
           <ColsPicker label="Per row" value={chartCols} onChange={setChartCols} />
           <AlignToggle />
+          <AnchorToggle />
           <DeadlineToggle />
         </>}
       >
