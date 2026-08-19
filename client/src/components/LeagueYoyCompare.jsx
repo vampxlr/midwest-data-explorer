@@ -113,6 +113,47 @@ function shiftDay(dateStr, delta) {
   return d.toISOString().slice(0, 10);
 }
 
+
+// ── Alignment mode ───────────────────────────────────────────────────────────
+// Calendar alignment (Aug 18 vs Aug 18) is misleading when a league's
+// early-bird deadline moves year to year: the EB cutoff drives the biggest
+// spike of the cycle, so comparing a date BEFORE this year's EB against a date
+// AFTER last year's makes the current season look far worse than it is.
+// Deadline alignment counts days to each season's OWN early-bird instead.
+const ALIGN_KEY = 'yoy-align-mode';
+function useAlignMode() {
+  const [mode, setMode] = useState(() => localStorage.getItem(ALIGN_KEY) || 'deadline');
+  const set = (m) => { setMode(m); localStorage.setItem(ALIGN_KEY, m); window.dispatchEvent(new Event('yoy-align')); };
+  useEffect(() => {
+    const h = () => setMode(localStorage.getItem(ALIGN_KEY) || 'deadline');
+    window.addEventListener('yoy-align', h);
+    return () => window.removeEventListener('yoy-align', h);
+  }, []);
+  return [mode, set];
+}
+function AlignToggle() {
+  const [mode, set] = useAlignMode();
+  return (
+    <div style={{ display:'inline-flex', border:'1px solid var(--line)', borderRadius:6, overflow:'hidden' }}>
+      {[['deadline','Days to deadline'], ['calendar','Calendar date']].map(([v, label]) => (
+        <button key={v} onClick={() => set(v)}
+          title={v === 'deadline'
+            ? 'Line each season up by its own early-bird deadline — the fair comparison when the dates move'
+            : 'Line the seasons up by calendar date'}
+          style={{ background: mode === v ? 'var(--accent)' : 'transparent',
+                   color: mode === v ? '#fff' : 'var(--text-4)',
+                   border:'none', padding:'3px 8px', fontSize:11, cursor:'pointer' }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function daysBetween(a, b) {
+  return Math.round((new Date(a + 'T12:00:00Z') - new Date(b + 'T12:00:00Z')) / 86400000);
+}
+
 // 1-3 items per row — used by both the slot picker and the charts grid
 function ColsPicker({ label, value, onChange }) {
   return (
@@ -126,11 +167,15 @@ function ColsPicker({ label, value, onChange }) {
   );
 }
 
-function PairChart({ currentEv, priorEv, deadlines }) {
+function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
   const [seriesA, setSeriesA] = useState([]);
   const [seriesB, setSeriesB] = useState([]);
   const [loading, setLoading] = useState(true);
   const showDeadlines = useDeadlinesOn();
+  const [alignMode] = useAlignMode();
+  const ebA = deadlines?.earlyBird || null;
+  const ebB = priorDeadlines?.earlyBird || null;
+  const aligned = alignMode === 'deadline' && !!ebA && !!ebB;
 
   useEffect(() => {
     let cancelled = false;
@@ -150,8 +195,35 @@ function PairChart({ currentEv, priorEv, deadlines }) {
   const todayMD     = todayCDT().slice(5);
   const yesterdayMD = shiftDay(todayCDT(), -1).slice(5);
 
-  // Daily grid with cumulative sums for both seasons (calendar-overlaid).
+  // Daily grid with cumulative sums for both seasons.
   const { plotData, totalA, totalB } = useMemo(() => {
+    // Deadline-aligned: index every day by its distance from that season's OWN
+    // early-bird date, so day 0 is "EB day" in both years.
+    if (aligned) {
+      const offA = {}, offB = {};
+      for (const r of seriesA) { const k = daysBetween(r.date, ebA); offA[k] = (offA[k] || 0) + r.total; }
+      for (const r of seriesB) { const k = daysBetween(r.date, ebB); offB[k] = (offB[k] || 0) + r.total; }
+      const ks = [...Object.keys(offA), ...Object.keys(offB)].map(Number);
+      if (!ks.length) return { plotData: [], totalA: 0, totalB: 0 };
+      const lo = Math.min(...ks), hi = Math.max(...ks);
+      const tOff = daysBetween(todayCDT(), ebA);          // where THIS season stands now
+      const lastB = Math.max(...Object.keys(offB).map(Number));
+      const rows = [];
+      let cumA = 0, cumB = 0;
+      for (let n = lo; n <= hi; n++) {
+        cumA += offA[n] || 0;
+        cumB += offB[n] || 0;
+        rows.push({ n, mmdd: null, label: n === 0 ? 'EB' : (n < 0 ? String(n) : '+' + n), cumA, cumB });
+      }
+      const at = rows[Math.min(Math.max(tOff - lo, 0), rows.length - 1)];
+      const totals = { totalA: at ? at.cumA : 0, totalB: at ? at.cumB : 0 };
+      for (const r of rows) {
+        if (r.n > tOff)  r.cumA = undefined;
+        if (r.n > lastB) r.cumB = undefined;
+      }
+      return { plotData: rows, ...totals };
+    }
+
     const dayNum  = (mmdd) => Math.round((new Date(`2000-${mmdd}T12:00:00Z`) - new Date('2000-01-01T12:00:00Z')) / 86400000);
     const numDay  = (n) => new Date(new Date('2000-01-01T12:00:00Z').getTime() + n * 86400000).toISOString().slice(5, 10);
 
@@ -183,7 +255,7 @@ function PairChart({ currentEv, priorEv, deadlines }) {
       if (r.n > lastBNum) r.cumB = undefined;
     }
     return { plotData: rows, ...totals };
-  }, [seriesA, seriesB, todayMD]);
+  }, [seriesA, seriesB, todayMD, aligned, ebA, ebB]);
 
   const chartData = plotData;
   const delta = totalA - totalB;
@@ -225,11 +297,23 @@ function PairChart({ currentEv, priorEv, deadlines }) {
                 label={{ value:'Yesterday', position:'insideTopRight', fill:'var(--accent-2)', fontSize:9 }} />
             )}
             {/* Registration deadlines (scraped from midwest3on3.com) — snap to nearest data point */}
-            {showDeadlines && deadlines?.earlyBird && nearestLabel(chartData, deadlines.earlyBird) && (
+            {showDeadlines && aligned && chartData.some(d => d.label === 'EB') && (
+              <ReferenceLine x="EB" stroke="var(--viz-2)" strokeDasharray="4 3"
+                label={{ value:'EB', position:'top', fill:'var(--viz-2)', fontSize:9 }} />
+            )}
+            {showDeadlines && aligned && deadlines?.finalDeadline && ebA && (() => {
+              const off = daysBetween(deadlines.finalDeadline, ebA);
+              const lbl = off === 0 ? 'EB' : (off < 0 ? String(off) : '+' + off);
+              return chartData.some(d => d.label === lbl) ? (
+                <ReferenceLine x={lbl} stroke="var(--viz-6)" strokeDasharray="4 3"
+                  label={{ value:'FR', position:'top', fill:'var(--viz-6)', fontSize:9 }} />
+              ) : null;
+            })()}
+            {showDeadlines && !aligned && deadlines?.earlyBird && nearestLabel(chartData, deadlines.earlyBird) && (
               <ReferenceLine x={nearestLabel(chartData, deadlines.earlyBird)} stroke="var(--viz-2)" strokeDasharray="4 3"
                 label={{ value:'EB', position:'insideTop', fill:'var(--viz-2)', fontSize:9 }} />
             )}
-            {showDeadlines && deadlines?.finalDeadline && nearestLabel(chartData, deadlines.finalDeadline) && (
+            {showDeadlines && !aligned && deadlines?.finalDeadline && nearestLabel(chartData, deadlines.finalDeadline) && (
               <ReferenceLine x={nearestLabel(chartData, deadlines.finalDeadline)} stroke="var(--viz-6)" strokeDasharray="4 3"
                 label={{ value:'Final', position:'insideTop', fill:'var(--viz-6)', fontSize:9 }} />
             )}
@@ -482,6 +566,7 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
         style={{ marginTop:16 }}
         right={<>
           <ColsPicker label="Per row" value={chartCols} onChange={setChartCols} />
+          <AlignToggle />
           <DeadlineToggle />
         </>}
       >
@@ -491,7 +576,9 @@ export default function LeagueYoyCompare({ recentRegs = [] }) {
             const currentEv = eventById[slot.currentId];
             const priorEv = eventById[slot.priorId];
             if (!currentEv || !priorEv) return null;
-            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv} deadlines={deadlineMap[String(currentEv.id)]} />;
+            return <PairChart key={i} currentEv={currentEv} priorEv={priorEv}
+              deadlines={deadlineMap[String(currentEv.id)]}
+              priorDeadlines={deadlineMap[String(priorEv.id)]} />;
           })}
         </div>
         {slots.every(s => !s.currentId || !s.priorId) && (
