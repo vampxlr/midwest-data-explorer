@@ -1656,8 +1656,12 @@ app.get('/api/reports/league-overlap', async (req, res) => {
   if (!eventIdA || !eventIdB) return res.status(400).json({ error: 'eventIdA and eventIdB required' });
 
   const db = await store.load();
-  const resultsA = db.results.filter(r => String(r.eventId) === String(eventIdA));
-  const resultsB = db.results.filter(r => String(r.eventId) === String(eventIdB));
+  // db.results is EMPTY in Convex mode (DEVELOPERS.md §7.3) — reading it
+  // directly made this endpoint report "0 new, 0 returning" in production
+  // instead of failing, which is the worst kind of wrong.
+  const rows = await loadContactResults(db, [String(eventIdA), String(eventIdB)]);
+  const resultsA = rows.filter(r => String(r.eventId) === String(eventIdA));
+  const resultsB = rows.filter(r => String(r.eventId) === String(eventIdB));
 
   // All matchable identifiers — uses every email/phone from multi-player league forms
   function getKeys(r) {
