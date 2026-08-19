@@ -152,6 +152,12 @@ export const contactsByEvent = query({
       .withIndex("by_eventId", (q) => q.eq("eventId", eventId))
       .collect();
     return rows.map((r: any) => ({
+      // A stable row id is REQUIRED by callers that dedup matches (see
+      // league-overlap): without it every match dedups on `undefined` and
+      // collapses all returning families into a single row.
+      id: r.id ?? r._id, profileId: r.profileId ?? null,
+      // needed to compare seasons at the SAME point in their cycle
+      created: r.created ?? null, completed: r.completed ?? null,
       eventId: r.eventId, eventName: r.eventName,
       email: r.email ?? null, emails: r.emails ?? [],
       phone: r.phone ?? null, phones: r.phones ?? [],
