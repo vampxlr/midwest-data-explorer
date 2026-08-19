@@ -177,6 +177,11 @@ function AlignToggle() {
   );
 }
 
+function shiftISO(iso, n) {
+  const d = new Date(iso + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
 function daysBetween(a, b) {
   return Math.round((new Date(a + 'T12:00:00Z') - new Date(b + 'T12:00:00Z')) / 86400000);
 }
@@ -202,7 +207,13 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
   const [alignMode] = useAlignMode();
   const [anchor] = useAnchor();
   const ebA = anchor === 'fr' ? (deadlines?.finalDeadline || null)      : (deadlines?.earlyBird || null);
-  const ebB = anchor === 'fr' ? (priorDeadlines?.finalDeadline || null) : (priorDeadlines?.earlyBird || null);
+  const ebBRaw = anchor === 'fr' ? (priorDeadlines?.finalDeadline || null) : (priorDeadlines?.earlyBird || null);
+  // Most prior seasons have no deadline on file (46 events carry a 2026 date,
+  // only 9 carry a 2025 one). Rather than silently dropping back to calendar
+  // with no way to intervene, fall back to the same week a year earlier and
+  // let the -/+ control do the rest — manual adjustment is the point.
+  const ebB = ebBRaw || (ebA ? shiftISO(ebA, -364) : null);
+  const estimated = !ebBRaw && !!ebB;
   const aligned = alignMode === 'deadline' && !!ebA && !!ebB;
 
   // Auto shift = how far apart the two seasons' anchor dates sit. The nudge is
@@ -212,7 +223,7 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
   const [nudge, setNudge] = useState(() => Number(localStorage.getItem(NUDGE_KEY) || 0));
   useEffect(() => { setNudge(Number(localStorage.getItem(NUDGE_KEY) || 0)); }, [NUDGE_KEY]);
   const bump = (d) => { const v = d === 0 ? 0 : nudge + d; setNudge(v); localStorage.setItem(NUDGE_KEY, String(v)); };
-  const autoShift = (ebA && ebB) ? daysBetween(ebA, ebB) : 0;
+  const autoShift = (ebA && ebBRaw) ? daysBetween(ebA, ebBRaw) : 0;
 
   // The failure case worth surfacing: if the two seasons run a different
   // number of days between early bird and final registration, lining up one
@@ -316,6 +327,7 @@ function PairChart({ currentEv, priorEv, deadlines, priorDeadlines }) {
           {aligned && (
             <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:4, flexWrap:'wrap' }}>
               <span style={{ fontSize:10, color:'var(--text-4)' }}>
+                {estimated ? 'no deadline on file — ' : ''}
                 {priorEv.name.match(/20\d\d/)?.[0] || 'prior'} shifted{' '}
                 <b style={{ color:'var(--text-2)' }}>
                   {autoShift + nudge >= 0 ? '+' : ''}{autoShift + nudge}d
